@@ -83,6 +83,10 @@ bash "${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT/shell/run_notebook_qc_hp
 
 The validated subset reproduces 500 cells per section and 2,000 total cells. The panel reconciles 100/100. Regions 1, 2, and 4 contain poor-quality-cycle ERROR alarms and are on `HOLD`; Region 3 is `PENDING` because metadata is synthetic. Overall slide readiness is `HOLD`, so diagnostic QC is valid but biological interpretation is not.
 
+The verified study design supplied after this local run is: sections 62308 and 62309 are from Mouse 1; sections 62310 and 62311 are from Mouse 2. All samples are untreated WT scWAT from normal 8-week-old mice. Left/right is not a design factor. Section is the technical processing unit and mouse is the biological replicate. The QC notebooks must be rerun with this metadata before the metadata gate in generated outputs can change from `PENDING` to `PASS`.
+
+The portable technical QC report is at `reports/2026-08-14_scwat_qc_summary/report.html`; its canonical data/provenance specification is `reports/2026-08-14_scwat_qc_summary/artifact.json`.
+
 ### Local validation evidence (2026-08-14)
 
 - Reusable R tests exited successfully.
