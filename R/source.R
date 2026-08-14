@@ -569,6 +569,114 @@ compare_subset_full_qc <- function(full_summary, subset_reference) {
   list(ranking = ranking, agreement = agreement)
 }
 
+build_section_pairs <- function(manifest) {
+  required <- c("region_id", "mouse_id", "section_id")
+  missing <- setdiff(required, names(manifest))
+  if (length(missing)) stop(sprintf("Manifest missing pair columns: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  if (anyDuplicated(manifest$region_id) || anyDuplicated(manifest$section_id)) stop("Manifest section and region IDs must be unique.", call. = FALSE)
+  rows <- lapply(unique(as.character(manifest$mouse_id)), function(mouse) {
+    sample_rows <- manifest[manifest$mouse_id == mouse, , drop = FALSE]
+    if (nrow(sample_rows) != 2L) return(data.frame(
+      mouse_id = mouse, section_a = NA_character_, section_b = NA_character_,
+      region_a = NA_character_, region_b = NA_character_, pair_status = "NOT_ESTIMABLE",
+      details = sprintf("Expected two sections but found %d", nrow(sample_rows)), stringsAsFactors = FALSE
+    ))
+    region_number <- suppressWarnings(as.integer(sub("^Region_", "", sample_rows$region_id)))
+    sample_rows <- sample_rows[order(region_number), , drop = FALSE]
+    data.frame(
+      mouse_id = mouse, section_a = as.character(sample_rows$section_id[[1]]), section_b = as.character(sample_rows$section_id[[2]]),
+      region_a = as.character(sample_rows$region_id[[1]]), region_b = as.character(sample_rows$region_id[[2]]),
+      pair_status = "ESTIMABLE", details = "Two verified technical sections", stringsAsFactors = FALSE
+    )
+  })
+  out <- do.call(rbind, rows); rownames(out) <- NULL; out
+}
+
+quantile_distribution_distance <- function(a, b, probabilities = seq(0.01, 0.99, 0.01)) {
+  a <- a[is.finite(a)]; b <- b[is.finite(b)]
+  if (!length(a) || !length(b)) return(NA_real_)
+  qa <- as.numeric(stats::quantile(a, probabilities, names = FALSE, type = 7))
+  qb <- as.numeric(stats::quantile(b, probabilities, names = FALSE, type = 7))
+  scale <- stats::median(c(a, b))
+  if (!is.finite(scale) || scale == 0) scale <- 1
+  mean(abs(qa - qb)) / abs(scale)
+}
+
+calculate_within_mouse_concordance <- function(manifest, section_summary, cell_metadata, gene_quality, config) {
+  pairs <- build_section_pairs(manifest)
+  summary_required <- c("region_id", "input_cells", "review_flagged")
+  cell_required <- c("region_id", "nCount_Xenium", "nFeature_Xenium", "cell_area", "control_fraction")
+  gene_required <- c("region_id", "gene", "counts_per_10000", "detection_fraction")
+  if (length(setdiff(summary_required, names(section_summary)))) stop("Section summary lacks concordance columns.", call. = FALSE)
+  if (length(setdiff(cell_required, names(cell_metadata)))) stop("Cell metadata lacks concordance columns.", call. = FALSE)
+  if (length(setdiff(gene_required, names(gene_quality)))) stop("Gene-quality table lacks concordance columns.", call. = FALSE)
+  summary_rows <- list(); gene_rows <- list()
+  for (index in seq_len(nrow(pairs))) {
+    pair <- pairs[index, , drop = FALSE]
+    if (pair$pair_status != "ESTIMABLE") {
+      summary_rows[[index]] <- data.frame(
+        mouse_id = pair$mouse_id, section_a = pair$section_a, section_b = pair$section_b,
+        region_a = pair$region_a, region_b = pair$region_b, pair_status = pair$pair_status,
+        review_rate_a = NA_real_, review_rate_b = NA_real_, review_rate_difference = NA_real_,
+        median_count_ratio = NA_real_, median_feature_ratio = NA_real_, median_area_ratio = NA_real_,
+        median_control_fraction_ratio = NA_real_, count_quantile_distance = NA_real_,
+        feature_quantile_distance = NA_real_, area_quantile_distance = NA_real_, control_quantile_distance = NA_real_,
+        gene_count_spearman = NA_real_, gene_detection_spearman = NA_real_,
+        review_criterion = NA, count_criterion = NA, feature_criterion = NA,
+        gene_count_criterion = NA, gene_detection_criterion = NA,
+        concordance_status = "NOT_ESTIMABLE",
+        interpretation = "ADVISORY_TECHNICAL_CONCORDANCE_NOT_BIOLOGICAL_TEST", stringsAsFactors = FALSE
+      )
+      next
+    }
+    qa <- section_summary[section_summary$region_id == pair$region_a, , drop = FALSE]
+    qb <- section_summary[section_summary$region_id == pair$region_b, , drop = FALSE]
+    ca <- cell_metadata[cell_metadata$region_id == pair$region_a, , drop = FALSE]
+    cb <- cell_metadata[cell_metadata$region_id == pair$region_b, , drop = FALSE]
+    if (nrow(qa) != 1L || nrow(qb) != 1L || !nrow(ca) || !nrow(cb)) stop(sprintf("Incomplete concordance inputs for %s.", pair$mouse_id), call. = FALSE)
+    ga <- gene_quality[gene_quality$region_id == pair$region_a, gene_required[-1], drop = FALSE]
+    gb <- gene_quality[gene_quality$region_id == pair$region_b, gene_required[-1], drop = FALSE]
+    genes <- merge(ga, gb, by = "gene", suffixes = c("_a", "_b"), all = TRUE, sort = TRUE)
+    genes$mouse_id <- pair$mouse_id; genes$region_a <- pair$region_a; genes$region_b <- pair$region_b
+    complete_counts <- is.finite(genes$counts_per_10000_a) & is.finite(genes$counts_per_10000_b)
+    complete_detection <- is.finite(genes$detection_fraction_a) & is.finite(genes$detection_fraction_b)
+    count_correlation <- if (sum(complete_counts) >= 20L) stats::cor(log1p(genes$counts_per_10000_a[complete_counts]), log1p(genes$counts_per_10000_b[complete_counts]), method = "spearman") else NA_real_
+    detection_correlation <- if (sum(complete_detection) >= 20L) stats::cor(genes$detection_fraction_a[complete_detection], genes$detection_fraction_b[complete_detection], method = "spearman") else NA_real_
+    review_a <- qa$review_flagged / qa$input_cells; review_b <- qb$review_flagged / qb$input_cells
+    median_ratio <- function(name) stats::median(cb[[name]], na.rm = TRUE) / stats::median(ca[[name]], na.rm = TRUE)
+    count_ratio <- median_ratio("nCount_Xenium"); feature_ratio <- median_ratio("nFeature_Xenium")
+    criteria <- c(
+      review = abs(review_b - review_a) <= as.numeric(config$concordance_review_rate_difference),
+      counts = count_ratio >= as.numeric(config$concordance_count_ratio_lower) & count_ratio <= as.numeric(config$concordance_count_ratio_upper),
+      features = feature_ratio >= as.numeric(config$concordance_feature_ratio_lower) & feature_ratio <= as.numeric(config$concordance_feature_ratio_upper),
+      gene_counts = is.finite(count_correlation) && count_correlation >= as.numeric(config$concordance_gene_spearman),
+      gene_detection = is.finite(detection_correlation) && detection_correlation >= as.numeric(config$concordance_gene_spearman)
+    )
+    summary_rows[[index]] <- data.frame(
+      mouse_id = pair$mouse_id, section_a = pair$section_a, section_b = pair$section_b,
+      region_a = pair$region_a, region_b = pair$region_b, pair_status = pair$pair_status,
+      review_rate_a = review_a, review_rate_b = review_b, review_rate_difference = abs(review_b - review_a),
+      median_count_ratio = count_ratio, median_feature_ratio = feature_ratio,
+      median_area_ratio = median_ratio("cell_area"), median_control_fraction_ratio = median_ratio("control_fraction"),
+      count_quantile_distance = quantile_distribution_distance(ca$nCount_Xenium, cb$nCount_Xenium),
+      feature_quantile_distance = quantile_distribution_distance(ca$nFeature_Xenium, cb$nFeature_Xenium),
+      area_quantile_distance = quantile_distribution_distance(ca$cell_area, cb$cell_area),
+      control_quantile_distance = quantile_distribution_distance(ca$control_fraction, cb$control_fraction),
+      gene_count_spearman = count_correlation, gene_detection_spearman = detection_correlation,
+      review_criterion = criteria[["review"]], count_criterion = criteria[["counts"]],
+      feature_criterion = criteria[["features"]], gene_count_criterion = criteria[["gene_counts"]],
+      gene_detection_criterion = criteria[["gene_detection"]],
+      concordance_status = if (all(criteria)) "CONCORDANT" else "REVIEW",
+      interpretation = "ADVISORY_TECHNICAL_CONCORDANCE_NOT_BIOLOGICAL_TEST", stringsAsFactors = FALSE
+    )
+    gene_rows[[index]] <- genes
+  }
+  summary <- do.call(rbind, summary_rows); rownames(summary) <- NULL
+  genes <- if (length(gene_rows)) do.call(rbind, gene_rows) else data.frame()
+  if (nrow(genes)) rownames(genes) <- NULL
+  list(summary = summary, genes = genes)
+}
+
 empty_alarm_table <- function() {
   data.frame(
     raw_value = logical(), formatted_value = character(), raised = logical(),

@@ -148,4 +148,45 @@ stopifnot(identical(rank_comparison$ranking$full_rank, c(1L, 4L, 2L, 3L)))
 stopifnot(is.numeric(rank_comparison$agreement$spearman_rho), is.numeric(rank_comparison$agreement$kendall_tau))
 stopifnot(rank_comparison$agreement$interpretation == "DESCRIPTIVE_FOUR_SECTIONS")
 
+# Verified metadata must produce exactly one technical pair per mouse.
+manifest_fixture <- utils::read.delim(file.path(repo_root, "config", "scwat_sample_manifest.tsv"), check.names = FALSE)
+pairs <- build_section_pairs(manifest_fixture)
+stopifnot(identical(pairs$section_a, c("62308", "62310")))
+stopifnot(identical(pairs$section_b, c("62309", "62311")))
+stopifnot(identical(pairs$region_a, c("Region_1", "Region_3")))
+stopifnot(identical(pairs$region_b, c("Region_2", "Region_4")))
+incomplete_manifest <- manifest_fixture[manifest_fixture$region_id != "Region_2", , drop = FALSE]
+incomplete_pairs <- build_section_pairs(incomplete_manifest)
+stopifnot(incomplete_pairs$pair_status[incomplete_pairs$mouse_id == "Mouse_1"] == "NOT_ESTIMABLE")
+
+# Mouse 1 is concordant; Mouse 2 deliberately breaches review/count/gene criteria.
+concordance_cells <- do.call(rbind, list(
+  data.frame(region_id="Region_1", nCount_Xenium=c(90,100,110), nFeature_Xenium=c(45,50,55), cell_area=c(190,200,210), control_fraction=c(.01,.01,.02)),
+  data.frame(region_id="Region_2", nCount_Xenium=c(95,100,105), nFeature_Xenium=c(48,50,52), cell_area=c(195,200,205), control_fraction=c(.01,.01,.02)),
+  data.frame(region_id="Region_3", nCount_Xenium=c(90,100,110), nFeature_Xenium=c(45,50,55), cell_area=c(190,200,210), control_fraction=c(.01,.01,.02)),
+  data.frame(region_id="Region_4", nCount_Xenium=c(180,200,220), nFeature_Xenium=c(72,80,88), cell_area=c(380,400,420), control_fraction=c(.03,.04,.05))
+))
+concordance_summary <- data.frame(
+  region_id=paste0("Region_",1:4), input_cells=1000L, review_flagged=c(20L,30L,10L,100L), stringsAsFactors=FALSE
+)
+concordance_genes <- do.call(rbind, lapply(paste0("Region_",1:4), function(region) {
+  values <- if (region == "Region_4") 20:1 else 1:20
+  data.frame(region_id=region, gene=sprintf("Gene%02d",1:20), counts_per_10000=values,
+             detection_fraction=values/25, stringsAsFactors=FALSE)
+}))
+concordance <- calculate_within_mouse_concordance(
+  manifest_fixture, concordance_summary, concordance_cells, concordance_genes, config
+)
+stopifnot(concordance$summary$concordance_status[concordance$summary$mouse_id == "Mouse_1"] == "CONCORDANT")
+stopifnot(concordance$summary$concordance_status[concordance$summary$mouse_id == "Mouse_2"] == "REVIEW")
+stopifnot(abs(concordance$summary$review_rate_difference[concordance$summary$mouse_id == "Mouse_1"] - 0.01) < 1e-12)
+stopifnot(abs(concordance$summary$median_count_ratio[concordance$summary$mouse_id == "Mouse_2"] - 2) < 1e-12)
+stopifnot(concordance$summary$gene_count_spearman[concordance$summary$mouse_id == "Mouse_1"] == 1)
+stopifnot(concordance$summary$gene_count_spearman[concordance$summary$mouse_id == "Mouse_2"] == -1)
+stopifnot(nrow(concordance$genes) == 40L)
+incomplete_concordance <- calculate_within_mouse_concordance(
+  incomplete_manifest, concordance_summary, concordance_cells, concordance_genes, config
+)
+stopifnot(incomplete_concordance$summary$concordance_status[incomplete_concordance$summary$mouse_id == "Mouse_1"] == "NOT_ESTIMABLE")
+
 cat("All extended scWAT Xenium QC tests passed.\n")
