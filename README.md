@@ -82,3 +82,13 @@ bash "${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT/shell/run_notebook_qc_hp
 ## Current scientific gate
 
 The validated subset reproduces 500 cells per section and 2,000 total cells. The panel reconciles 100/100. Regions 1, 2, and 4 contain poor-quality-cycle ERROR alarms and are on `HOLD`; Region 3 is `PENDING` because metadata is synthetic. Overall slide readiness is `HOLD`, so diagnostic QC is valid but biological interpretation is not.
+
+### Local validation evidence (2026-08-14)
+
+- Reusable R tests exited successfully.
+- The section notebook executed 9 R code cells independently for each of Regions 1-4.
+- The slide-summary notebook executed 7 R code cells after all section artifact checks passed.
+- Core-pass counts were 493, 500, 497, and 499; review-flag counts were 37, 16, 27, and 11.
+- All four sparse RDS objects reloaded with 500 cells; the combined summary reloaded with 2,000 cells and four unique regions.
+- Source and executed notebook JSON contracts passed structural validation.
+- Full-data HPC execution and `bash -n` remain pending because Bash/Jupyter/IRkernel are unavailable on the local Windows test environment.
