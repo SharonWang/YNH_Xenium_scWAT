@@ -18,5 +18,63 @@ stopifnot(
 
 source_path <- file.path(repo_root, "R", "source.R")
 stopifnot(file.exists(source_path))
+source(source_path)
 
-cat("Repository contracts passed.\n")
+expect_error <- function(expr, pattern = NULL) {
+  error <- tryCatch({ force(expr); NULL }, error = identity)
+  stopifnot(inherits(error, "error"))
+  if (!is.null(pattern)) stopifnot(grepl(pattern, conditionMessage(error), ignore.case = TRUE))
+  invisible(error)
+}
+
+test_root <- file.path(tempdir(), "scwat_source_tests")
+unlink(test_root, recursive = TRUE, force = TRUE)
+dir.create(test_root, recursive = TRUE)
+on.exit(unlink(test_root, recursive = TRUE, force = TRUE), add = TRUE)
+
+# Path safety.
+stopifnot(assert_path_within(test_root, file.path(test_root, "outputs")))
+expect_error(assert_path_within(test_root, "C:/unsafe_output"), "outside")
+
+# Four-section discovery and one-section selection.
+input_root <- file.path(test_root, "adipose_data")
+dir.create(input_root)
+section_names <- sprintf("output-XETG__Region_%d__20260814", 4:1)
+invisible(vapply(file.path(input_root, section_names), dir.create, logical(1)))
+sections <- discover_xenium_sections(input_root, expected_section_count = 4L)
+stopifnot(identical(sections$region_id, paste0("Region_", 1:4)))
+stopifnot(identical(discover_one_section(input_root, "Region_3")$region_id, "Region_3"))
+expect_error(discover_xenium_sections(input_root, expected_section_count = 3L), "Expected 3")
+expect_error(discover_one_section(input_root, "Region_5"), "exactly one")
+
+# Deterministic placeholder metadata.
+m1 <- create_synthetic_manifest(paste0("Region_", 1:4), seed = 20260814L)
+m2 <- create_synthetic_manifest(paste0("Region_", 1:4), seed = 20260814L)
+stopifnot(identical(m1, m2), all(m1$do_not_interpret))
+stopifnot(identical(as.integer(sort(table(m1$mouse_id))), c(2L, 2L)))
+stopifnot(identical(as.integer(sort(table(m1$side))), c(2L, 2L)))
+stopifnot(validate_sample_manifest(m1, paste0("Region_", 1:4))$valid)
+
+# Required-file inventory reports absent files without mutating inputs.
+region_dir <- sections$region_dir[sections$region_id == "Region_1"]
+inventory <- inventory_section_files(region_dir, "Region_1", calculate_md5 = FALSE)
+stopifnot(nrow(inventory) == 8L, !any(inventory$exists))
+
+# Minimal internally aligned Xenium bundle.
+matrix_dir <- file.path(region_dir, "cell_feature_matrix")
+dir.create(matrix_dir)
+write_gz_lines <- function(lines, path) {
+  con <- gzfile(path, "wt"); on.exit(close(con), add = TRUE); writeLines(lines, con)
+}
+write_gz_lines(c("gene1\tGene1\tGene Expression", "ctrl1\tCtrl1\tNegative Control Probe"), file.path(matrix_dir, "features.tsv.gz"))
+write_gz_lines(c("cell1", "cell2"), file.path(matrix_dir, "barcodes.tsv.gz"))
+write_gz_lines(c("%%MatrixMarket matrix coordinate integer general", "%", "2 2 2", "1 1 3", "1 2 4"), file.path(matrix_dir, "matrix.mtx.gz"))
+cells <- data.frame(cell_id = c("cell1", "cell2"), transcript_counts = c(3,4))
+con <- gzfile(file.path(region_dir, "cells.csv.gz"), "wt"); utils::write.csv(cells, con, row.names = FALSE); close(con)
+integrity <- validate_section_integrity(region_dir, "Region_1")
+stopifnot(integrity$dimension_match, integrity$matrix_cells == 2L, integrity$matrix_features == 2L)
+
+write_gz_lines("cell1", file.path(matrix_dir, "barcodes.tsv.gz"))
+expect_error(validate_section_integrity(region_dir, "Region_1"), "integrity")
+
+cat("Repository, path, metadata, discovery, and integrity contracts passed.\n")
