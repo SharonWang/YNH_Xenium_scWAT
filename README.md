@@ -72,23 +72,105 @@ The local computer does not have IRkernel/Jupyter notebook packages. Therefore, 
 
 ## HPC preflight and submission
 
-Required HPC software: `Rscript`, `python3`, `jupyter`, registered kernelspec `ir`, and R packages `IRkernel`, `Matrix`, `jsonlite`, `ggplot2`. The runner installs nothing; load/install these using the site-approved environment before submission.
+Required HPC software: `Rscript`, `python3`, `jupyter`, registered kernelspec `ir`, and R packages `IRkernel`, `Matrix`, `jsonlite`, `ggplot2`, `arrow`, `dplyr`, and `RANN`. The runner installs nothing. Each Region 1-4 directory must contain `transcripts.parquet`; Arrow projects and aggregates this input before collection and never loads the full transcript table into R memory.
+
+### Chunk 1 - Environment and D/HPC-local paths
 
 ```bash
 PROJECT_ROOT=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu
-mkdir -p "${PROJECT_ROOT}/adipose_analysis/scwat_qc_logs"
-bash -n "${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT/shell/run_notebook_qc_hpc.sh"
-bash -n "${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT/slurm/scwat_notebook_qc.sbatch"
-sbatch "${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT/slurm/scwat_notebook_qc.sbatch"
+export PROJECT_ROOT
+export PIPELINE_REPO="${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT"
+export INPUT_ROOT="${PROJECT_ROOT}/adipose_data"
+export RUN_LABEL="full_extended_qc_v1"
+export METADATA_PATH="${PIPELINE_REPO}/config/scwat_sample_manifest.tsv"
+export RUN_ROOT="${PROJECT_ROOT}/adipose_analysis/scwat_qc_outputs/${RUN_LABEL}"
+export TMPDIR="${PROJECT_ROOT}/adipose_analysis/tmp"
+export TMP="${TMPDIR}"
+export TEMP="${TMPDIR}"
+export R_LIBS_USER="${PROJECT_ROOT}/adipose_analysis/R_libs"
+mkdir -p "${TMPDIR}" "${R_LIBS_USER}" "${PROJECT_ROOT}/adipose_analysis/scwat_qc_logs" "${RUN_ROOT}/executed_notebooks"
 ```
 
-The HPC runner uses the repository manifest by default. To override its path or run label:
+Inputs: full Xenium sections below `${INPUT_ROOT}`, verified manifest, repository notebooks/config. Outputs: `${RUN_ROOT}`; temporary/R-library/log files remain below `${PROJECT_ROOT}/adipose_analysis`.
+
+### Chunk 2 - Package, kernel, transcript, size, and shell preflight
 
 ```bash
-export METADATA_PATH="${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT/config/scwat_sample_manifest.tsv"
-export RUN_LABEL="full_notebook_qc_real_metadata_v1"
-bash "${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT/shell/run_notebook_qc_hpc.sh"
+command -v Rscript
+command -v python3
+command -v jupyter
+jupyter kernelspec list
+Rscript -e 'p <- c("IRkernel","Matrix","jsonlite","ggplot2","arrow","dplyr","RANN"); ok <- vapply(p, requireNamespace, logical(1), quietly=TRUE); print(data.frame(package=p, available=ok)); stopifnot(all(ok))'
+for region in Region_1 Region_2 Region_3 Region_4; do
+  region_dir=$(find "${INPUT_ROOT}" -mindepth 1 -maxdepth 1 -type d -name "*__${region}__*" -print -quit)
+  test -n "${region_dir}"
+  test -f "${region_dir}/transcripts.parquet"
+  du -sh "${region_dir}/transcripts.parquet" "${region_dir}/cell_feature_matrix" "${region_dir}/cells.csv.gz"
+done
+df -h "${PROJECT_ROOT}"
+bash -n "${PIPELINE_REPO}/shell/run_notebook_qc_hpc.sh"
+bash -n "${PIPELINE_REPO}/slurm/scwat_notebook_qc.sbatch"
 ```
+
+### Chunk 3 - One-section interactive checkpoint
+
+This tests Region 1 first and writes its executed notebook plus section bundle under `${RUN_ROOT}`.
+
+```bash
+python3 "${PIPELINE_REPO}/scripts/render_notebooks.py" --inject \
+  "${PIPELINE_REPO}/notebooks/01_section_phase0_2_QC.ipynb" \
+  "${RUN_ROOT}/executed_notebooks/Region_1.executed.ipynb" \
+  --set "PROJECT_ROOT=${PROJECT_ROOT}" --set "PIPELINE_REPO=${PIPELINE_REPO}" \
+  --set "INPUT_ROOT=${INPUT_ROOT}" --set "REGION_ID=Region_1" --set "RUN_LABEL=${RUN_LABEL}" \
+  --set "METADATA_PATH=${METADATA_PATH}" --set "EXPECTED_SECTION_COUNT=4L" \
+  --set "SEED=20260814L" --set "STRICT_MODE=FALSE" --set "EXTENDED_QC_MODE=FULL_HPC" \
+  --set "EXTENDED_QC_CONFIG_PATH=${PIPELINE_REPO}/config/extended_qc_defaults.tsv"
+jupyter nbconvert --execute --to notebook --inplace \
+  --ExecutePreprocessor.kernel_name=ir --ExecutePreprocessor.timeout=-1 \
+  "${RUN_ROOT}/executed_notebooks/Region_1.executed.ipynb"
+Rscript -e "source('${PIPELINE_REPO}/R/source.R'); stopifnot(validate_extended_section_artifacts('${RUN_ROOT}/sections/Region_1','Region_1','FULL_HPC',stop_on_error=TRUE))"
+```
+
+### Chunk 4 - Full four-section run
+
+The runner repeats/overwrites Region 1 within the same run label, then processes Regions 2-4 and the slide summary.
+
+```bash
+bash "${PIPELINE_REPO}/shell/run_notebook_qc_hpc.sh"
+```
+
+Alternatively submit the configured Slurm wrapper:
+
+```bash
+sbatch "${PIPELINE_REPO}/slurm/scwat_notebook_qc.sbatch"
+```
+
+### Chunk 5 - Summary-only rerun
+
+Use this only after all four full-HPC section bundles validate.
+
+```bash
+python3 "${PIPELINE_REPO}/scripts/render_notebooks.py" --inject \
+  "${PIPELINE_REPO}/notebooks/02_slide_QC_summary.ipynb" \
+  "${RUN_ROOT}/executed_notebooks/slide_summary.executed.ipynb" \
+  --set "PROJECT_ROOT=${PROJECT_ROOT}" --set "PIPELINE_REPO=${PIPELINE_REPO}" \
+  --set "RUN_LABEL=${RUN_LABEL}" --set "EXPECTED_SECTION_COUNT=4L" \
+  --set "METADATA_PATH=${METADATA_PATH}" \
+  --set "EXTENDED_QC_CONFIG_PATH=${PIPELINE_REPO}/config/extended_qc_defaults.tsv" \
+  --set "SUBSET_REFERENCE_PATH=${PIPELINE_REPO}/config/subset_qc_reference.tsv"
+jupyter nbconvert --execute --to notebook --inplace \
+  --ExecutePreprocessor.kernel_name=ir --ExecutePreprocessor.timeout=-1 \
+  "${RUN_ROOT}/executed_notebooks/slide_summary.executed.ipynb"
+```
+
+### Chunk 6 - Post-run validation and output locations
+
+```bash
+Rscript -e "source('${PIPELINE_REPO}/R/source.R'); for(r in paste0('Region_',1:4)) stopifnot(validate_extended_section_artifacts(file.path('${RUN_ROOT}','sections',r),r,'FULL_HPC',stop_on_error=TRUE)); stopifnot(validate_extended_slide_qc_artifacts('${RUN_ROOT}',stop_on_error=TRUE))"
+find "${RUN_ROOT}/slide_summary" -maxdepth 2 -type f -print | sort
+```
+
+Primary answers are in `${RUN_ROOT}/slide_summary/candidate_cycle_affected_genes.tsv`, `subset_full_qc_ranking.tsv`, `combined_spatial_qc.tsv`, `combined_spatial_hotspots.tsv`, `within_mouse_section_concordance.tsv`, and `figures/scwat_extended_qc_diagnostics.pdf`. Exact cycle identity still requires the separate 10x diagnostic output.
 
 ## Current scientific gate
 
