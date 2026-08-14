@@ -122,4 +122,30 @@ no_flags <- spatial_fixture; no_flags$qc_review_flag <- FALSE
 not_estimable <- test_spatial_flag_clustering(no_flags, k = 4L, permutations = 19L, seed = 20260814L, mode = "LOCAL_SUBSET")
 stopifnot(not_estimable$status == "NOT_ESTIMABLE")
 
+# Candidate tiers distinguish paired, recurring, partial, and insufficient evidence.
+candidate_fixture <- expand.grid(region_id = paste0("Region_", 1:4), gene = c("A", "B", "C", "D"), stringsAsFactors = FALSE)
+candidate_fixture$counts_per_10000 <- 100
+candidate_fixture$detection_fraction <- 0.5
+candidate_fixture$fraction_q20 <- 0.90
+candidate_fixture$counts_per_10000[candidate_fixture$gene == "A" & candidate_fixture$region_id == "Region_4"] <- 40
+candidate_fixture$fraction_q20[candidate_fixture$gene == "A" & candidate_fixture$region_id == "Region_4"] <- 0.80
+candidate_fixture$counts_per_10000[candidate_fixture$gene == "B" & candidate_fixture$region_id %in% c("Region_1", "Region_2")] <- 40
+candidate_fixture$fraction_q20[candidate_fixture$gene == "B" & candidate_fixture$region_id %in% c("Region_1", "Region_2")] <- 0.80
+candidate_fixture$counts_per_10000[candidate_fixture$gene == "C" & candidate_fixture$region_id == "Region_1"] <- 40
+candidate_fixture$fraction_q20[candidate_fixture$gene == "D"] <- NA_real_
+candidate_rank <- rank_candidate_cycle_genes(candidate_fixture, config)
+tier <- setNames(candidate_rank$evidence_tier[!duplicated(candidate_rank$gene)], candidate_rank$gene[!duplicated(candidate_rank$gene)])
+stopifnot(tier[["A"]] == "Tier_A", tier[["B"]] == "Tier_B", tier[["C"]] == "Tier_C", tier[["D"]] == "Unranked")
+stopifnot(all(candidate_rank$candidate_status == "CANDIDATE_NOT_CONFIRMED"))
+stopifnot(all(candidate_rank$exact_cycle_status == "REQUIRES_10X_DIAGNOSTICS"))
+stopifnot(candidate_rank$comparison_type[candidate_rank$gene == "A" & candidate_rank$region_id == "Region_4"] == "WITHIN_MOUSE_TECHNICAL_PAIR")
+
+# Full-data ranks are compared descriptively with the fixed subset reference.
+subset_reference_fixture <- utils::read.delim(file.path(repo_root, "config", "subset_qc_reference.tsv"), check.names = FALSE)
+full_fixture <- data.frame(region_id = paste0("Region_", 1:4), input_cells = 1000L, review_flagged = c(80L, 20L, 60L, 40L))
+rank_comparison <- compare_subset_full_qc(full_fixture, subset_reference_fixture)
+stopifnot(identical(rank_comparison$ranking$full_rank, c(1L, 4L, 2L, 3L)))
+stopifnot(is.numeric(rank_comparison$agreement$spearman_rho), is.numeric(rank_comparison$agreement$kendall_tau))
+stopifnot(rank_comparison$agreement$interpretation == "DESCRIPTIVE_FOUR_SECTIONS")
+
 cat("All extended scWAT Xenium QC tests passed.\n")

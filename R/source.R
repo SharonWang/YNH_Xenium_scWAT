@@ -499,6 +499,76 @@ find_spatial_qc_hotspots <- function(annotated_cells, permutations = 999L, min_b
   )
 }
 
+rank_candidate_cycle_genes <- function(gene_quality, config, reference_region = "Region_3") {
+  required <- c("region_id", "gene", "counts_per_10000", "detection_fraction", "fraction_q20")
+  missing <- setdiff(required, names(gene_quality))
+  if (length(missing)) stop(sprintf("Gene-quality table missing columns: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  if (anyDuplicated(gene_quality[, c("region_id", "gene")])) stop("Gene-quality table contains duplicate region/gene rows.", call. = FALSE)
+  genes <- unique(gene_quality$gene)
+  reference <- gene_quality[gene_quality$region_id == reference_region, , drop = FALSE]
+  if (!setequal(reference$gene, genes)) stop("Reference region must contain exactly one row for every gene.", call. = FALSE)
+  comparison_regions <- setdiff(unique(gene_quality$region_id), reference_region)
+  out <- do.call(rbind, lapply(genes, function(gene) {
+    ref <- reference[reference$gene == gene, , drop = FALSE]
+    observed <- gene_quality[gene_quality$gene == gene & gene_quality$region_id %in% comparison_regions, , drop = FALSE]
+    data.frame(
+      gene = gene, region_id = observed$region_id, reference_region = reference_region,
+      comparison_type = ifelse(observed$region_id == "Region_4", "WITHIN_MOUSE_TECHNICAL_PAIR", "CROSS_MOUSE_DIAGNOSTIC_REFERENCE"),
+      observed_counts_per_10000 = observed$counts_per_10000,
+      reference_counts_per_10000 = ref$counts_per_10000,
+      log2_count_ratio = log2((observed$counts_per_10000 + 0.5) / (ref$counts_per_10000 + 0.5)),
+      detection_fraction_difference = observed$detection_fraction - ref$detection_fraction,
+      observed_fraction_q20 = observed$fraction_q20,
+      reference_fraction_q20 = ref$fraction_q20,
+      q20_difference = observed$fraction_q20 - ref$fraction_q20,
+      stringsAsFactors = FALSE
+    )
+  }))
+  out$abundance_depletion <- is.finite(out$log2_count_ratio) & out$log2_count_ratio <= -as.numeric(config$candidate_abs_log2_ratio)
+  out$quality_degradation <- is.finite(out$q20_difference) & out$q20_difference <= -as.numeric(config$candidate_abs_q20_delta)
+  out$insufficient_quality <- !is.finite(out$q20_difference)
+  tiers <- vapply(split(seq_len(nrow(out)), out$gene), function(index) {
+    paired <- any(out$region_id[index] == "Region_4" & out$abundance_depletion[index] & out$quality_degradation[index])
+    recurring <- sum(out$abundance_depletion[index] & out$quality_degradation[index]) >= 2L
+    partial <- any(xor(out$abundance_depletion[index], out$quality_degradation[index]))
+    if (paired) "Tier_A" else if (recurring) "Tier_B" else if (partial) "Tier_C" else "Unranked"
+  }, character(1))
+  out$evidence_tier <- unname(tiers[match(out$gene, names(tiers))])
+  out$candidate_status <- "CANDIDATE_NOT_CONFIRMED"
+  out$exact_cycle_status <- "REQUIRES_10X_DIAGNOSTICS"
+  out$threshold_abs_log2_ratio <- as.numeric(config$candidate_abs_log2_ratio)
+  out$threshold_abs_q20_delta <- as.numeric(config$candidate_abs_q20_delta)
+  rownames(out) <- NULL
+  out[order(out$gene, out$region_id), , drop = FALSE]
+}
+
+compare_subset_full_qc <- function(full_summary, subset_reference) {
+  full_required <- c("region_id", "input_cells", "review_flagged")
+  subset_required <- c("region_id", "review_fraction", "subset_rank")
+  if (length(setdiff(full_required, names(full_summary)))) stop("Full QC summary lacks required review columns.", call. = FALSE)
+  if (length(setdiff(subset_required, names(subset_reference)))) stop("Subset reference lacks required rank columns.", call. = FALSE)
+  if (anyDuplicated(full_summary$region_id) || anyDuplicated(subset_reference$region_id)) stop("QC ranking inputs require unique regions.", call. = FALSE)
+  if (!setequal(full_summary$region_id, subset_reference$region_id)) stop("Full and subset QC region sets differ.", call. = FALSE)
+  full <- full_summary[, full_required, drop = FALSE]
+  full$full_review_fraction <- ifelse(full$input_cells > 0, full$review_flagged / full$input_cells, NA_real_)
+  order_index <- order(-full$full_review_fraction, full$region_id)
+  full$full_rank <- NA_integer_; full$full_rank[order_index] <- seq_along(order_index)
+  ranking <- merge(
+    subset_reference[, subset_required, drop = FALSE], full,
+    by = "region_id", all = FALSE, sort = FALSE
+  )
+  ranking <- ranking[match(full_summary$region_id, ranking$region_id), , drop = FALSE]
+  ranking$rank_change <- ranking$full_rank - ranking$subset_rank
+  ranking$review_fraction_difference <- ranking$full_review_fraction - ranking$review_fraction
+  agreement <- data.frame(
+    sections = nrow(ranking),
+    spearman_rho = suppressWarnings(stats::cor(ranking$subset_rank, ranking$full_rank, method = "spearman")),
+    kendall_tau = suppressWarnings(stats::cor(ranking$subset_rank, ranking$full_rank, method = "kendall")),
+    interpretation = "DESCRIPTIVE_FOUR_SECTIONS", stringsAsFactors = FALSE
+  )
+  list(ranking = ranking, agreement = agreement)
+}
+
 empty_alarm_table <- function() {
   data.frame(
     raw_value = logical(), formatted_value = character(), raised = logical(),
