@@ -1,0 +1,13 @@
+.ipynb_checkpoints/
+outputs/
+logs/
+tmp/
+R_libs/
+executed_notebooks/
+*.executed.ipynb
+.Rhistory
+.RData
+.Rproj.user/
+__pycache__/
+*.pyc
+.worktrees/
