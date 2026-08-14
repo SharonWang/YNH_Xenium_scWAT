@@ -1,0 +1,5 @@
+tissue	region_id	mouse_id	section_id	biological_replicate_id	technical_replicate_id	genotype	treatment	condition	age_weeks	metadata_status	do_not_interpret	notes
+scWAT	Region_1	Mouse_1	62308	Mouse_1	Region_1	WT	None	Normal	8	VERIFIED_USER_SUPPLIED	FALSE	Section 62308; no left/right factor
+scWAT	Region_2	Mouse_1	62309	Mouse_1	Region_2	WT	None	Normal	8	VERIFIED_USER_SUPPLIED	FALSE	Section 62309; no left/right factor
+scWAT	Region_3	Mouse_2	62310	Mouse_2	Region_3	WT	None	Normal	8	VERIFIED_USER_SUPPLIED	FALSE	Section 62310; no left/right factor
+scWAT	Region_4	Mouse_2	62311	Mouse_2	Region_4	WT	None	Normal	8	VERIFIED_USER_SUPPLIED	FALSE	Section 62311; no left/right factor

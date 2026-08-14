@@ -55,6 +55,21 @@ stopifnot(identical(as.integer(sort(table(m1$mouse_id))), c(2L, 2L)))
 stopifnot(identical(as.integer(sort(table(m1$side))), c(2L, 2L)))
 stopifnot(validate_sample_manifest(m1, paste0("Region_", 1:4))$valid)
 
+# Real metadata may omit anatomical side when side is not a study factor.
+real_manifest <- data.frame(
+  tissue = "scWAT",
+  region_id = paste0("Region_", 1:4),
+  mouse_id = c("Mouse_1", "Mouse_1", "Mouse_2", "Mouse_2"),
+  section_id = c("62308", "62309", "62310", "62311"),
+  biological_replicate_id = c("Mouse_1", "Mouse_1", "Mouse_2", "Mouse_2"),
+  technical_replicate_id = paste0("Region_", 1:4),
+  metadata_status = "VERIFIED",
+  genotype = "WT", treatment = "None", age_weeks = 8L,
+  stringsAsFactors = FALSE
+)
+stopifnot(validate_sample_manifest(real_manifest, paste0("Region_", 1:4))$valid)
+stopifnot(identical(as.integer(table(real_manifest$mouse_id)), c(2L, 2L)))
+
 # Required-file inventory reports absent files without mutating inputs.
 region_dir <- sections$region_dir[sections$region_id == "Region_1"]
 inventory <- inventory_section_files(region_dir, "Region_1", calculate_md5 = FALSE)

@@ -50,7 +50,7 @@ The summary notebook requires all four section bundles and writes below `<RUN_RO
 
 ## Local subset validation
 
-Local execution uses only `adipose_analysis/subset_input/adipose_data` and writes to `adipose_analysis/scwat_qc_outputs/local_notebook_test`. All temporary files are forced below the D: project.
+Local execution uses only `adipose_analysis/subset_input/adipose_data` and writes by default to `adipose_analysis/scwat_qc_outputs/local_notebook_qc_verified_metadata`. All temporary files are forced below the D: project.
 
 ```powershell
 & 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -NoProfile -ExecutionPolicy Bypass `
@@ -71,19 +71,19 @@ bash -n "${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT/slurm/scwat_notebook_
 sbatch "${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT/slurm/scwat_notebook_qc.sbatch"
 ```
 
-To use real metadata later:
+The HPC runner uses the repository manifest by default. To override its path or run label:
 
 ```bash
-export METADATA_PATH="${PROJECT_ROOT}/adipose_analysis/metadata/scwat_sample_manifest.tsv"
+export METADATA_PATH="${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT/config/scwat_sample_manifest.tsv"
 export RUN_LABEL="full_notebook_qc_real_metadata_v1"
 bash "${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT/shell/run_notebook_qc_hpc.sh"
 ```
 
 ## Current scientific gate
 
-The validated subset reproduces 500 cells per section and 2,000 total cells. The panel reconciles 100/100. Regions 1, 2, and 4 contain poor-quality-cycle ERROR alarms and are on `HOLD`; Region 3 is `PENDING` because metadata is synthetic. Overall slide readiness is `HOLD`, so diagnostic QC is valid but biological interpretation is not.
+The metadata-aware subset rerun reproduces 500 cells per section and 2,000 total cells. The panel reconciles 100/100. Metadata passes in all four sections. Regions 1, 2, and 4 contain poor-quality-cycle ERROR alarms and remain on `HOLD`; Region 3 is now `PASS`. Overall slide readiness remains `HOLD`, so cross-section biological interpretation is still blocked.
 
-The verified study design supplied after this local run is: sections 62308 and 62309 are from Mouse 1; sections 62310 and 62311 are from Mouse 2. All samples are untreated WT scWAT from normal 8-week-old mice. Left/right is not a design factor. Section is the technical processing unit and mouse is the biological replicate. The QC notebooks must be rerun with this metadata before the metadata gate in generated outputs can change from `PENDING` to `PASS`.
+The applied study design is: sections 62308 and 62309 are from Mouse 1; sections 62310 and 62311 are from Mouse 2. All samples are untreated WT scWAT from normal 8-week-old mice. Left/right is not a design factor. Section is the technical processing unit and mouse is the biological replicate.
 
 The portable technical QC report is at `reports/2026-08-14_scwat_qc_summary/report.html`; its canonical data/provenance specification is `reports/2026-08-14_scwat_qc_summary/artifact.json`.
 
@@ -95,4 +95,5 @@ The portable technical QC report is at `reports/2026-08-14_scwat_qc_summary/repo
 - Core-pass counts were 493, 500, 497, and 499; review-flag counts were 37, 16, 27, and 11.
 - All four sparse RDS objects reloaded with 500 cells; the combined summary reloaded with 2,000 cells and four unique regions.
 - Source and executed notebook JSON contracts passed structural validation.
+- All four regenerated manifests contain `VERIFIED_USER_SUPPLIED`; all four metadata gates are `PASS`; Region 3 overall readiness changed from `PENDING` to `PASS`.
 - Full-data HPC execution and `bash -n` remain pending because Bash/Jupyter/IRkernel are unavailable on the local Windows test environment.

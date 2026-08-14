@@ -80,7 +80,7 @@ create_synthetic_manifest <- function(region_ids, seed = 20260814L) {
 }
 
 validate_sample_manifest <- function(manifest, expected_regions) {
-  required <- c("tissue", "region_id", "mouse_id", "side", "section_id", "biological_replicate_id", "technical_replicate_id", "metadata_status")
+  required <- c("tissue", "region_id", "mouse_id", "section_id", "biological_replicate_id", "technical_replicate_id", "metadata_status")
   issues <- character()
   missing <- setdiff(required, names(manifest))
   if (length(missing)) issues <- c(issues, paste0("missing_columns:", paste(missing, collapse = ",")))
@@ -88,7 +88,7 @@ validate_sample_manifest <- function(manifest, expected_regions) {
     if (anyDuplicated(manifest$region_id)) issues <- c(issues, "duplicate_region_id")
     if (anyDuplicated(manifest$section_id)) issues <- c(issues, "duplicate_section_id")
     if (!setequal(manifest$region_id, expected_regions)) issues <- c(issues, "region_set_mismatch")
-    if (any(!manifest$side %in% c("Left", "Right"))) issues <- c(issues, "invalid_side")
+    if ("side" %in% names(manifest) && any(!manifest$side %in% c("Left", "Right", "Not_applicable", "Unknown"))) issues <- c(issues, "invalid_side")
     values <- as.matrix(manifest[, required, drop = FALSE])
     if (anyNA(values) || any(trimws(values) == "")) issues <- c(issues, "missing_required_values")
   }

@@ -5,7 +5,7 @@ PROJECT_ROOT="${PROJECT_ROOT:-/dssg/home/acct-svetoslav_chakarov/svetoslav_chaka
 PIPELINE_REPO="${PIPELINE_REPO:-${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT}"
 INPUT_ROOT="${INPUT_ROOT:-${PROJECT_ROOT}/adipose_data}"
 RUN_LABEL="${RUN_LABEL:-full_notebook_qc_$(date +%Y%m%d_%H%M%S)}"
-METADATA_PATH="${METADATA_PATH:-}"
+METADATA_PATH="${METADATA_PATH:-${PIPELINE_REPO}/config/scwat_sample_manifest.tsv}"
 RUN_ROOT="${PROJECT_ROOT}/adipose_analysis/scwat_qc_outputs/${RUN_LABEL}"
 TEMP_ROOT="${PROJECT_ROOT}/adipose_analysis/tmp"
 R_LIBRARY_ROOT="${PROJECT_ROOT}/adipose_analysis/R_libs"
@@ -16,6 +16,7 @@ for path in "${PIPELINE_REPO}" "${INPUT_ROOT}" "${RUN_ROOT}" "${TEMP_ROOT}" "${R
 done
 if [[ -n "${METADATA_PATH}" ]]; then
   case "${METADATA_PATH}" in "${PROJECT_ROOT}"/*) ;; *) echo "METADATA_PATH must be below PROJECT_ROOT" >&2; exit 2;; esac
+  [[ -f "${METADATA_PATH}" ]] || { echo "Missing metadata manifest: ${METADATA_PATH}" >&2; exit 4; }
 fi
 
 mkdir -p "${TEMP_ROOT}" "${R_LIBRARY_ROOT}" "${EXECUTED_ROOT}" "${PROJECT_ROOT}/adipose_analysis/scwat_qc_logs"

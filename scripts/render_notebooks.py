@@ -39,7 +39,7 @@ def section_cells(incomplete=False):
             'INPUT_ROOT <- file.path(PROJECT_ROOT, "adipose_data")\n'
             'REGION_ID <- "Region_1"\n'
             'RUN_LABEL <- "full_notebook_qc_v1"\n'
-            'METADATA_PATH <- ""\n'
+            'METADATA_PATH <- file.path(PIPELINE_REPO, "config", "scwat_sample_manifest.tsv")\n'
             'EXPECTED_SECTION_COUNT <- 4L\n'
             'SEED <- 20260814L\n'
             'STRICT_MODE <- FALSE\n',
@@ -103,7 +103,7 @@ def section_cells(incomplete=False):
         code(
             'xenium <- import_xenium_mex(region_dir)\n'
             'qc <- calculate_xenium_cell_qc(xenium$counts, xenium$cells, REGION_ID)\n'
-            'metadata_columns <- intersect(c("mouse_id", "side", "section_id", "biological_replicate_id", "metadata_status", "do_not_interpret"), names(section_manifest))\n'
+            'metadata_columns <- intersect(c("mouse_id", "side", "section_id", "biological_replicate_id", "genotype", "treatment", "condition", "age_weeks", "metadata_status", "do_not_interpret"), names(section_manifest))\n'
             'for (column in metadata_columns) qc$cell_metadata[[column]] <- section_manifest[[column]][[1]]\n'
             'qc$summary\n'
         ),
@@ -176,7 +176,7 @@ def summary_cells(incomplete=False):
             'slide_plots <- plot_slide_qc(slide_data, slide_summary)\n'
             'for (plot in slide_plots) print(plot)\n'
         ),
-        markdown("## Readiness\n\nThe worst section gate determines slide readiness. Synthetic metadata and unresolved imaging errors block biology."),
+        markdown("## Readiness\n\nThe worst section gate determines slide readiness. Verified metadata clears the metadata gate; unresolved Xenium errors still block biology."),
         code(
             'slide_summary$readiness\n'
             'cat("Overall slide QC status:", slide_summary$overall_status, "\\n")\n'

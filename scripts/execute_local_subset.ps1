@@ -1,10 +1,12 @@
 param(
   [string]$ProjectRoot = 'D:\Xiaonan\CODEX_projects\Yanan_Xenium',
-  [string]$RunLabel = 'local_notebook_test'
+  [string]$RunLabel = 'local_notebook_qc_verified_metadata',
+  [string]$MetadataPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Join-Path $ProjectRoot 'adipose_analysis\YNH_Xenium_scWAT'
+if (-not $MetadataPath) { $MetadataPath = Join-Path $RepoRoot 'config\scwat_sample_manifest.tsv' }
 $InputRoot = Join-Path $ProjectRoot 'adipose_analysis\subset_input\adipose_data'
 $RunRoot = Join-Path $ProjectRoot "adipose_analysis\scwat_qc_outputs\$RunLabel"
 $TempRoot = Join-Path $ProjectRoot 'adipose_analysis\tmp'
@@ -12,7 +14,7 @@ $ExecutedRoot = Join-Path $RunRoot 'executed_notebooks'
 $Python = 'C:\Users\Xiaonan_Wang\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 $Rscript = 'C:\Program Files\R\R-4.3.3\bin\Rscript.exe'
 
-foreach ($Path in @($RepoRoot, $InputRoot)) {
+foreach ($Path in @($RepoRoot, $InputRoot, $MetadataPath)) {
   if (-not (Test-Path -LiteralPath $Path)) { throw "Required path is absent: $Path" }
 }
 foreach ($Path in @($RunRoot, $TempRoot, $ExecutedRoot)) {
@@ -37,13 +39,13 @@ foreach ($Region in @('Region_1', 'Region_2', 'Region_3', 'Region_4')) {
     --set "PIPELINE_REPO=$($RepoRoot -replace '\\','/')" `
     --set "INPUT_ROOT=$($InputRoot -replace '\\','/')" `
     --set "REGION_ID=$Region" --set "RUN_LABEL=$RunLabel" `
-    --set 'METADATA_PATH=' --set 'EXPECTED_SECTION_COUNT=4L' `
+    --set "METADATA_PATH=$($MetadataPath -replace '\\','/')" --set 'EXPECTED_SECTION_COUNT=4L' `
     --set 'SEED=20260814L' --set 'STRICT_MODE=FALSE'
   if ($LASTEXITCODE -ne 0) { throw "Parameter injection failed for $Region." }
   & $Rscript $Executor $Injected $Executed
   if ($LASTEXITCODE -ne 0) { throw "Notebook execution failed for $Region." }
   $SectionOutput = Join-Path $RunRoot "sections\$Region"
-  & $Rscript -e "source('$($RepoRoot -replace '\\','/')/R/source.R'); stopifnot(validate_section_artifacts('$($SectionOutput -replace '\\','/')', '$Region')); q <- read.delim(gzfile('$($SectionOutput -replace '\\','/')/cell_qc_metadata.tsv.gz')); stopifnot(nrow(q) == 500L)"
+  & $Rscript -e "source('$($RepoRoot -replace '\\','/')/R/source.R'); stopifnot(validate_section_artifacts('$($SectionOutput -replace '\\','/')', '$Region')); q <- read.delim(gzfile('$($SectionOutput -replace '\\','/')/cell_qc_metadata.tsv.gz')); g <- read.delim('$($SectionOutput -replace '\\','/')/section_readiness_gates.tsv'); stopifnot(nrow(q) == 500L, all(q[['metadata_status']] == 'VERIFIED_USER_SUPPLIED'), g[['status']][g[['gate']] == 'metadata'] == 'PASS')"
   if ($LASTEXITCODE -ne 0) { throw "Artifact validation failed for $Region." }
 }
 
