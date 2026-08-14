@@ -207,13 +207,16 @@ def section_cells(incomplete=False):
 def summary_cells(incomplete=False):
     cells = [
         markdown("# scWAT Xenium slide-level QC summary\n\nAggregate the four independently processed sections without treating cells as biological replicates."),
-        markdown("## Goal\n\nVerify complete Region 1-4 coverage, compare QC distributions and gates, and write Cell-inspired slide-level figures."),
+        markdown("## Goal\n\nVerify complete Region 1-4 coverage and answer four technical-QC questions: direct alarm/candidate-gene evidence, subset-versus-full review burden, spatial clustering/morphology-review targets, and within-mouse section concordance."),
         markdown("## Setup\n\n### Parameters"),
         code(
             'PROJECT_ROOT <- "/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu"\n'
             'PIPELINE_REPO <- file.path(PROJECT_ROOT, "adipose_analysis", "YNH_Xenium_scWAT")\n'
             'RUN_LABEL <- "full_notebook_qc_v1"\n'
-            'EXPECTED_SECTION_COUNT <- 4L\n',
+            'EXPECTED_SECTION_COUNT <- 4L\n'
+            'METADATA_PATH <- file.path(PIPELINE_REPO, "config", "scwat_sample_manifest.tsv")\n'
+            'EXTENDED_QC_CONFIG_PATH <- file.path(PIPELINE_REPO, "config", "extended_qc_defaults.tsv")\n'
+            'SUBSET_REFERENCE_PATH <- file.path(PIPELINE_REPO, "config", "subset_qc_reference.tsv")\n',
             tags=["parameters"],
         ),
         code(
@@ -225,35 +228,69 @@ def summary_cells(incomplete=False):
             'stopifnot(EXPECTED_SECTION_COUNT == 4L)\n'
             'cat("Slide QC run root:", RUN_ROOT, "\\n")\n'
         ),
-        markdown("## Inputs\n\nExactly four independently completed section bundles are required."),
+        markdown("## Inputs\n\nExactly four independently completed core and extended section bundles are required. The verified manifest defines Mouse 1 (62308/62309) and Mouse 2 (62310/62311); mouse is the biological replicate and section is a technical processing unit."),
         markdown("## Completeness Checks"),
         code(
             'coverage <- validate_four_section_outputs(RUN_ROOT, paste0("Region_", seq_len(EXPECTED_SECTION_COUNT)))\n'
-            'coverage\n'
+            'extended_coverage <- validate_four_extended_section_outputs(RUN_ROOT, coverage$region_id)\n'
+            'stopifnot(identical(coverage$region_id, extended_coverage$region_id))\n'
+            'list(core = coverage, extended = extended_coverage)\n'
         ),
         markdown("## QC Results"),
         code(
             'slide_data <- read_slide_qc_outputs(RUN_ROOT, coverage$region_id)\n'
             'slide_summary <- summarise_slide_qc(slide_data)\n'
+            'extended_slide_data <- read_extended_slide_qc_outputs(RUN_ROOT, coverage$region_id)\n'
+            'manifest <- utils::read.delim(METADATA_PATH, check.names = FALSE)\n'
+            'extended_config <- read_extended_qc_config(EXTENDED_QC_CONFIG_PATH)\n'
+            'subset_reference <- utils::read.delim(SUBSET_REFERENCE_PATH, check.names = FALSE)\n'
+            'extended_slide_summary <- summarise_extended_slide_qc(extended_slide_data, slide_summary$section_summary, manifest, extended_config, subset_reference)\n'
             'slide_summary$section_summary\n'
+        ),
+        markdown("## Question 1 - Which alarms and candidate genes are affected?\n\nThe alarm table reports directly available 10x evidence. Candidate genes are ranked from cross-section abundance and transcript-QV patterns, remain `CANDIDATE_NOT_CONFIRMED`, and cannot identify the exact cycle; cycle identity requires 10x diagnostics."),
+        code(
+            'extended_slide_data$cycle_alarm_evidence\n'
+            'candidate_display <- extended_slide_summary$candidates[order(extended_slide_summary$candidates$evidence_tier, extended_slide_summary$candidates$gene), , drop = FALSE]\n'
+            'candidate_display[seq_len(min(30L, nrow(candidate_display))), , drop = FALSE]\n'
+        ),
+        markdown("## Question 2 - Does full-data QC reproduce the subset ranking?\n\nThe comparison is descriptive across four technical sections. `NOT_RUN_LOCAL_SUBSET` means this question remains pending until the full-HPC run."),
+        code(
+            'extended_slide_summary$ranking\n'
+            'extended_slide_summary$rank_agreement\n'
+        ),
+        markdown("## Question 3 - Are review flags spatially clustered?\n\nGlobal kNN clustering, tissue-edge proxies, dense-aggregate proxies, and candidate hotspot bins are coordinate-based diagnostics. Hotspots are not labelled folds or tears without morphology/image review."),
+        code(
+            'extended_slide_data$spatial_global\n'
+            'extended_slide_data$spatial_edge_density\n'
+            'extended_slide_data$manual_review_manifest\n'
+        ),
+        markdown("## Question 4 - Are the two sections from each mouse technically concordant?\n\nThe two sections per mouse are compared as technical pairs. Thresholds are advisory, and these results are not biological hypothesis tests."),
+        code(
+            'extended_slide_summary$concordance$summary\n'
         ),
         markdown("## Cell-style Figures\n\nColors are fixed across sections; distributions are descriptive and do not imply cell-level biological replication."),
         code(
             'slide_plots <- plot_slide_qc(slide_data, slide_summary)\n'
+            'extended_slide_plots <- plot_extended_slide_qc(extended_slide_data, extended_slide_summary)\n'
             'for (plot in slide_plots) print(plot)\n'
+            'for (plot in extended_slide_plots) print(plot)\n'
         ),
-        markdown("## Readiness\n\nThe worst section gate determines slide readiness. Verified metadata clears the metadata gate; unresolved Xenium errors still block biology."),
+        markdown("## Readiness\n\nThe original Phase 0-2 gates remain authoritative and unchanged. The worst section gate determines slide readiness; unresolved Xenium errors still block biology."),
         code(
             'slide_summary$readiness\n'
+            'extended_slide_summary$status\n'
             'cat("Overall slide QC status:", slide_summary$overall_status, "\\n")\n'
         ),
         markdown("## Outputs"),
         code(
             'slide_artifacts <- write_slide_qc_artifacts(PROJECT_ROOT, RUN_ROOT, slide_data, slide_summary, slide_plots)\n'
+            'extended_slide_artifacts <- write_extended_slide_qc_artifacts(PROJECT_ROOT, RUN_ROOT, extended_slide_data, extended_slide_summary, extended_slide_plots)\n'
             'saved_summary <- readRDS(file.path(RUN_ROOT, "slide_summary", "slide_qc_summary.rds"))\n'
             'stopifnot(nrow(saved_summary$data$coverage) == 4L)\n'
             'stopifnot(length(unique(saved_summary$data$cell_metadata$region_id)) == 4L)\n'
-            'data.frame(artifact = basename(slide_artifacts), path = slide_artifacts)\n'
+            'stopifnot(validate_extended_slide_qc_artifacts(RUN_ROOT, stop_on_error = TRUE))\n'
+            'list(core = data.frame(artifact = basename(slide_artifacts), path = slide_artifacts),\n'
+            '     extended = data.frame(artifact = basename(extended_slide_artifacts), path = extended_slide_artifacts))\n'
         ),
     ]
     if incomplete:
@@ -276,8 +313,8 @@ def validate_notebook(path, notebook_type="section"):
         for value in required_parameters + required_sections:
             if value not in text: errors.append(f"missing required section/parameter: {value}")
     if notebook_type == "summary":
-        required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "RUN_LABEL", "EXPECTED_SECTION_COUNT"]
-        required_sections = ["## Goal", "## Setup", "## Inputs", "## Completeness Checks", "## QC Results", "## Cell-style Figures", "## Readiness", "## Outputs"]
+        required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "RUN_LABEL", "EXPECTED_SECTION_COUNT", "METADATA_PATH", "EXTENDED_QC_CONFIG_PATH", "SUBSET_REFERENCE_PATH"]
+        required_sections = ["## Goal", "## Setup", "## Inputs", "## Completeness Checks", "## QC Results", "## Question 1", "## Question 2", "## Question 3", "## Question 4", "## Cell-style Figures", "## Readiness", "## Outputs"]
         for value in required_parameters + required_sections:
             if value not in text: errors.append(f"missing required section/parameter: {value}")
     if errors: raise ValueError("; ".join(errors))

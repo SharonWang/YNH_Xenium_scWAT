@@ -955,7 +955,7 @@ plot_extended_spatial_qc <- function(spatial_cells, spatial_edge_density, spatia
       ggplot2::geom_point(ggplot2::aes(colour = review_status, shape = location_class), size = 0.5, alpha = 0.75) +
       ggplot2::scale_colour_manual(values = c(Pass = "#BDBDBD", Review = "#D73027"), drop = FALSE) +
       ggplot2::labs(title = "Spatial QC review map with tissue-edge proxy", colour = "QC", shape = "Location"),
-    edge_density = ggplot2::ggplot(spatial_edge_density, ggplot2::aes(x = class, y = review_rate, fill = class_type)) +
+    edge_density = ggplot2::ggplot(spatial_edge_density[is.finite(spatial_edge_density$review_rate), , drop = FALSE], ggplot2::aes(x = class, y = review_rate, fill = class_type)) +
       ggplot2::geom_col(width = 0.7, alpha = 0.9) +
       ggplot2::facet_wrap(~class_type, scales = "free_x") +
       ggplot2::scale_y_continuous(labels = function(x) paste0(round(100 * x, 1), "%")) +
@@ -1063,6 +1063,200 @@ validate_extended_section_artifacts <- function(output_dir, region_id, mode = "L
   if (inherits(status, "error") || nrow(status) != 1L || !identical(as.character(status$region_id), region_id) || !identical(as.character(status$mode), mode)) {
     return(fail("Extended QC status does not match section or mode."))
   }
+  TRUE
+}
+
+extended_slide_required_artifacts <- function() {
+  c(
+    "combined_cycle_alarm_evidence.tsv", "combined_gene_transcript_quality.tsv",
+    "candidate_cycle_affected_genes.tsv", "subset_full_qc_ranking.tsv",
+    "subset_full_qc_rank_agreement.tsv", "combined_spatial_qc.tsv",
+    "combined_spatial_hotspots.tsv", "within_mouse_section_concordance.tsv",
+    "within_mouse_gene_concordance.tsv", "extended_slide_qc_status.tsv",
+    file.path("figures", "scwat_extended_qc_diagnostics.pdf")
+  )
+}
+
+rbind_fill <- function(tables) {
+  tables <- tables[vapply(tables, is.data.frame, logical(1))]
+  if (!length(tables)) return(data.frame())
+  columns <- unique(unlist(lapply(tables, names), use.names = FALSE))
+  normalized <- lapply(tables, function(table) {
+    for (name in setdiff(columns, names(table))) table[[name]] <- NA
+    table[, columns, drop = FALSE]
+  })
+  out <- do.call(rbind, normalized)
+  rownames(out) <- NULL
+  out
+}
+
+validate_four_extended_section_outputs <- function(run_root, expected_regions = paste0("Region_", 1:4)) {
+  sections_root <- file.path(run_root, "sections")
+  dirs <- list.dirs(sections_root, recursive = FALSE, full.names = TRUE)
+  region_ids <- basename(dirs)
+  if (length(dirs) != 4L || !setequal(region_ids, expected_regions) || anyDuplicated(region_ids)) {
+    stop(sprintf("Expected exactly four unique extended section outputs (%s).", paste(expected_regions, collapse = ", ")), call. = FALSE)
+  }
+  dirs <- dirs[match(expected_regions, region_ids)]
+  statuses <- lapply(seq_along(dirs), function(index) {
+    path <- file.path(dirs[[index]], "extended_qc_status.tsv")
+    if (!file.exists(path)) stop(sprintf("Missing extended section status: %s", path), call. = FALSE)
+    value <- utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
+    if (nrow(value) != 1L || !all(c("region_id", "mode") %in% names(value))) stop(sprintf("Invalid extended section status: %s", path), call. = FALSE)
+    if (!identical(as.character(value$region_id), expected_regions[[index]])) stop(sprintf("Extended section status region mismatch for %s.", expected_regions[[index]]), call. = FALSE)
+    value
+  })
+  modes <- vapply(statuses, function(value) as.character(value$mode[[1]]), character(1))
+  if (length(unique(modes)) != 1L) stop("Extended slide aggregation rejects mixed execution modes.", call. = FALSE)
+  for (index in seq_along(dirs)) validate_extended_section_artifacts(dirs[[index]], expected_regions[[index]], modes[[index]], stop_on_error = TRUE)
+  data.frame(
+    region_id = expected_regions, section_output_dir = normalizePath(dirs, winslash = "/", mustWork = TRUE),
+    mode = modes, stringsAsFactors = FALSE
+  )
+}
+
+read_extended_slide_qc_outputs <- function(run_root, expected_regions = paste0("Region_", 1:4)) {
+  coverage <- validate_four_extended_section_outputs(run_root, expected_regions)
+  bundles <- lapply(seq_len(nrow(coverage)), function(index) {
+    read_extended_section_artifacts(
+      coverage$section_output_dir[[index]], coverage$region_id[[index]], coverage$mode[[index]]
+    )
+  })
+  combine <- function(name) rbind_fill(lapply(bundles, `[[`, name))
+  spatial_global <- combine("spatial_global"); spatial_global$diagnostic_type <- "global_clustering"
+  spatial_enrichment <- combine("spatial_edge_density"); spatial_enrichment$diagnostic_type <- "edge_density_enrichment"
+  list(
+    coverage = coverage, mode = unique(coverage$mode),
+    cycle_alarm_evidence = combine("cycle_alarm_evidence"),
+    gene_quality = combine("gene_quality"),
+    spatial_global = spatial_global, spatial_edge_density = spatial_enrichment,
+    spatial_qc = rbind_fill(list(spatial_global, spatial_enrichment)),
+    spatial_hotspots = combine("spatial_hotspots"),
+    spatial_cells = combine("spatial_cells"),
+    manual_review_manifest = combine("manual_review_manifest"),
+    section_status = combine("status")
+  )
+}
+
+summarise_extended_slide_qc <- function(extended_slide_data, section_summary, manifest, config, subset_reference) {
+  if (!identical(sort(unique(extended_slide_data$gene_quality$region_id)), paste0("Region_", 1:4))) stop("Extended slide gene-quality input must contain Region_1 through Region_4.", call. = FALSE)
+  candidates <- rank_candidate_cycle_genes(extended_slide_data$gene_quality, config)
+  mode <- unique(as.character(extended_slide_data$mode))
+  if (length(mode) != 1L) stop("Extended slide summary requires one execution mode.", call. = FALSE)
+  if (mode == "FULL_HPC") {
+    ranking <- compare_subset_full_qc(section_summary, subset_reference)
+    ranking$ranking$comparison_status <- "FULL_DATA_COMPARISON"
+    ranking$agreement$comparison_status <- "FULL_DATA_COMPARISON"
+  } else {
+    observed <- section_summary[, c("region_id", "input_cells", "review_flagged"), drop = FALSE]
+    observed$observed_review_fraction <- ifelse(observed$input_cells > 0, observed$review_flagged / observed$input_cells, NA_real_)
+    ranking_table <- merge(subset_reference, observed, by = "region_id", all = TRUE, sort = FALSE)
+    ranking_table <- ranking_table[match(paste0("Region_", 1:4), ranking_table$region_id), , drop = FALSE]
+    ranking_table$full_rank <- NA_integer_
+    ranking_table$comparison_status <- "NOT_RUN_LOCAL_SUBSET"
+    ranking <- list(
+      ranking = ranking_table,
+      agreement = data.frame(spearman_rho = NA_real_, kendall_tau = NA_real_, interpretation = "FULL_DATA_REQUIRED", comparison_status = "NOT_RUN_LOCAL_SUBSET", stringsAsFactors = FALSE)
+    )
+  }
+  cells <- extended_slide_data$spatial_cells
+  if (!"control_fraction" %in% names(cells) && "control_fraction_cell" %in% names(cells)) cells$control_fraction <- cells$control_fraction_cell
+  concordance <- calculate_within_mouse_concordance(manifest, section_summary, cells, extended_slide_data$gene_quality, config)
+  alarm_regions <- extended_slide_data$cycle_alarm_evidence$region_id[extended_slide_data$cycle_alarm_evidence$evidence_status == "DIRECT_EVIDENCE"]
+  status <- data.frame(
+    scope = "scWAT_extended_slide", mode = mode, sections = 4L,
+    alarm_positive_regions = paste(alarm_regions, collapse = ","),
+    cycle_identity_status = "CYCLE_IDENTITY_UNRESOLVED_REQUIRES_10X",
+    candidate_gene_status = "CANDIDATE_NOT_CONFIRMED",
+    subset_full_status = unique(ranking$ranking$comparison_status)[[1]],
+    spatial_interpretation = "COORDINATE_EVIDENCE_REQUIRES_MORPHOLOGY_REVIEW",
+    concordance_interpretation = "ADVISORY_TECHNICAL_CONCORDANCE_NOT_BIOLOGICAL_TEST",
+    cells_deleted = 0L, stringsAsFactors = FALSE
+  )
+  list(
+    candidates = candidates, ranking = ranking$ranking, rank_agreement = ranking$agreement,
+    spatial_qc = extended_slide_data$spatial_qc, spatial_hotspots = extended_slide_data$spatial_hotspots,
+    concordance = concordance, status = status
+  )
+}
+
+plot_extended_slide_qc <- function(extended_slide_data, extended_slide_summary) {
+  require_package("ggplot2")
+  palette <- section_palette()
+  alarm <- extended_slide_data$cycle_alarm_evidence
+  alarm$alarm_state <- ifelse(alarm$evidence_status == "DIRECT_EVIDENCE", "Alarm reported", "No alarm reported")
+  candidate <- extended_slide_summary$candidates
+  candidate_counts <- as.data.frame(table(candidate$evidence_tier), stringsAsFactors = FALSE)
+  names(candidate_counts) <- c("evidence_tier", "comparisons")
+  ranking <- extended_slide_summary$ranking
+  ranking_long <- rbind(
+    data.frame(region_id = ranking$region_id, source = "Validated subset", review_fraction = ranking$review_fraction),
+    data.frame(region_id = ranking$region_id, source = ifelse(ranking$comparison_status == "FULL_DATA_COMPARISON", "Full data", "Current local subset"), review_fraction = ranking$observed_review_fraction %||% ranking$full_review_fraction)
+  )
+  global <- extended_slide_data$spatial_global
+  concordance <- extended_slide_summary$concordance$summary
+  list(
+    alarm_evidence = ggplot2::ggplot(alarm, ggplot2::aes(region_id, 1, fill = alarm_state)) +
+      ggplot2::geom_col(width = 0.7) + ggplot2::scale_fill_manual(values = c("Alarm reported" = "#D73027", "No alarm reported" = "#4DAF4A")) +
+      ggplot2::labs(title = "Direct poor-cycle alarm evidence", x = NULL, y = NULL, fill = NULL) + cell_style_theme() +
+      ggplot2::theme(axis.text.y = ggplot2::element_blank(), axis.ticks.y = ggplot2::element_blank()),
+    candidate_genes = ggplot2::ggplot(candidate_counts, ggplot2::aes(evidence_tier, comparisons, fill = evidence_tier)) +
+      ggplot2::geom_col(width = 0.7) + ggplot2::labs(title = "Candidate affected-gene evidence tiers", subtitle = "Candidates are not confirmed; exact cycle identity requires 10x diagnostics", x = NULL, y = "Region-gene comparisons") + cell_style_theme() + ggplot2::theme(legend.position = "none"),
+    ranking = ggplot2::ggplot(ranking_long, ggplot2::aes(region_id, review_fraction, colour = source, group = source)) +
+      ggplot2::geom_line(linewidth = 0.7) + ggplot2::geom_point(size = 2) +
+      ggplot2::scale_y_continuous(labels = function(x) paste0(round(100 * x, 1), "%")) +
+      ggplot2::labs(title = "Subset versus full-data review burden", x = NULL, y = "Review-flag rate", colour = NULL) + cell_style_theme(),
+    spatial = ggplot2::ggplot(global, ggplot2::aes(region_id, statistic, colour = region_id)) +
+      ggplot2::geom_hline(yintercept = 0, colour = "#BDBDBD") + ggplot2::geom_point(size = 2) +
+      ggplot2::scale_colour_manual(values = palette, drop = FALSE) +
+      ggplot2::labs(title = "Global spatial clustering of QC review flags", subtitle = "Coordinate statistic; morphology labels require image review", x = NULL, y = "kNN clustering statistic") + cell_style_theme() + ggplot2::theme(legend.position = "none"),
+    concordance = ggplot2::ggplot(concordance, ggplot2::aes(mouse_id, review_rate_difference, fill = concordance_status)) +
+      ggplot2::geom_col(width = 0.65) + ggplot2::scale_fill_manual(values = c(CONCORDANT = "#4DAF4A", REVIEW = "#D73027", NOT_ESTIMABLE = "#BDBDBD"), drop = FALSE) +
+      ggplot2::labs(title = "Within-mouse technical concordance", subtitle = "Advisory section-pair comparison", x = NULL, y = "Absolute review-rate difference", fill = NULL) + cell_style_theme()
+  )
+}
+
+write_extended_slide_qc_artifacts <- function(project_root, run_root, extended_slide_data, extended_slide_summary, plots) {
+  assert_path_within(project_root, run_root)
+  output_dir <- file.path(run_root, "slide_summary")
+  figure_dir <- file.path(output_dir, "figures")
+  dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+  tables <- list(
+    combined_cycle_alarm_evidence.tsv = extended_slide_data$cycle_alarm_evidence,
+    combined_gene_transcript_quality.tsv = extended_slide_data$gene_quality,
+    candidate_cycle_affected_genes.tsv = extended_slide_summary$candidates,
+    subset_full_qc_ranking.tsv = extended_slide_summary$ranking,
+    subset_full_qc_rank_agreement.tsv = extended_slide_summary$rank_agreement,
+    combined_spatial_qc.tsv = extended_slide_summary$spatial_qc,
+    combined_spatial_hotspots.tsv = extended_slide_summary$spatial_hotspots,
+    within_mouse_section_concordance.tsv = extended_slide_summary$concordance$summary,
+    within_mouse_gene_concordance.tsv = extended_slide_summary$concordance$genes,
+    extended_slide_qc_status.tsv = extended_slide_summary$status
+  )
+  paths <- vapply(names(tables), function(name) write_tsv(tables[[name]], file.path(output_dir, name), project_root), character(1))
+  pdf_path <- file.path(figure_dir, "scwat_extended_qc_diagnostics.pdf")
+  grDevices::pdf(pdf_path, width = 8, height = 5.5, onefile = TRUE)
+  on.exit(if (grDevices::dev.cur() > 1L) grDevices::dev.off(), add = TRUE)
+  for (plot in plots) print(plot)
+  grDevices::dev.off()
+  all_paths <- c(unname(paths), pdf_path)
+  if (!validate_extended_slide_qc_artifacts(run_root)) stop("Extended slide artifact validation failed.", call. = FALSE)
+  all_paths
+}
+
+validate_extended_slide_qc_artifacts <- function(run_root, stop_on_error = FALSE) {
+  fail <- function(message) {
+    if (isTRUE(stop_on_error)) stop(message, call. = FALSE)
+    FALSE
+  }
+  output_dir <- file.path(run_root, "slide_summary")
+  required <- extended_slide_required_artifacts()
+  absent <- required[!file.exists(file.path(output_dir, required))]
+  if (length(absent)) return(fail(sprintf("Missing extended slide artifacts: %s", paste(absent, collapse = ", "))))
+  status <- tryCatch(utils::read.delim(file.path(output_dir, "extended_slide_qc_status.tsv"), check.names = FALSE, stringsAsFactors = FALSE), error = identity)
+  if (inherits(status, "error") || nrow(status) != 1L || status$sections[[1]] != 4L || status$cells_deleted[[1]] != 0L) return(fail("Invalid extended slide QC status."))
+  concordance <- tryCatch(utils::read.delim(file.path(output_dir, "within_mouse_section_concordance.tsv"), check.names = FALSE, stringsAsFactors = FALSE), error = identity)
+  if (inherits(concordance, "error") || nrow(concordance) != 2L) return(fail("Extended slide concordance must contain two mouse pairs."))
   TRUE
 }
 

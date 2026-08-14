@@ -229,4 +229,79 @@ expect_error(
   "NOT_RUN_LOCAL_SUBSET"
 )
 
+# Exactly four same-mode extended section bundles are required for slide aggregation.
+extended_slide_root <- file.path(tempdir(), "extended_slide_run")
+unlink(extended_slide_root, recursive = TRUE, force = TRUE)
+for (region_index in seq_len(4L)) {
+  region <- paste0("Region_", region_index)
+  region_cells <- concordance_cells[concordance_cells$region_id == region, , drop = FALSE]
+  region_cells$cell_id <- paste0(region, "_cell_", seq_len(nrow(region_cells)))
+  region_cells$x_centroid <- seq_len(nrow(region_cells)) * 10
+  region_cells$y_centroid <- seq_len(nrow(region_cells)) * 5 + region_index
+  region_cells$qc_review_flag <- seq_len(nrow(region_cells)) == 1L
+  region_cells <- assign_spatial_grid(region_cells, 20)
+  region_cells$local_density <- calculate_knn_density(region_cells, 2L, "LOCAL_SUBSET")
+  region_cells$dense_aggregate <- region_cells$local_density >= stats::quantile(region_cells$local_density, 0.90)
+  region_global <- test_spatial_flag_clustering(region_cells, 2L, 19L, 20260814L, "LOCAL_SUBSET")
+  region_global$region_id <- region
+  region_enrichment <- summarise_spatial_enrichment(region_cells); region_enrichment$region_id <- region
+  region_hotspots <- find_spatial_qc_hotspots(region_cells, 19L, 20L, 0.05, 20260814L)
+  region_hotspots$region_id <- rep(region, nrow(region_hotspots))
+  region_gene_quality <- concordance_genes[concordance_genes$region_id == region, , drop = FALSE]
+  region_gene_quality$raw_counts <- region_gene_quality$counts_per_10000
+  region_gene_quality$detected_cells <- round(region_gene_quality$detection_fraction * nrow(region_cells))
+  region_gene_quality$matrix_cells <- nrow(region_cells)
+  region_gene_quality$transcript_rows <- NA_integer_
+  region_gene_quality$mean_qv <- NA_real_
+  region_gene_quality$fraction_q20 <- NA_real_
+  region_gene_quality$represented_codewords <- NA_integer_
+  region_gene_quality$transcript_status <- "NOT_RUN_LOCAL_SUBSET"
+  region_alarm <- build_cycle_alarm_evidence(if (region == "Region_3") alarm_fixture[0, ] else alarm_fixture, region)
+  region_plots <- plot_extended_spatial_qc(region_cells, region_enrichment, region_hotspots, region)
+  write_extended_section_artifacts(
+    project_root = dirname(extended_slide_root), output_dir = file.path(extended_slide_root, "sections", region),
+    region_id = region, mode = "LOCAL_SUBSET", preflight = preflight,
+    cycle_alarm_evidence = region_alarm, gene_quality = region_gene_quality,
+    spatial_global = region_global, spatial_edge_density = region_enrichment,
+    spatial_hotspots = region_hotspots, spatial_cells = region_cells,
+    manual_review_manifest = region_hotspots, plots = region_plots
+  )
+}
+extended_coverage <- validate_four_extended_section_outputs(extended_slide_root)
+stopifnot(identical(extended_coverage$region_id, paste0("Region_", 1:4)))
+stopifnot(length(unique(extended_coverage$mode)) == 1L, extended_coverage$mode[[1]] == "LOCAL_SUBSET")
+extended_slide_data <- read_extended_slide_qc_outputs(extended_slide_root)
+stopifnot(nrow(extended_slide_data$gene_quality) == 80L)
+stopifnot(nrow(extended_slide_data$spatial_cells) == 12L)
+stopifnot(identical(unique(extended_slide_data$gene_quality$region_id), paste0("Region_", 1:4)))
+
+extended_slide_summary <- summarise_extended_slide_qc(
+  extended_slide_data = extended_slide_data,
+  section_summary = concordance_summary,
+  manifest = manifest_fixture,
+  config = config,
+  subset_reference = subset_reference_fixture
+)
+stopifnot(all(extended_slide_summary$ranking$comparison_status == "NOT_RUN_LOCAL_SUBSET"))
+stopifnot(nrow(extended_slide_summary$concordance$summary) == 2L)
+stopifnot(all(extended_slide_summary$candidates$candidate_status == "CANDIDATE_NOT_CONFIRMED"))
+extended_slide_plots <- plot_extended_slide_qc(extended_slide_data, extended_slide_summary)
+stopifnot(all(c("alarm_evidence", "candidate_genes", "ranking", "spatial", "concordance") %in% names(extended_slide_plots)))
+extended_slide_paths <- write_extended_slide_qc_artifacts(
+  project_root = dirname(extended_slide_root), run_root = extended_slide_root,
+  extended_slide_data = extended_slide_data, extended_slide_summary = extended_slide_summary,
+  plots = extended_slide_plots
+)
+stopifnot(all(file.exists(extended_slide_paths)), validate_extended_slide_qc_artifacts(extended_slide_root))
+
+status_path <- file.path(extended_slide_root, "sections", "Region_4", "extended_qc_status.tsv")
+status_fixture <- utils::read.delim(status_path, check.names = FALSE)
+status_fixture$mode <- "FULL_HPC"
+utils::write.table(status_fixture, status_path, sep = "\t", quote = FALSE, row.names = FALSE)
+expect_error(validate_four_extended_section_outputs(extended_slide_root), "mixed")
+status_fixture$mode <- "LOCAL_SUBSET"
+utils::write.table(status_fixture, status_path, sep = "\t", quote = FALSE, row.names = FALSE)
+dir.create(file.path(extended_slide_root, "sections", "Region_5"), recursive = TRUE)
+expect_error(validate_four_extended_section_outputs(extended_slide_root), "exactly four")
+
 cat("All extended scWAT Xenium QC tests passed.\n")
