@@ -105,6 +105,10 @@ stopifnot(length(unique(edge_summary$risk_ratio)) == 1L, is.finite(unique(edge_s
 stopifnot(length(unique(edge_summary$absolute_rate_difference)) == 1L, is.finite(unique(edge_summary$absolute_rate_difference)))
 stopifnot(abs(unique(edge_summary$risk_ratio) - ((3.5 / 21) / (1.5 / 17))) < 1e-12)
 stopifnot(abs(unique(edge_summary$absolute_rate_difference) - (3 / 20 - 1 / 16)) < 1e-12)
+all_edge_fixture <- spatial_grid
+all_edge_fixture$edge_proxy <- TRUE
+all_edge_summary <- summarise_spatial_enrichment(all_edge_fixture)
+stopifnot(all(is.na(all_edge_summary$risk_ratio)), all(is.na(all_edge_summary$absolute_rate_difference)))
 
 # A known four-cell corner cluster should produce a morphology-review hotspot.
 hotspot_grid <- assign_spatial_grid(spatial_fixture, grid_size_um = 20)

@@ -422,9 +422,14 @@ summarise_spatial_enrichment <- function(annotated_cells) {
       data.frame(class_type = class_type, class = label, cells = cells, flagged = flagged,
                  review_rate = if (cells) flagged / cells else NA_real_, stringsAsFactors = FALSE)
     }))
-    corrected_rate <- (rows$flagged + 0.5) / (rows$cells + 1)
-    rows$risk_ratio <- corrected_rate[[1]] / corrected_rate[[2]]
-    rows$absolute_rate_difference <- rows$review_rate[[1]] - rows$review_rate[[2]]
+    if (any(rows$cells == 0L)) {
+      rows$risk_ratio <- NA_real_
+      rows$absolute_rate_difference <- NA_real_
+    } else {
+      corrected_rate <- (rows$flagged + 0.5) / (rows$cells + 1)
+      rows$risk_ratio <- corrected_rate[[1]] / corrected_rate[[2]]
+      rows$absolute_rate_difference <- rows$review_rate[[1]] - rows$review_rate[[2]]
+    }
     rows
   }
   out <- make_rows("edge_proxy", annotated_cells$edge_proxy, "edge", "interior")
