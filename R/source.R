@@ -207,10 +207,11 @@ extended_qc_preflight <- function(mode, region_dir, config) {
   mode <- resolve_extended_qc_mode(mode, region_dir)
   if (!is.list(config) || !length(config)) stop("Extended QC config must be a non-empty named list.", call. = FALSE)
   checks <- data.frame(
-    check = c("transcripts_parquet", "arrow", "RANN"),
+    check = c("transcripts_parquet", "arrow", "dplyr", "RANN"),
     available = c(
       file.exists(file.path(region_dir, "transcripts.parquet")),
       requireNamespace("arrow", quietly = TRUE),
+      requireNamespace("dplyr", quietly = TRUE),
       requireNamespace("RANN", quietly = TRUE)
     ),
     stringsAsFactors = FALSE
@@ -220,10 +221,136 @@ extended_qc_preflight <- function(mode, region_dir, config) {
   checks$details <- c(
     file.path(region_dir, "transcripts.parquet"),
     "R package for projected Parquet aggregation",
+    "R package for lazy Arrow grouping and aggregation",
     "R package for scalable nearest-neighbour calculations"
   )
   checks$mode <- mode
   checks[, c("check", "required", "available", "status", "details", "mode")]
+}
+
+build_cycle_alarm_evidence <- function(alarms, region_id) {
+  if (!is.data.frame(alarms)) stop("alarms must be a data.frame.", call. = FALSE)
+  required <- c("raised", "title", "message", "level", "id")
+  missing <- setdiff(required, names(alarms))
+  if (length(missing)) stop(sprintf("Alarm table missing columns: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  if (!nrow(alarms)) {
+    return(data.frame(
+      region_id = region_id, raised = FALSE, title = NA_character_, message = NA_character_,
+      level = NA_character_, id = NA_character_, evidence_status = "NO_ALARM_REPORTED",
+      cycle_identity_status = "NO_POOR_CYCLE_ALARM_REPORTED",
+      gene_effect_status = "NO_POOR_CYCLE_ALARM_REPORTED", stringsAsFactors = FALSE
+    ))
+  }
+  evidence <- alarms[, required, drop = FALSE]
+  evidence$region_id <- region_id
+  evidence$evidence_status <- ifelse(evidence$raised, "DIRECT_EVIDENCE", "ALARM_NOT_RAISED")
+  poor_cycle <- evidence$id == "poor_quality_cycles_detected" & evidence$raised
+  evidence$cycle_identity_status <- ifelse(poor_cycle, "CYCLE_IDENTITY_UNRESOLVED_REQUIRES_10X", "NOT_APPLICABLE")
+  evidence$gene_effect_status <- ifelse(poor_cycle, "GENE_EFFECT_UNCONFIRMED", "NOT_APPLICABLE")
+  evidence[, c("region_id", required, "evidence_status", "cycle_identity_status", "gene_effect_status")]
+}
+
+resolve_transcript_schema <- function(columns) {
+  columns <- as.character(columns)
+  select_alias <- function(aliases, label, required = TRUE) {
+    matched <- intersect(aliases, columns)
+    if (length(matched) > 1L) stop(sprintf("Ambiguous transcript %s fields: %s", label, paste(matched, collapse = ", ")), call. = FALSE)
+    if (!length(matched)) {
+      if (required) stop(sprintf("Transcript schema is missing a %s field.", label), call. = FALSE)
+      return(NA_character_)
+    }
+    matched[[1]]
+  }
+  list(
+    gene = select_alias(c("feature_name", "gene", "target_name"), "gene"),
+    qv = select_alias(c("qv", "quality_value"), "QV"),
+    codeword = select_alias(c("codeword_index", "codeword"), "codeword", required = FALSE)
+  )
+}
+
+summarise_transcript_quality_table <- function(transcripts, region_id, qv_threshold = 20) {
+  if (!is.data.frame(transcripts)) stop("transcripts must be a data.frame.", call. = FALSE)
+  schema <- resolve_transcript_schema(names(transcripts))
+  gene <- as.character(transcripts[[schema$gene]])
+  qv <- suppressWarnings(as.numeric(transcripts[[schema$qv]]))
+  keep <- !is.na(gene) & nzchar(gene) & is.finite(qv)
+  gene <- gene[keep]; qv <- qv[keep]
+  codeword <- if (!is.na(schema$codeword)) transcripts[[schema$codeword]][keep] else rep(NA, sum(keep))
+  if (!length(gene)) return(data.frame(
+    region_id = character(), gene = character(), transcript_rows = integer(), mean_qv = numeric(),
+    fraction_q20 = numeric(), represented_codewords = integer(), transcript_status = character(), stringsAsFactors = FALSE
+  ))
+  groups <- split(seq_along(gene), gene)
+  out <- do.call(rbind, lapply(names(groups), function(name) {
+    index <- groups[[name]]
+    represented <- if (all(is.na(codeword[index]))) NA_integer_ else length(unique(codeword[index][!is.na(codeword[index])]))
+    data.frame(
+      region_id = region_id, gene = name, transcript_rows = length(index), mean_qv = mean(qv[index]),
+      fraction_q20 = mean(qv[index] >= qv_threshold), represented_codewords = represented,
+      transcript_status = "MEASURED", stringsAsFactors = FALSE
+    )
+  }))
+  rownames(out) <- NULL
+  out[order(out$gene), , drop = FALSE]
+}
+
+summarise_transcript_quality_arrow <- function(path, region_id, qv_threshold = 20) {
+  require_package("arrow")
+  require_package("dplyr")
+  if (!file.exists(path)) stop(sprintf("Transcript Parquet not found: %s", path), call. = FALSE)
+  dataset <- arrow::open_dataset(path, format = "parquet")
+  schema <- resolve_transcript_schema(names(dataset$schema))
+  selected <- c(schema$gene, schema$qv, schema$codeword[!is.na(schema$codeword)])
+  projected <- dplyr::select(dataset, dplyr::all_of(selected))
+  grouped <- dplyr::group_by(projected, .data[[schema$gene]])
+  if (!is.na(schema$codeword)) {
+    bounded <- dplyr::summarise(
+      grouped, transcript_rows = dplyr::n(), mean_qv = mean(.data[[schema$qv]], na.rm = TRUE),
+      fraction_q20 = mean(.data[[schema$qv]] >= qv_threshold, na.rm = TRUE),
+      represented_codewords = dplyr::n_distinct(.data[[schema$codeword]]), .groups = "drop"
+    )
+  } else {
+    bounded <- dplyr::summarise(
+      grouped, transcript_rows = dplyr::n(), mean_qv = mean(.data[[schema$qv]], na.rm = TRUE),
+      fraction_q20 = mean(.data[[schema$qv]] >= qv_threshold, na.rm = TRUE),
+      represented_codewords = NA_integer_, .groups = "drop"
+    )
+  }
+  out <- dplyr::collect(bounded)
+  names(out)[names(out) == schema$gene] <- "gene"
+  out$region_id <- region_id
+  out$transcript_status <- "MEASURED_ARROW_PROJECTED_AGGREGATE"
+  out[, c("region_id", "gene", "transcript_rows", "mean_qv", "fraction_q20", "represented_codewords", "transcript_status")]
+}
+
+summarise_gene_matrix_qc <- function(counts, region_id, gene_sets = NULL) {
+  require_package("Matrix")
+  if (is.null(rownames(counts)) || is.null(colnames(counts))) stop("Gene count matrix requires row and column names.", call. = FALSE)
+  raw_counts <- as.numeric(Matrix::rowSums(counts))
+  detected_cells <- as.numeric(Matrix::rowSums(counts > 0))
+  total <- sum(raw_counts)
+  genes <- rownames(counts)
+  data.frame(
+    region_id = region_id, gene = genes,
+    gene_set = if (is.null(gene_sets)) NA_character_ else unname(gene_sets[match(genes, names(gene_sets))]),
+    raw_counts = raw_counts,
+    counts_per_10000 = if (total > 0) raw_counts / total * 10000 else 0,
+    detected_cells = detected_cells,
+    detection_fraction = if (ncol(counts) > 0) detected_cells / ncol(counts) else NA_real_,
+    matrix_cells = ncol(counts), stringsAsFactors = FALSE
+  )
+}
+
+combine_gene_quality <- function(matrix_qc, transcript_qc) {
+  required_matrix <- c("region_id", "gene")
+  if (!all(required_matrix %in% names(matrix_qc))) stop("matrix_qc requires region_id and gene.", call. = FALSE)
+  if (!all(required_matrix %in% names(transcript_qc))) stop("transcript_qc requires region_id and gene.", call. = FALSE)
+  out <- merge(matrix_qc, transcript_qc, by = c("region_id", "gene"), all.x = TRUE, sort = FALSE)
+  out <- out[match(paste(matrix_qc$region_id, matrix_qc$gene), paste(out$region_id, out$gene)), , drop = FALSE]
+  out$transcript_rows[is.na(out$transcript_rows)] <- 0L
+  out$transcript_status[is.na(out$transcript_status)] <- "NO_TRANSCRIPTS"
+  rownames(out) <- NULL
+  out
 }
 
 empty_alarm_table <- function() {
