@@ -164,6 +164,68 @@ require_package <- function(package) {
   if (!requireNamespace(package, quietly = TRUE)) stop(sprintf("Required R package '%s' is unavailable.", package), call. = FALSE)
 }
 
+read_extended_qc_config <- function(path) {
+  if (!file.exists(path)) stop(sprintf("Extended QC config not found: %s", path), call. = FALSE)
+  config <- utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
+  required <- c("key", "value", "type")
+  missing <- setdiff(required, names(config))
+  if (length(missing)) stop(sprintf("Extended QC config missing columns: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  if (anyDuplicated(config$key)) stop("Extended QC config contains duplicate keys.", call. = FALSE)
+  if (anyNA(config[, required, drop = FALSE]) || any(trimws(as.matrix(config[, required, drop = FALSE])) == "")) {
+    stop("Extended QC config contains missing or blank required values.", call. = FALSE)
+  }
+  convert <- function(value, type, key) {
+    type <- tolower(type)
+    result <- switch(type,
+      integer = suppressWarnings(as.integer(value)),
+      numeric = suppressWarnings(as.numeric(value)),
+      logical = {
+        normalized <- toupper(value)
+        if (!normalized %in% c("TRUE", "FALSE")) NA else identical(normalized, "TRUE")
+      },
+      character = as.character(value),
+      stop(sprintf("Unknown extended QC config type '%s' for key '%s'.", type, key), call. = FALSE)
+    )
+    if (length(result) != 1L || is.na(result)) stop(sprintf("Cannot coerce extended QC config key '%s' as %s.", key, type), call. = FALSE)
+    result
+  }
+  values <- Map(convert, config$value, config$type, config$key)
+  stats::setNames(values, config$key)
+}
+
+resolve_extended_qc_mode <- function(requested_mode = "AUTO", region_dir) {
+  mode <- toupper(trimws(as.character(requested_mode)))
+  allowed <- c("AUTO", "LOCAL_SUBSET", "FULL_HPC")
+  if (length(mode) != 1L || !mode %in% allowed) {
+    stop(sprintf("Extended QC mode must be one of: %s.", paste(allowed, collapse = ", ")), call. = FALSE)
+  }
+  if (mode != "AUTO") return(mode)
+  if (file.exists(file.path(region_dir, "transcripts.parquet"))) "FULL_HPC" else "LOCAL_SUBSET"
+}
+
+extended_qc_preflight <- function(mode, region_dir, config) {
+  mode <- resolve_extended_qc_mode(mode, region_dir)
+  if (!is.list(config) || !length(config)) stop("Extended QC config must be a non-empty named list.", call. = FALSE)
+  checks <- data.frame(
+    check = c("transcripts_parquet", "arrow", "RANN"),
+    available = c(
+      file.exists(file.path(region_dir, "transcripts.parquet")),
+      requireNamespace("arrow", quietly = TRUE),
+      requireNamespace("RANN", quietly = TRUE)
+    ),
+    stringsAsFactors = FALSE
+  )
+  checks$required <- mode == "FULL_HPC"
+  checks$status <- ifelse(checks$available, "PASS", ifelse(checks$required, "FAIL", "SKIP_ALLOWED"))
+  checks$details <- c(
+    file.path(region_dir, "transcripts.parquet"),
+    "R package for projected Parquet aggregation",
+    "R package for scalable nearest-neighbour calculations"
+  )
+  checks$mode <- mode
+  checks[, c("check", "required", "available", "status", "details", "mode")]
+}
+
 empty_alarm_table <- function() {
   data.frame(
     raw_value = logical(), formatted_value = character(), raised = logical(),

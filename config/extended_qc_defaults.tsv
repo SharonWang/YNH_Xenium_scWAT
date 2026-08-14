@@ -1,0 +1,17 @@
+key	value	type	description
+qv_threshold	20	numeric	Transcript QV threshold
+spatial_k	15	integer	Nearest neighbours for local density and clustering
+grid_size_um	100	numeric	Spatial grid width in microns
+permutations	999	integer	Within-section label permutations
+dense_quantile	0.90	numeric	Local-density quantile defining dense aggregates
+min_bin_cells	20	integer	Minimum cells required for hotspot testing
+hotspot_fdr	0.05	numeric	BH-adjusted hotspot threshold
+candidate_abs_log2_ratio	0.50	numeric	Advisory absolute depletion threshold
+candidate_abs_q20_delta	0.05	numeric	Advisory absolute Q20 fraction difference
+concordance_gene_spearman	0.90	numeric	Advisory gene-profile correlation threshold
+concordance_review_rate_difference	0.05	numeric	Advisory absolute review-rate difference
+concordance_count_ratio_lower	0.67	numeric	Advisory lower median-count ratio
+concordance_count_ratio_upper	1.50	numeric	Advisory upper median-count ratio
+concordance_feature_ratio_lower	0.80	numeric	Advisory lower median-feature ratio
+concordance_feature_ratio_upper	1.25	numeric	Advisory upper median-feature ratio
+seed	20260814	integer	Deterministic permutation seed
