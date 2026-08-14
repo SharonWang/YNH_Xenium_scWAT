@@ -77,4 +77,44 @@ stopifnot(integrity$dimension_match, integrity$matrix_cells == 2L, integrity$mat
 write_gz_lines("cell1", file.path(matrix_dir, "barcodes.tsv.gz"))
 expect_error(validate_section_integrity(region_dir, "Region_1"), "integrity")
 
-cat("Repository, path, metadata, discovery, and integrity contracts passed.\n")
+# Xenium alarms, panel reconciliation, sparse import, and cell QC.
+write_gz_lines(c("cell1", "cell2"), file.path(matrix_dir, "barcodes.tsv.gz"))
+cells <- data.frame(
+  cell_id = c("cell1", "cell2"), x_centroid = c(1, 2), y_centroid = c(3, 4),
+  transcript_counts = c(3, 4), control_probe_counts = c(0, 1),
+  genomic_control_counts = c(0, 0), control_codeword_counts = c(0, 0),
+  total_counts = c(3, 5), cell_area = c(20, 80), nucleus_count = c(1, 2),
+  segmentation_method = c("nucleus_expansion", "nucleus_expansion")
+)
+con <- gzfile(file.path(region_dir, "cells.csv.gz"), "wt"); utils::write.csv(cells, con, row.names = FALSE); close(con)
+
+alarm_html <- paste0(
+  '<html>"alarms":{"alarms":[{"raw_value":true,"formatted_value":"true",',
+  '"raised":true,"title":"Poor cycles","message":"Review cycles",',
+  '"level":"ERROR","id":"poor_quality_cycles_detected"}]},"sample":{}</html>'
+)
+writeLines(alarm_html, file.path(region_dir, "analysis_summary.html"))
+alarms <- extract_analysis_alarms(file.path(region_dir, "analysis_summary.html"))
+stopifnot(nrow(alarms) == 1L, alarms$level[[1]] == "ERROR", alarms$id[[1]] == "poor_quality_cycles_detected")
+
+panel_json <- paste0(
+  '{"payload":{"targets":[',
+  '{"source":{"category":"current"},"type":{"descriptor":"gene","data":{"name":"Gene1"}}},',
+  '{"source":{"category":"current"},"type":{"descriptor":"gene","data":{"name":"ExtraGene"}}}',
+  ']}}'
+)
+writeLines(panel_json, file.path(region_dir, "gene_panel.json"))
+installed <- read_custom_panel_genes(file.path(region_dir, "gene_panel.json"))
+panel_check <- reconcile_panel(c("Gene1", "Gene2"), installed)
+stopifnot(sum(panel_check$status == "MATCH") == 1L, sum(panel_check$status == "MISSING") == 1L, sum(panel_check$status == "EXTRA") == 1L)
+
+imported <- import_xenium_mex(region_dir)
+stopifnot(inherits(imported$counts, "sparseMatrix"), identical(dim(imported$counts), c(1L, 2L)))
+stopifnot(identical(colnames(imported$counts), imported$cells$cell_id))
+
+qc <- calculate_xenium_cell_qc(imported$counts, imported$cells, "Region_1")
+stopifnot(nrow(qc$cell_metadata) == 2L, nrow(qc$thresholds) == 4L, nrow(qc$summary) == 1L)
+stopifnot(qc$cell_metadata$multiple_nuclei_flag[[2]], qc$cell_metadata$segmentation_multiplet_flag[[2]])
+stopifnot(all(c("qc_core_pass", "qc_review_flag", "high_control_flag") %in% names(qc$cell_metadata)))
+
+cat("All reusable scWAT Xenium function tests passed.\n")

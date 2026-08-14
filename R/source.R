@@ -1,7 +1,10 @@
 options(stringsAsFactors = FALSE)
 
 `%||%` <- function(x, y) {
-  if (is.null(x) || !length(x) || is.na(x[[1]]) || !nzchar(as.character(x[[1]]))) y else x
+  if (is.null(x) || !length(x)) return(y)
+  first <- x[[1]]
+  missing_scalar <- is.atomic(first) && length(first) == 1L && (is.na(first) || !nzchar(as.character(first)))
+  if (missing_scalar) y else x
 }
 
 canonical_path <- function(path) {
@@ -155,4 +158,166 @@ write_tsv <- function(x, path, project_root) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   utils::write.table(x, path, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
   invisible(path)
+}
+
+require_package <- function(package) {
+  if (!requireNamespace(package, quietly = TRUE)) stop(sprintf("Required R package '%s' is unavailable.", package), call. = FALSE)
+}
+
+empty_alarm_table <- function() {
+  data.frame(
+    raw_value = logical(), formatted_value = character(), raised = logical(),
+    title = character(), message = character(), level = character(), id = character(),
+    stringsAsFactors = FALSE
+  )
+}
+
+extract_analysis_alarms <- function(path) {
+  require_package("jsonlite")
+  if (!file.exists(path)) stop(sprintf("Analysis summary not found: %s", path), call. = FALSE)
+  html <- readChar(path, nchars = file.info(path)$size, useBytes = TRUE)
+  prefix <- '"alarms":{"alarms":'
+  start <- regexpr(prefix, html, fixed = TRUE)[1]
+  if (start < 0L) return(empty_alarm_table())
+  remainder <- substr(html, start + nchar(prefix, type = "bytes"), nchar(html))
+  finish <- regexpr('},"sample":', remainder, fixed = TRUE)[1]
+  if (finish < 0L) stop(sprintf("Could not parse alarms block in %s", path), call. = FALSE)
+  parsed <- jsonlite::fromJSON(substr(remainder, 1L, finish - 1L), simplifyDataFrame = TRUE)
+  if (!length(parsed)) return(empty_alarm_table())
+  if (!is.data.frame(parsed)) parsed <- as.data.frame(parsed, stringsAsFactors = FALSE)
+  wanted <- names(empty_alarm_table())
+  for (name in setdiff(wanted, names(parsed))) parsed[[name]] <- NA
+  parsed[, wanted, drop = FALSE]
+}
+
+read_custom_panel_genes <- function(path) {
+  require_package("jsonlite")
+  if (!file.exists(path)) stop(sprintf("Panel JSON not found: %s", path), call. = FALSE)
+  panel <- jsonlite::fromJSON(path, simplifyVector = FALSE)
+  targets <- panel$payload$targets %||% list()
+  genes <- vapply(targets, function(target) {
+    if (identical(target$source$category, "current") && identical(target$type$descriptor, "gene")) target$type$data$name else NA_character_
+  }, character(1))
+  sort(unique(stats::na.omit(genes)))
+}
+
+reconcile_panel <- function(expected_genes, installed_genes, gene_sets = NULL) {
+  genes <- sort(unique(c(as.character(expected_genes), as.character(installed_genes))))
+  out <- data.frame(
+    gene = genes, expected = genes %in% expected_genes, installed = genes %in% installed_genes,
+    stringsAsFactors = FALSE
+  )
+  out$status <- ifelse(out$expected & out$installed, "MATCH", ifelse(out$expected, "MISSING", "EXTRA"))
+  if (!is.null(gene_sets)) out$gene_set <- gene_sets[match(out$gene, names(gene_sets))]
+  out
+}
+
+read_xenium_features <- function(path) {
+  features <- read_gz_rows(path, header = FALSE)
+  if (ncol(features) != 3L) stop(sprintf("Expected three columns in %s", path), call. = FALSE)
+  names(features) <- c("feature_id", "feature_name", "feature_type")
+  features
+}
+
+read_xenium_barcodes <- function(path) {
+  scan(gzfile(path), what = character(), quiet = TRUE)
+}
+
+import_xenium_mex <- function(region_dir) {
+  require_package("Matrix")
+  matrix_dir <- file.path(region_dir, "cell_feature_matrix")
+  features_path <- file.path(matrix_dir, "features.tsv.gz")
+  barcodes_path <- file.path(matrix_dir, "barcodes.tsv.gz")
+  matrix_path <- file.path(matrix_dir, "matrix.mtx.gz")
+  cells_path <- file.path(region_dir, "cells.csv.gz")
+  required <- c(features_path, barcodes_path, matrix_path, cells_path)
+  missing <- required[!file.exists(required)]
+  if (length(missing)) stop(sprintf("Missing Xenium import inputs: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  features <- read_xenium_features(features_path)
+  barcodes <- read_xenium_barcodes(barcodes_path)
+  raw_matrix <- methods::as(Matrix::readMM(gzfile(matrix_path)), "CsparseMatrix")
+  if (!identical(dim(raw_matrix), c(nrow(features), length(barcodes)))) stop("Matrix dimensions do not match features/barcodes.", call. = FALSE)
+  rownames(raw_matrix) <- make.unique(features$feature_name)
+  colnames(raw_matrix) <- barcodes
+  cells <- utils::read.csv(gzfile(cells_path), stringsAsFactors = FALSE, check.names = FALSE)
+  if (!"cell_id" %in% names(cells) || anyDuplicated(cells$cell_id)) stop("Cell metadata requires unique cell_id values.", call. = FALSE)
+  order_index <- match(barcodes, cells$cell_id)
+  if (anyNA(order_index)) stop("Matrix barcodes and cell metadata are not aligned.", call. = FALSE)
+  cells <- cells[order_index, , drop = FALSE]
+  rownames(cells) <- cells$cell_id
+  gene_rows <- features$feature_type == "Gene Expression"
+  counts <- methods::as(raw_matrix[gene_rows, , drop = FALSE], "CsparseMatrix")
+  list(
+    counts = counts, cells = cells, features = features,
+    feature_type_summary = as.data.frame(table(features$feature_type), stringsAsFactors = FALSE),
+    raw_matrix_dimensions = c(features = nrow(features), cells = length(barcodes), nonzero = length(raw_matrix@x))
+  )
+}
+
+safe_quantile <- function(x, probability) {
+  x <- x[is.finite(x)]
+  if (!length(x)) return(NA_real_)
+  unname(stats::quantile(x, probability, names = FALSE, na.rm = TRUE, type = 7))
+}
+
+robust_interval <- function(x, lower_mads = 3, upper_mads = 5, floor_value = -Inf) {
+  x <- x[is.finite(x)]
+  if (!length(x)) stop("Cannot calculate a robust interval from empty data.", call. = FALSE)
+  median_value <- stats::median(x)
+  mad_value <- stats::mad(x, center = median_value, constant = 1.4826)
+  if (!is.finite(mad_value) || mad_value == 0) {
+    lower <- safe_quantile(x, 0.01); upper <- safe_quantile(x, 0.99); method <- "q01_q99_fallback"
+  } else {
+    lower <- median_value - lower_mads * mad_value
+    upper <- median_value + upper_mads * mad_value
+    method <- sprintf("median_minus_%gMAD_plus_%gMAD", lower_mads, upper_mads)
+  }
+  c(lower = max(floor_value, lower), upper = upper, median = median_value, mad = mad_value, method = method)
+}
+
+calculate_xenium_cell_qc <- function(counts, cells, region_id) {
+  require_package("Matrix")
+  required <- c("cell_id", "total_counts", "control_probe_counts", "genomic_control_counts", "control_codeword_counts", "cell_area", "nucleus_count")
+  missing <- setdiff(required, names(cells))
+  if (length(missing)) stop(sprintf("Cell metadata missing QC columns: %s", paste(missing, collapse = ",")), call. = FALSE)
+  if (!identical(colnames(counts), cells$cell_id)) stop("Count columns and cell metadata are not aligned.", call. = FALSE)
+  n_count <- as.numeric(Matrix::colSums(counts))
+  n_feature <- as.numeric(Matrix::colSums(counts > 0))
+  count_bounds <- robust_interval(n_count, 3, 5, 1)
+  feature_bounds <- robust_interval(n_feature, 3, 5, 1)
+  area_bounds <- robust_interval(cells$cell_area, 5, 5, 0)
+  control_count <- cells$control_probe_counts + cells$genomic_control_counts + cells$control_codeword_counts
+  control_fraction <- ifelse(cells$total_counts > 0, control_count / cells$total_counts, 0)
+  control_upper <- max(0.05, safe_quantile(control_fraction, 0.995))
+  qc_core_pass <- n_count >= as.numeric(count_bounds["lower"]) & n_count <= as.numeric(count_bounds["upper"]) &
+    n_feature >= as.numeric(feature_bounds["lower"]) & n_feature <= as.numeric(feature_bounds["upper"])
+  nucleus_missing <- cells$nucleus_count == 0
+  multiple_nuclei <- cells$nucleus_count > 1
+  area_outlier <- cells$cell_area < as.numeric(area_bounds["lower"]) | cells$cell_area > as.numeric(area_bounds["upper"])
+  high_control <- control_fraction > control_upper
+  high_complexity <- n_count > as.numeric(count_bounds["upper"]) | n_feature > as.numeric(feature_bounds["upper"])
+  segmentation_multiplet <- multiple_nuclei | (high_complexity & cells$cell_area > as.numeric(area_bounds["upper"]))
+  out <- cells
+  out$region_id <- region_id; out$nCount_Xenium <- n_count; out$nFeature_Xenium <- n_feature
+  out$control_fraction_cell <- control_fraction; out$nucleus_missing_flag <- nucleus_missing
+  out$multiple_nuclei_flag <- multiple_nuclei; out$cell_area_outlier_flag <- area_outlier
+  out$high_control_flag <- high_control; out$segmentation_multiplet_flag <- segmentation_multiplet
+  out$qc_core_pass <- qc_core_pass
+  out$qc_review_flag <- nucleus_missing | segmentation_multiplet | area_outlier | high_control | !qc_core_pass
+  thresholds <- rbind(
+    data.frame(metric = "nCount_Xenium", lower = as.numeric(count_bounds["lower"]), upper = as.numeric(count_bounds["upper"]), value = as.numeric(count_bounds["median"]), method = count_bounds["method"]),
+    data.frame(metric = "nFeature_Xenium", lower = as.numeric(feature_bounds["lower"]), upper = as.numeric(feature_bounds["upper"]), value = as.numeric(feature_bounds["median"]), method = feature_bounds["method"]),
+    data.frame(metric = "cell_area", lower = as.numeric(area_bounds["lower"]), upper = as.numeric(area_bounds["upper"]), value = as.numeric(area_bounds["median"]), method = area_bounds["method"]),
+    data.frame(metric = "control_fraction_cell", lower = 0, upper = control_upper, value = stats::median(control_fraction), method = "max_5pct_or_q99.5")
+  )
+  thresholds$region_id <- region_id
+  thresholds <- thresholds[, c("region_id", "metric", "lower", "upper", "value", "method")]
+  summary <- data.frame(
+    region_id = region_id, input_cells = nrow(out), core_qc_pass = sum(out$qc_core_pass),
+    core_qc_fail = sum(!out$qc_core_pass), review_flagged = sum(out$qc_review_flag),
+    nucleus_missing = sum(out$nucleus_missing_flag), multiple_nuclei = sum(out$multiple_nuclei_flag),
+    segmentation_multiplet = sum(out$segmentation_multiplet_flag), area_outlier = sum(out$cell_area_outlier_flag),
+    high_control = sum(out$high_control_flag), cells_deleted = 0L, stringsAsFactors = FALSE
+  )
+  list(cell_metadata = out, thresholds = thresholds, summary = summary)
 }
