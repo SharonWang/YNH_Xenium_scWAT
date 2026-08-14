@@ -89,4 +89,37 @@ stopifnot(matrix_qc$raw_counts[matrix_qc$gene == "C"] == 0)
 combined_qc <- combine_gene_quality(matrix_qc, transcript_qc)
 stopifnot(nrow(combined_qc) == 3L, combined_qc$transcript_status[combined_qc$gene == "C"] == "NO_TRANSCRIPTS")
 
+# Spatial edge logic must identify the 20 perimeter cells of a complete 6x6 grid.
+spatial_fixture <- expand.grid(x_centroid = seq(5, 55, 10), y_centroid = seq(5, 55, 10))
+spatial_fixture$cell_id <- sprintf("cell_%02d", seq_len(nrow(spatial_fixture)))
+spatial_fixture$region_id <- "Region_1"
+spatial_fixture$qc_review_flag <- spatial_fixture$x_centroid < 20 & spatial_fixture$y_centroid < 20
+spatial_fixture <- spatial_fixture[, c("region_id", "cell_id", "x_centroid", "y_centroid", "qc_review_flag")]
+spatial_grid <- assign_spatial_grid(spatial_fixture, grid_size_um = 10)
+stopifnot(sum(spatial_grid$edge_proxy) == 20L)
+edge_summary <- summarise_spatial_enrichment(spatial_grid)
+stopifnot(edge_summary$flagged[edge_summary$class == "edge"] == 3L)
+stopifnot(edge_summary$flagged[edge_summary$class == "interior"] == 1L)
+stopifnot(all(c("risk_ratio", "absolute_rate_difference") %in% names(edge_summary)))
+stopifnot(length(unique(edge_summary$risk_ratio)) == 1L, is.finite(unique(edge_summary$risk_ratio)))
+stopifnot(length(unique(edge_summary$absolute_rate_difference)) == 1L, is.finite(unique(edge_summary$absolute_rate_difference)))
+stopifnot(abs(unique(edge_summary$risk_ratio) - ((3.5 / 21) / (1.5 / 17))) < 1e-12)
+stopifnot(abs(unique(edge_summary$absolute_rate_difference) - (3 / 20 - 1 / 16)) < 1e-12)
+
+# A known four-cell corner cluster should produce a morphology-review hotspot.
+hotspot_grid <- assign_spatial_grid(spatial_fixture, grid_size_um = 20)
+hotspots_1 <- find_spatial_qc_hotspots(hotspot_grid, permutations = 199L, min_bin_cells = 4L, fdr = 0.10, seed = 20260814L)
+hotspots_2 <- find_spatial_qc_hotspots(hotspot_grid, permutations = 199L, min_bin_cells = 4L, fdr = 0.10, seed = 20260814L)
+stopifnot(identical(hotspots_1, hotspots_2))
+stopifnot(any(hotspots_1$hotspot_status == "MORPHOLOGY_REVIEW_REQUIRED"))
+
+# kNN calculations are deterministic locally and return explicit non-estimable states.
+density <- calculate_knn_density(spatial_fixture, k = 4L, mode = "LOCAL_SUBSET")
+stopifnot(length(density) == nrow(spatial_fixture), all(is.finite(density)), all(density > 0))
+clustered <- test_spatial_flag_clustering(spatial_fixture, k = 4L, permutations = 199L, seed = 20260814L, mode = "LOCAL_SUBSET")
+stopifnot(clustered$status == "ESTIMATED", clustered$permutations == 199L)
+no_flags <- spatial_fixture; no_flags$qc_review_flag <- FALSE
+not_estimable <- test_spatial_flag_clustering(no_flags, k = 4L, permutations = 19L, seed = 20260814L, mode = "LOCAL_SUBSET")
+stopifnot(not_estimable$status == "NOT_ESTIMABLE")
+
 cat("All extended scWAT Xenium QC tests passed.\n")

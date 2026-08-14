@@ -353,6 +353,152 @@ combine_gene_quality <- function(matrix_qc, transcript_qc) {
   out
 }
 
+validate_spatial_cells <- function(cells) {
+  required <- c("cell_id", "x_centroid", "y_centroid", "qc_review_flag")
+  missing <- setdiff(required, names(cells))
+  if (length(missing)) stop(sprintf("Spatial cell table missing columns: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  if (anyDuplicated(cells$cell_id)) stop("Spatial cell IDs must be unique.", call. = FALSE)
+  if (any(!is.finite(cells$x_centroid)) || any(!is.finite(cells$y_centroid))) stop("Spatial centroids must be finite.", call. = FALSE)
+  invisible(TRUE)
+}
+
+knn_index_distance <- function(cells, k = 15L, mode = "LOCAL_SUBSET") {
+  validate_spatial_cells(cells)
+  n <- nrow(cells); k <- as.integer(k); mode <- toupper(mode)
+  if (n < 2L || k < 1L || k >= n) stop("k must be at least 1 and smaller than the number of cells.", call. = FALSE)
+  coordinates <- as.matrix(cells[, c("x_centroid", "y_centroid")])
+  if (mode == "FULL_HPC") {
+    require_package("RANN")
+    result <- RANN::nn2(coordinates, k = k + 1L)
+    return(list(index = result$nn.idx[, -1L, drop = FALSE], distance = result$nn.dists[, -1L, drop = FALSE]))
+  }
+  if (n > 2000L) stop("Base-R nearest-neighbour fallback is limited to 2,000 cells; use FULL_HPC with RANN.", call. = FALSE)
+  index <- matrix(NA_integer_, nrow = n, ncol = k)
+  distance <- matrix(NA_real_, nrow = n, ncol = k)
+  for (i in seq_len(n)) {
+    squared <- rowSums((coordinates - matrix(coordinates[i, ], nrow = n, ncol = 2L, byrow = TRUE))^2)
+    squared[i] <- Inf
+    selected <- order(squared)[seq_len(k)]
+    index[i, ] <- selected
+    distance[i, ] <- sqrt(squared[selected])
+  }
+  list(index = index, distance = distance)
+}
+
+calculate_knn_density <- function(cells, k = 15L, mode = "LOCAL_SUBSET") {
+  neighbors <- knn_index_distance(cells, k, mode)
+  radius <- neighbors$distance[, ncol(neighbors$distance)]
+  radius[radius <= 0] <- min(radius[radius > 0], na.rm = TRUE)
+  as.numeric(k) / (pi * radius^2)
+}
+
+assign_spatial_grid <- function(cells, grid_size_um = 100) {
+  validate_spatial_cells(cells)
+  if (length(grid_size_um) != 1L || !is.finite(grid_size_um) || grid_size_um <= 0) stop("grid_size_um must be positive.", call. = FALSE)
+  out <- cells
+  origin_x <- min(out$x_centroid); origin_y <- min(out$y_centroid)
+  out$grid_x <- as.integer(floor((out$x_centroid - origin_x) / grid_size_um))
+  out$grid_y <- as.integer(floor((out$y_centroid - origin_y) / grid_size_um))
+  out$grid_id <- paste(out$grid_x, out$grid_y, sep = ":")
+  occupied <- unique(out$grid_id)
+  unique_bins <- unique(out[, c("grid_x", "grid_y", "grid_id")])
+  unique_bins$edge_proxy <- vapply(seq_len(nrow(unique_bins)), function(i) {
+    offsets <- expand.grid(dx = -1:1, dy = -1:1)
+    offsets <- offsets[!(offsets$dx == 0 & offsets$dy == 0), , drop = FALSE]
+    neighbors <- paste(unique_bins$grid_x[i] + offsets$dx, unique_bins$grid_y[i] + offsets$dy, sep = ":")
+    any(!neighbors %in% occupied)
+  }, logical(1))
+  out$edge_proxy <- unique_bins$edge_proxy[match(out$grid_id, unique_bins$grid_id)]
+  out$grid_size_um <- grid_size_um
+  out
+}
+
+summarise_spatial_enrichment <- function(annotated_cells) {
+  if (!all(c("qc_review_flag", "edge_proxy") %in% names(annotated_cells))) stop("Spatial enrichment requires qc_review_flag and edge_proxy.", call. = FALSE)
+  make_rows <- function(class_type, positive, positive_label, negative_label) {
+    rows <- do.call(rbind, lapply(list(positive, !positive), function(index) {
+      label <- if (identical(index, positive)) positive_label else negative_label
+      cells <- sum(index); flagged <- sum(annotated_cells$qc_review_flag[index])
+      data.frame(class_type = class_type, class = label, cells = cells, flagged = flagged,
+                 review_rate = if (cells) flagged / cells else NA_real_, stringsAsFactors = FALSE)
+    }))
+    corrected_rate <- (rows$flagged + 0.5) / (rows$cells + 1)
+    rows$risk_ratio <- corrected_rate[[1]] / corrected_rate[[2]]
+    rows$absolute_rate_difference <- rows$review_rate[[1]] - rows$review_rate[[2]]
+    rows
+  }
+  out <- make_rows("edge_proxy", annotated_cells$edge_proxy, "edge", "interior")
+  if ("dense_aggregate" %in% names(annotated_cells)) {
+    out <- rbind(out, make_rows("local_density", annotated_cells$dense_aggregate, "dense", "non_dense"))
+  }
+  rownames(out) <- NULL
+  out
+}
+
+test_spatial_flag_clustering <- function(cells, k = 15L, permutations = 999L, seed = 20260814L, mode = "LOCAL_SUBSET") {
+  validate_spatial_cells(cells)
+  flags <- as.numeric(as.logical(cells$qc_review_flag))
+  if (length(unique(flags)) < 2L) return(data.frame(
+    status = "NOT_ESTIMABLE", statistic = NA_real_, empirical_p = NA_real_, permutations = as.integer(permutations),
+    k = as.integer(k), seed = as.integer(seed), stringsAsFactors = FALSE
+  ))
+  neighbors <- knn_index_distance(cells, k, mode)$index
+  statistic <- function(values) {
+    centered <- values - mean(values)
+    denominator <- sum(centered^2)
+    if (denominator == 0) return(NA_real_)
+    nrow(neighbors) / length(neighbors) * sum(centered[row(neighbors)] * centered[neighbors]) / denominator
+  }
+  observed <- statistic(flags)
+  set.seed(as.integer(seed))
+  permuted <- replicate(as.integer(permutations), statistic(sample(flags, replace = FALSE)))
+  data.frame(
+    status = "ESTIMATED", statistic = observed,
+    empirical_p = (1 + sum(permuted >= observed, na.rm = TRUE)) / (1 + as.integer(permutations)),
+    permutations = as.integer(permutations), k = as.integer(k), seed = as.integer(seed), stringsAsFactors = FALSE
+  )
+}
+
+find_spatial_qc_hotspots <- function(annotated_cells, permutations = 999L, min_bin_cells = 20L, fdr = 0.05, seed = 20260814L) {
+  required <- c("grid_id", "grid_x", "grid_y", "x_centroid", "y_centroid", "qc_review_flag", "grid_size_um")
+  missing <- setdiff(required, names(annotated_cells))
+  if (length(missing)) stop(sprintf("Hotspot table missing columns: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  bin_factor <- factor(annotated_cells$grid_id, levels = unique(annotated_cells$grid_id))
+  cells_per_bin <- as.integer(table(bin_factor))
+  flags <- as.integer(as.logical(annotated_cells$qc_review_flag))
+  flagged_per_bin <- as.integer(rowsum(flags, bin_factor, reorder = FALSE))
+  eligible <- cells_per_bin >= as.integer(min_bin_cells)
+  bins <- levels(bin_factor)[eligible]
+  if (!length(bins)) return(data.frame(
+    grid_id = character(), cells = integer(), flagged = integer(), review_rate = numeric(), global_rate = numeric(),
+    rate_difference = numeric(), empirical_p = numeric(), adjusted_p = numeric(), hotspot_status = character(),
+    x_min = numeric(), x_max = numeric(), y_min = numeric(), y_max = numeric(), stringsAsFactors = FALSE
+  ))
+  observed <- flagged_per_bin[eligible]
+  denominators <- cells_per_bin[eligible]
+  global_rate <- mean(flags)
+  set.seed(as.integer(seed))
+  exceedances <- integer(length(bins))
+  for (iteration in seq_len(as.integer(permutations))) {
+    permuted_counts <- as.integer(rowsum(sample(flags, replace = FALSE), bin_factor, reorder = FALSE))[eligible]
+    exceedances <- exceedances + as.integer(permuted_counts >= observed)
+  }
+  empirical_p <- (1 + exceedances) / (1 + as.integer(permutations))
+  adjusted_p <- stats::p.adjust(empirical_p, method = "BH")
+  bounds <- do.call(rbind, lapply(bins, function(id) {
+    index <- annotated_cells$grid_id == id
+    data.frame(x_min = min(annotated_cells$x_centroid[index]), x_max = max(annotated_cells$x_centroid[index]),
+               y_min = min(annotated_cells$y_centroid[index]), y_max = max(annotated_cells$y_centroid[index]))
+  }))
+  data.frame(
+    grid_id = bins, cells = denominators, flagged = observed, review_rate = observed / denominators,
+    global_rate = global_rate, rate_difference = observed / denominators - global_rate,
+    empirical_p = empirical_p, adjusted_p = adjusted_p,
+    hotspot_status = ifelse(adjusted_p <= fdr & observed / denominators > global_rate, "MORPHOLOGY_REVIEW_REQUIRED", "NO_HOTSPOT_EVIDENCE"),
+    bounds, stringsAsFactors = FALSE
+  )
+}
+
 empty_alarm_table <- function() {
   data.frame(
     raw_value = logical(), formatted_value = character(), raised = logical(),
