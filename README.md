@@ -178,7 +178,7 @@ The metadata-aware subset rerun reproduces 500 cells per section and 2,000 total
 
 The applied study design is: sections 62308 and 62309 are from Mouse 1; sections 62310 and 62311 are from Mouse 2. All samples are untreated WT scWAT from normal 8-week-old mice. Left/right is not a design factor. Section is the technical processing unit and mouse is the biological replicate.
 
-The portable technical QC report is at `reports/2026-08-14_scwat_qc_summary/report.html`; its canonical data/provenance specification is `reports/2026-08-14_scwat_qc_summary/artifact.json`.
+The updated portable technical QC report is at `reports/2026-08-14_scwat_qc_summary/report.html`; its canonical data/provenance specification is `reports/2026-08-14_scwat_qc_summary/artifact.json`. It reports verified local alarm/spatial/concordance evidence, a clearly labelled depletion-only candidate preview, and the exact full-HPC/10x evidence still required.
 
 ### Local validation evidence (2026-08-14)
 
