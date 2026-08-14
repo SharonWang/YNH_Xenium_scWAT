@@ -117,4 +117,37 @@ stopifnot(nrow(qc$cell_metadata) == 2L, nrow(qc$thresholds) == 4L, nrow(qc$summa
 stopifnot(qc$cell_metadata$multiple_nuclei_flag[[2]], qc$cell_metadata$segmentation_multiplet_flag[[2]])
 stopifnot(all(c("qc_core_pass", "qc_review_flag", "high_control_flag") %in% names(qc$cell_metadata)))
 
+# Artifact, readiness, and Cell-inspired plotting contracts.
+palette <- section_palette()
+stopifnot(identical(names(palette), paste0("Region_", 1:4)), length(unique(palette)) == 4L)
+plots <- plot_section_qc(qc$cell_metadata, "Region_1")
+stopifnot(all(c("counts", "features", "area", "spatial") %in% names(plots)))
+stopifnot(inherits(plots$spatial$coordinates, "CoordFixed"))
+
+synthetic_row <- m1[m1$region_id == "Region_1", , drop = FALSE]
+gates <- calculate_readiness_gates(
+  inventory = transform(inventory, exists = TRUE), integrity = integrity,
+  panel_reconciliation = panel_check[panel_check$status == "MATCH", , drop = FALSE],
+  alarms = alarms, manifest = synthetic_row
+)
+stopifnot(gates$status[gates$gate == "xenium_analysis_alerts"] == "HOLD")
+stopifnot(gates$status[gates$gate == "metadata"] == "PENDING")
+stopifnot(gates$status[gates$gate == "overall"] == "HOLD")
+
+artifact_dir <- file.path(test_root, "outputs", "run1", "sections", "Region_1")
+artifacts <- write_section_artifacts(
+  project_root = test_root, output_dir = artifact_dir, region_id = "Region_1",
+  configuration = data.frame(key = "seed", value = "20260814"), manifest = synthetic_row,
+  environment = data.frame(item = "R_version", value = R.version.string),
+  inventory = transform(inventory, exists = TRUE), integrity = integrity,
+  feature_type_summary = imported$feature_type_summary,
+  panel_reconciliation = panel_check, alarms = alarms, qc = qc,
+  counts = imported$counts, features = imported$features, strict_mode = FALSE
+)
+stopifnot(validate_section_artifacts(artifact_dir, "Region_1"))
+stopifnot(all(file.exists(artifacts)))
+saved <- readRDS(file.path(artifact_dir, "Region_1.phase0_2_qc.rds"))
+stopifnot(inherits(saved$counts, "sparseMatrix"), identical(dim(saved$counts), c(1L, 2L)))
+expect_error(write_section_artifacts(test_root, "C:/unsafe", "Region_1", data.frame(), synthetic_row, data.frame(), inventory, integrity, imported$feature_type_summary, panel_check, alarms, qc, imported$counts, imported$features), "outside")
+
 cat("All reusable scWAT Xenium function tests passed.\n")

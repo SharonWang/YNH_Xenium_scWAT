@@ -321,3 +321,136 @@ calculate_xenium_cell_qc <- function(counts, cells, region_id) {
   )
   list(cell_metadata = out, thresholds = thresholds, summary = summary)
 }
+
+overall_readiness <- function(status) {
+  status <- toupper(as.character(status))
+  if (any(status %in% c("FAIL", "HOLD", "BLOCKED"))) return("HOLD")
+  if (any(status %in% c("PENDING", "WARN"))) return("PENDING")
+  "PASS"
+}
+
+calculate_readiness_gates <- function(inventory, integrity, panel_reconciliation, alarms, manifest) {
+  alarm_levels <- if (nrow(alarms) && "level" %in% names(alarms)) toupper(alarms$level) else character()
+  panel_bad <- if (nrow(panel_reconciliation)) sum(panel_reconciliation$status %in% c("MISSING", "EXTRA")) else 0L
+  gates <- rbind(
+    data.frame(gate = "required_files", status = if (nrow(inventory) && all(inventory$exists)) "PASS" else "HOLD", details = sprintf("%d missing required files", sum(!inventory$exists))),
+    data.frame(gate = "matrix_integrity", status = if (nrow(integrity) == 1L && isTRUE(integrity$dimension_match[[1]])) "PASS" else "HOLD", details = "Matrix, features, barcodes, and cells must align"),
+    data.frame(gate = "panel_reconciliation", status = if (panel_bad == 0L) "PASS" else "HOLD", details = sprintf("%d missing/extra expected-panel entries", panel_bad)),
+    data.frame(gate = "metadata", status = if (any(manifest$metadata_status == "SYNTHETIC_PLACEHOLDER")) "PENDING" else "PASS", details = "Synthetic metadata blocks biological interpretation"),
+    data.frame(gate = "xenium_analysis_alerts", status = if (any(alarm_levels == "ERROR")) "HOLD" else if (length(alarm_levels)) "WARN" else "PASS", details = sprintf("%d alarms; %d errors", nrow(alarms), sum(alarm_levels == "ERROR"))),
+    stringsAsFactors = FALSE
+  )
+  gates <- rbind(gates, data.frame(gate = "overall", status = overall_readiness(gates$status), details = "Worst-case readiness across gates", stringsAsFactors = FALSE))
+  rownames(gates) <- NULL
+  gates
+}
+
+section_palette <- function() {
+  c(Region_1 = "#3C5488", Region_2 = "#00A087", Region_3 = "#E64B35", Region_4 = "#F39B7F")
+}
+
+cell_style_theme <- function(base_size = 10) {
+  require_package("ggplot2")
+  ggplot2::theme_classic(base_size = base_size) +
+    ggplot2::theme(
+      axis.line = ggplot2::element_line(linewidth = 0.35, colour = "#222222"),
+      axis.ticks = ggplot2::element_line(linewidth = 0.3, colour = "#222222"),
+      plot.title = ggplot2::element_text(face = "bold", size = base_size + 1),
+      plot.subtitle = ggplot2::element_text(colour = "#4D4D4D", size = base_size - 1),
+      legend.title = ggplot2::element_text(face = "bold"),
+      strip.background = ggplot2::element_blank(), strip.text = ggplot2::element_text(face = "bold")
+    )
+}
+
+plot_section_qc <- function(cell_metadata, region_id) {
+  require_package("ggplot2")
+  colour <- unname(section_palette()[region_id])
+  if (is.na(colour)) stop(sprintf("No section color configured for %s.", region_id), call. = FALSE)
+  common_hist <- function(metric, label, title) {
+    ggplot2::ggplot(cell_metadata, ggplot2::aes(x = .data[[metric]])) +
+      ggplot2::geom_histogram(bins = 45, fill = colour, colour = "white", linewidth = 0.15) +
+      ggplot2::labs(title = title, subtitle = region_id, x = label, y = "Cells") + cell_style_theme()
+  }
+  status <- factor(ifelse(cell_metadata$qc_review_flag, "Review", "Pass"), levels = c("Pass", "Review"))
+  spatial_data <- transform(cell_metadata, QC_status = status)
+  list(
+    counts = common_hist("nCount_Xenium", "Gene-expression transcripts per cell", "Transcript-count distribution"),
+    features = common_hist("nFeature_Xenium", "Genes detected per cell", "Detected-feature distribution"),
+    area = common_hist("cell_area", expression("Cell area ("*mu*"m"^2*")"), "Cell-area distribution"),
+    spatial = ggplot2::ggplot(spatial_data, ggplot2::aes(x = x_centroid, y = y_centroid, colour = QC_status)) +
+      ggplot2::geom_point(size = 0.35, alpha = 0.75) +
+      ggplot2::scale_colour_manual(values = c(Pass = "#BDBDBD", Review = "#D73027"), drop = FALSE) +
+      ggplot2::coord_fixed() + ggplot2::labs(title = "Spatial QC review map", subtitle = region_id, x = "X centroid", y = "Y centroid", colour = "QC") + cell_style_theme()
+  )
+}
+
+save_section_plots <- function(plots, figure_dir, region_id, project_root) {
+  require_package("ggplot2")
+  assert_path_within(project_root, figure_dir)
+  dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+  pdf_path <- file.path(figure_dir, paste0(region_id, "_qc_overview.pdf"))
+  grDevices::pdf(pdf_path, width = 7, height = 5, onefile = TRUE)
+  for (plot in plots) print(plot)
+  grDevices::dev.off()
+  png_paths <- vapply(names(plots), function(name) {
+    path <- file.path(figure_dir, paste0(region_id, "_", name, ".png"))
+    ggplot2::ggsave(path, plots[[name]], width = 7, height = 5, units = "in", dpi = 300, bg = "white")
+    path
+  }, character(1))
+  c(pdf_path, unname(png_paths))
+}
+
+write_gz_tsv <- function(x, path, project_root) {
+  assert_path_within(project_root, path)
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  con <- gzfile(path, "wt"); on.exit(close(con), add = TRUE)
+  utils::write.table(x, con, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
+  invisible(path)
+}
+
+section_required_artifacts <- function(region_id) {
+  c(
+    "configuration.tsv", "section_manifest.tsv", "environment_preflight.tsv", "file_inventory.tsv",
+    "integrity_summary.tsv", "feature_type_summary.tsv", "panel_reconciliation.tsv", "analysis_alerts.tsv",
+    "qc_thresholds.tsv", "qc_summary.tsv", "cell_qc_metadata.tsv.gz",
+    paste0(region_id, ".phase0_2_qc.rds"), "section_readiness_gates.tsv", "sessionInfo.txt",
+    file.path("figures", paste0(region_id, "_qc_overview.pdf")),
+    file.path("figures", paste0(region_id, "_counts.png")),
+    file.path("figures", paste0(region_id, "_features.png")),
+    file.path("figures", paste0(region_id, "_area.png")),
+    file.path("figures", paste0(region_id, "_spatial.png"))
+  )
+}
+
+write_section_artifacts <- function(project_root, output_dir, region_id, configuration, manifest, environment,
+                                    inventory, integrity, feature_type_summary, panel_reconciliation, alarms,
+                                    qc, counts, features, strict_mode = FALSE) {
+  assert_path_within(project_root, output_dir)
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  gates <- calculate_readiness_gates(inventory, integrity, panel_reconciliation, alarms, manifest)
+  if (isTRUE(strict_mode) && gates$status[gates$gate == "overall"] == "HOLD") stop(sprintf("Strict mode stopped %s because readiness is HOLD.", region_id), call. = FALSE)
+  tables <- list(
+    configuration.tsv = configuration, section_manifest.tsv = manifest, environment_preflight.tsv = environment,
+    file_inventory.tsv = inventory, integrity_summary.tsv = integrity, feature_type_summary.tsv = feature_type_summary,
+    panel_reconciliation.tsv = panel_reconciliation, analysis_alerts.tsv = alarms,
+    qc_thresholds.tsv = qc$thresholds, qc_summary.tsv = qc$summary, section_readiness_gates.tsv = gates
+  )
+  table_paths <- vapply(names(tables), function(name) write_tsv(tables[[name]], file.path(output_dir, name), project_root), character(1))
+  cell_path <- write_gz_tsv(qc$cell_metadata, file.path(output_dir, "cell_qc_metadata.tsv.gz"), project_root)
+  rds_path <- file.path(output_dir, paste0(region_id, ".phase0_2_qc.rds"))
+  saveRDS(list(counts = counts, cells = qc$cell_metadata, features = features, region_id = region_id, raw_counts_preserved = TRUE), rds_path, compress = FALSE)
+  plot_paths <- save_section_plots(plot_section_qc(qc$cell_metadata, region_id), file.path(output_dir, "figures"), region_id, project_root)
+  session_path <- file.path(output_dir, "sessionInfo.txt")
+  capture.output(sessionInfo(), file = session_path)
+  paths <- c(unname(table_paths), cell_path, rds_path, plot_paths, session_path)
+  if (!validate_section_artifacts(output_dir, region_id)) stop("Section artifact reload validation failed.", call. = FALSE)
+  paths
+}
+
+validate_section_artifacts <- function(output_dir, region_id) {
+  require_package("Matrix")
+  paths <- file.path(output_dir, section_required_artifacts(region_id))
+  if (!all(file.exists(paths))) return(FALSE)
+  object <- readRDS(file.path(output_dir, paste0(region_id, ".phase0_2_qc.rds")))
+  inherits(object$counts, "sparseMatrix") && ncol(object$counts) == nrow(object$cells) && identical(colnames(object$counts), object$cells$cell_id)
+}
