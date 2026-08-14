@@ -150,4 +150,40 @@ saved <- readRDS(file.path(artifact_dir, "Region_1.phase0_2_qc.rds"))
 stopifnot(inherits(saved$counts, "sparseMatrix"), identical(dim(saved$counts), c(1L, 2L)))
 expect_error(write_section_artifacts(test_root, "C:/unsafe", "Region_1", data.frame(), synthetic_row, data.frame(), inventory, integrity, imported$feature_type_summary, panel_check, alarms, qc, imported$counts, imported$features), "outside")
 
+# Four-section aggregation and slide-level plot contracts.
+slide_run_root <- file.path(test_root, "slide_run")
+for (index in 1:4) {
+  region_id <- paste0("Region_", index)
+  section_dir <- file.path(slide_run_root, "sections", region_id)
+  section_cells <- qc$cell_metadata
+  section_cells$region_id <- region_id
+  section_cells$qc_core_pass <- c(TRUE, index %% 2L == 0L)
+  section_cells$qc_review_flag <- !section_cells$qc_core_pass
+  section_summary <- data.frame(
+    region_id = region_id, input_cells = 2L, core_qc_pass = sum(section_cells$qc_core_pass),
+    core_qc_fail = sum(!section_cells$qc_core_pass), review_flagged = sum(section_cells$qc_review_flag),
+    nucleus_missing = 0L, multiple_nuclei = 1L, segmentation_multiplet = 1L,
+    area_outlier = 0L, high_control = 0L, cells_deleted = 0L
+  )
+  section_thresholds <- qc$thresholds; section_thresholds$region_id <- region_id
+  section_gates <- data.frame(gate = c("metadata", "overall"), status = c("PENDING", if (index == 3L) "PENDING" else "HOLD"), details = "fixture")
+  section_alarms <- if (index == 3L) empty_alarm_table() else alarms
+  write_tsv(section_summary, file.path(section_dir, "qc_summary.tsv"), test_root)
+  write_tsv(section_thresholds, file.path(section_dir, "qc_thresholds.tsv"), test_root)
+  write_tsv(section_gates, file.path(section_dir, "section_readiness_gates.tsv"), test_root)
+  write_tsv(section_alarms, file.path(section_dir, "analysis_alerts.tsv"), test_root)
+  write_gz_tsv(section_cells, file.path(section_dir, "cell_qc_metadata.tsv.gz"), test_root)
+}
+
+coverage <- validate_four_section_outputs(slide_run_root)
+stopifnot(identical(coverage$region_id, paste0("Region_", 1:4)))
+slide_data <- read_slide_qc_outputs(slide_run_root)
+stopifnot(nrow(slide_data$cell_metadata) == 8L, length(unique(slide_data$cell_metadata$region_id)) == 4L)
+slide_summary <- summarise_slide_qc(slide_data)
+stopifnot(nrow(slide_summary$section_summary) == 4L, slide_summary$overall_status == "HOLD")
+slide_plots <- plot_slide_qc(slide_data, slide_summary)
+stopifnot(all(c("cell_yield", "counts", "features", "review", "flags", "thresholds") %in% names(slide_plots)))
+unlink(file.path(slide_run_root, "sections", "Region_4"), recursive = TRUE)
+expect_error(validate_four_section_outputs(slide_run_root), "exactly four")
+
 cat("All reusable scWAT Xenium function tests passed.\n")

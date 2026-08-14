@@ -138,6 +138,63 @@ def section_cells(incomplete=False):
     return cells
 
 
+def summary_cells(incomplete=False):
+    cells = [
+        markdown("# scWAT Xenium slide-level QC summary\n\nAggregate the four independently processed sections without treating cells as biological replicates."),
+        markdown("## Goal\n\nVerify complete Region 1-4 coverage, compare QC distributions and gates, and write Cell-inspired slide-level figures."),
+        markdown("## Setup\n\n### Parameters"),
+        code(
+            'PROJECT_ROOT <- "/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu"\n'
+            'PIPELINE_REPO <- file.path(PROJECT_ROOT, "adipose_analysis", "YNH_Xenium_scWAT")\n'
+            'RUN_LABEL <- "full_notebook_qc_v1"\n'
+            'EXPECTED_SECTION_COUNT <- 4L\n',
+            tags=["parameters"],
+        ),
+        code(
+            'RUN_ROOT <- file.path(PROJECT_ROOT, "adipose_analysis", "scwat_qc_outputs", RUN_LABEL)\n'
+            'source(file.path(PIPELINE_REPO, "R", "source.R"))\n'
+            'for (package in c("Matrix", "jsonlite", "ggplot2")) require_package(package)\n'
+            'assert_path_within(PROJECT_ROOT, RUN_ROOT)\n'
+            'assert_path_within(PROJECT_ROOT, tempdir())\n'
+            'stopifnot(EXPECTED_SECTION_COUNT == 4L)\n'
+            'cat("Slide QC run root:", RUN_ROOT, "\\n")\n'
+        ),
+        markdown("## Inputs\n\nExactly four independently completed section bundles are required."),
+        markdown("## Completeness Checks"),
+        code(
+            'coverage <- validate_four_section_outputs(RUN_ROOT, paste0("Region_", seq_len(EXPECTED_SECTION_COUNT)))\n'
+            'coverage\n'
+        ),
+        markdown("## QC Results"),
+        code(
+            'slide_data <- read_slide_qc_outputs(RUN_ROOT, coverage$region_id)\n'
+            'slide_summary <- summarise_slide_qc(slide_data)\n'
+            'slide_summary$section_summary\n'
+        ),
+        markdown("## Cell-style Figures\n\nColors are fixed across sections; distributions are descriptive and do not imply cell-level biological replication."),
+        code(
+            'slide_plots <- plot_slide_qc(slide_data, slide_summary)\n'
+            'for (plot in slide_plots) print(plot)\n'
+        ),
+        markdown("## Readiness\n\nThe worst section gate determines slide readiness. Synthetic metadata and unresolved imaging errors block biology."),
+        code(
+            'slide_summary$readiness\n'
+            'cat("Overall slide QC status:", slide_summary$overall_status, "\\n")\n'
+        ),
+        markdown("## Outputs"),
+        code(
+            'slide_artifacts <- write_slide_qc_artifacts(PROJECT_ROOT, RUN_ROOT, slide_data, slide_summary, slide_plots)\n'
+            'saved_summary <- readRDS(file.path(RUN_ROOT, "slide_summary", "slide_qc_summary.rds"))\n'
+            'stopifnot(nrow(saved_summary$data$coverage) == 4L)\n'
+            'stopifnot(length(unique(saved_summary$data$cell_metadata$region_id)) == 4L)\n'
+            'data.frame(artifact = basename(slide_artifacts), path = slide_artifacts)\n'
+        ),
+    ]
+    if incomplete:
+        cells = [cell for cell in cells if not (cell["cell_type"] == "markdown" and "## Readiness" in "".join(cell["source"]))]
+    return cells
+
+
 def validate_notebook(path, notebook_type="section"):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     errors = []
@@ -150,6 +207,11 @@ def validate_notebook(path, notebook_type="section"):
     if notebook_type == "section":
         required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "INPUT_ROOT", "REGION_ID", "RUN_LABEL", "METADATA_PATH", "EXPECTED_SECTION_COUNT", "SEED", "STRICT_MODE"]
         required_sections = ["## Goal", "## Setup", "## Inputs", "## Phase 0", "## Phase 1", "## Phase 2", "## Checks", "## Outputs"]
+        for value in required_parameters + required_sections:
+            if value not in text: errors.append(f"missing required section/parameter: {value}")
+    if notebook_type == "summary":
+        required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "RUN_LABEL", "EXPECTED_SECTION_COUNT"]
+        required_sections = ["## Goal", "## Setup", "## Inputs", "## Completeness Checks", "## QC Results", "## Cell-style Figures", "## Readiness", "## Outputs"]
         for value in required_parameters + required_sections:
             if value not in text: errors.append(f"missing required section/parameter: {value}")
     if errors: raise ValueError("; ".join(errors))
@@ -174,6 +236,7 @@ def inject_parameters(source_path, output_path, assignments):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-section", action="store_true")
+    parser.add_argument("--build-summary", action="store_true")
     parser.add_argument("--incomplete", action="store_true")
     parser.add_argument("--validate")
     parser.add_argument("--type", default="section", choices=["section", "summary"])
@@ -182,9 +245,13 @@ def main():
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     section_path = repo / "notebooks" / "01_section_phase0_2_QC.ipynb"
+    summary_path = repo / "notebooks" / "02_slide_QC_summary.ipynb"
     if args.build_section:
         section_path.write_text(json.dumps(notebook(section_cells(args.incomplete)), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
         print(section_path)
+    if args.build_summary:
+        summary_path.write_text(json.dumps(notebook(summary_cells(args.incomplete)), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(summary_path)
     if args.inject:
         values = dict(item.split("=", 1) for item in args.set)
         inject_parameters(args.inject[0], args.inject[1], values)

@@ -454,3 +454,123 @@ validate_section_artifacts <- function(output_dir, region_id) {
   object <- readRDS(file.path(output_dir, paste0(region_id, ".phase0_2_qc.rds")))
   inherits(object$counts, "sparseMatrix") && ncol(object$counts) == nrow(object$cells) && identical(colnames(object$counts), object$cells$cell_id)
 }
+
+slide_section_required_files <- function() {
+  c("qc_summary.tsv", "qc_thresholds.tsv", "section_readiness_gates.tsv", "analysis_alerts.tsv", "cell_qc_metadata.tsv.gz")
+}
+
+validate_four_section_outputs <- function(run_root, expected_regions = paste0("Region_", 1:4)) {
+  sections_root <- file.path(run_root, "sections")
+  dirs <- list.dirs(sections_root, recursive = FALSE, full.names = TRUE)
+  region_ids <- basename(dirs)
+  valid_dirs <- region_ids %in% expected_regions
+  dirs <- dirs[valid_dirs]; region_ids <- region_ids[valid_dirs]
+  if (length(dirs) != 4L || !setequal(region_ids, expected_regions) || anyDuplicated(region_ids)) {
+    stop(sprintf("Expected exactly four unique section outputs (%s).", paste(expected_regions, collapse = ", ")), call. = FALSE)
+  }
+  order_index <- match(expected_regions, region_ids)
+  dirs <- dirs[order_index]; region_ids <- region_ids[order_index]
+  missing <- unlist(lapply(seq_along(dirs), function(index) {
+    paths <- file.path(dirs[[index]], slide_section_required_files())
+    absent <- paths[!file.exists(paths)]
+    if (!length(absent)) character() else paste(region_ids[[index]], basename(absent), sep = "/")
+  }))
+  if (length(missing)) stop(sprintf("Missing slide-summary inputs: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  data.frame(region_id = region_ids, section_output_dir = normalizePath(dirs, winslash = "/", mustWork = TRUE), stringsAsFactors = FALSE)
+}
+
+read_slide_qc_outputs <- function(run_root, expected_regions = paste0("Region_", 1:4)) {
+  coverage <- validate_four_section_outputs(run_root, expected_regions)
+  read_one <- function(filename, gzipped = FALSE) {
+    tables <- lapply(seq_len(nrow(coverage)), function(index) {
+      path <- file.path(coverage$section_output_dir[[index]], filename)
+      table <- if (gzipped) utils::read.delim(gzfile(path), check.names = FALSE) else utils::read.delim(path, check.names = FALSE)
+      if (!"region_id" %in% names(table)) table$region_id <- rep(coverage$region_id[[index]], nrow(table))
+      table
+    })
+    do.call(rbind, tables)
+  }
+  list(
+    coverage = coverage,
+    qc_summary = read_one("qc_summary.tsv"), thresholds = read_one("qc_thresholds.tsv"),
+    gates = read_one("section_readiness_gates.tsv"), alarms = read_one("analysis_alerts.tsv"),
+    cell_metadata = read_one("cell_qc_metadata.tsv.gz", gzipped = TRUE)
+  )
+}
+
+summarise_slide_qc <- function(slide_data) {
+  summary <- slide_data$qc_summary
+  summary$core_pass_fraction <- ifelse(summary$input_cells > 0, summary$core_qc_pass / summary$input_cells, NA_real_)
+  summary$review_fraction <- ifelse(summary$input_cells > 0, summary$review_flagged / summary$input_cells, NA_real_)
+  overall_rows <- slide_data$gates[slide_data$gates$gate == "overall", , drop = FALSE]
+  overall_status <- if (nrow(overall_rows)) overall_readiness(overall_rows$status) else "HOLD"
+  readiness <- data.frame(
+    region_id = overall_rows$region_id, status = overall_rows$status,
+    biological_interpretation_allowed = overall_rows$status == "PASS", stringsAsFactors = FALSE
+  )
+  list(section_summary = summary, readiness = readiness, overall_status = overall_status)
+}
+
+plot_slide_qc <- function(slide_data, slide_summary) {
+  require_package("ggplot2")
+  palette <- section_palette()
+  cells <- slide_data$cell_metadata
+  cells$region_id <- factor(cells$region_id, levels = names(palette))
+  summary <- slide_summary$section_summary
+  summary$region_id <- factor(summary$region_id, levels = names(palette))
+  region_scale <- ggplot2::scale_fill_manual(values = palette, drop = FALSE)
+  colour_scale <- ggplot2::scale_colour_manual(values = palette, drop = FALSE)
+  distribution_plot <- function(metric, label, title) {
+    ggplot2::ggplot(cells, ggplot2::aes(x = region_id, y = .data[[metric]], fill = region_id)) +
+      ggplot2::geom_violin(scale = "width", trim = TRUE, linewidth = 0.25, alpha = 0.85) +
+      ggplot2::geom_boxplot(width = 0.14, outlier.shape = NA, fill = "white", linewidth = 0.3) +
+      region_scale + ggplot2::labs(title = title, x = NULL, y = label) + cell_style_theme() + ggplot2::theme(legend.position = "none")
+  }
+  review_long <- rbind(
+    data.frame(region_id = summary$region_id, status = "Core pass", cells = summary$core_qc_pass),
+    data.frame(region_id = summary$region_id, status = "Core fail", cells = summary$core_qc_fail)
+  )
+  flag_names <- c("nucleus_missing", "multiple_nuclei", "segmentation_multiplet", "area_outlier", "high_control")
+  flag_long <- do.call(rbind, lapply(flag_names, function(name) data.frame(region_id = summary$region_id, flag = name, cells = summary[[name]])))
+  thresholds <- slide_data$thresholds
+  thresholds$region_id <- factor(thresholds$region_id, levels = names(palette))
+  list(
+    cell_yield = ggplot2::ggplot(summary, ggplot2::aes(region_id, input_cells, fill = region_id)) + ggplot2::geom_col(width = 0.7) + region_scale + ggplot2::labs(title = "Segmented cell yield", x = NULL, y = "Cells") + cell_style_theme() + ggplot2::theme(legend.position = "none"),
+    counts = distribution_plot("nCount_Xenium", "Gene-expression transcripts per cell", "Transcript counts by section"),
+    features = distribution_plot("nFeature_Xenium", "Genes detected per cell", "Detected features by section"),
+    review = ggplot2::ggplot(review_long, ggplot2::aes(region_id, cells, fill = status)) + ggplot2::geom_col(position = "fill", width = 0.7) + ggplot2::scale_fill_manual(values = c("Core pass" = "#4DAF4A", "Core fail" = "#D73027")) + ggplot2::scale_y_continuous(labels = function(x) paste0(round(100*x), "%")) + ggplot2::labs(title = "Core QC outcome", x = NULL, y = "Cells", fill = NULL) + cell_style_theme(),
+    flags = ggplot2::ggplot(flag_long, ggplot2::aes(region_id, cells, fill = region_id)) + ggplot2::geom_col(width = 0.7) + region_scale + ggplot2::facet_wrap(~flag, scales = "free_y", ncol = 3) + ggplot2::labs(title = "QC review flags", x = NULL, y = "Flagged cells") + cell_style_theme() + ggplot2::theme(legend.position = "none"),
+    thresholds = ggplot2::ggplot(thresholds, ggplot2::aes(region_id, value, colour = region_id)) + ggplot2::geom_errorbar(ggplot2::aes(ymin = lower, ymax = upper), width = 0.15, linewidth = 0.45) + ggplot2::geom_point(size = 2) + colour_scale + ggplot2::facet_wrap(~metric, scales = "free_y", ncol = 2) + ggplot2::labs(title = "Section-specific QC intervals", x = NULL, y = "Median and QC interval") + cell_style_theme() + ggplot2::theme(legend.position = "none")
+  )
+}
+
+write_slide_qc_artifacts <- function(project_root, run_root, slide_data, slide_summary, slide_plots) {
+  assert_path_within(project_root, run_root)
+  output_dir <- file.path(run_root, "slide_summary")
+  figure_dir <- file.path(output_dir, "figures")
+  dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+  table_map <- list(
+    combined_qc_summary.tsv = slide_summary$section_summary,
+    combined_qc_thresholds.tsv = slide_data$thresholds,
+    combined_readiness.tsv = slide_summary$readiness,
+    combined_analysis_alerts.tsv = slide_data$alarms
+  )
+  paths <- vapply(names(table_map), function(name) write_tsv(table_map[[name]], file.path(output_dir, name), project_root), character(1))
+  paths <- c(paths, write_gz_tsv(slide_data$cell_metadata, file.path(output_dir, "combined_cell_qc_metadata.tsv.gz"), project_root))
+  rds_path <- file.path(output_dir, "slide_qc_summary.rds")
+  saveRDS(list(data = slide_data, summary = slide_summary, raw_counts_in_section_objects = TRUE), rds_path, compress = FALSE)
+  pdf_path <- file.path(figure_dir, "scwat_slide_qc_figures.pdf")
+  grDevices::pdf(pdf_path, width = 8, height = 5.5, onefile = TRUE)
+  for (plot in slide_plots) print(plot)
+  grDevices::dev.off()
+  png_paths <- vapply(names(slide_plots), function(name) {
+    path <- file.path(figure_dir, paste0("slide_", name, ".png"))
+    ggplot2::ggsave(path, slide_plots[[name]], width = 8, height = 5.5, units = "in", dpi = 300, bg = "white")
+    path
+  }, character(1))
+  session_path <- file.path(output_dir, "sessionInfo.txt"); capture.output(sessionInfo(), file = session_path)
+  status_path <- write_tsv(data.frame(scope = "scWAT_slide", status = slide_summary$overall_status, sections = 4L, cells = nrow(slide_data$cell_metadata), cells_deleted = 0L), file.path(output_dir, "slide_qc_status.tsv"), project_root)
+  all_paths <- c(unname(paths), rds_path, pdf_path, unname(png_paths), session_path, status_path)
+  if (!all(file.exists(all_paths))) stop("Slide QC artifact validation failed.", call. = FALSE)
+  all_paths
+}
