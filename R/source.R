@@ -921,6 +921,151 @@ write_gz_tsv <- function(x, path, project_root) {
   invisible(path)
 }
 
+plot_extended_spatial_qc <- function(spatial_cells, spatial_edge_density, spatial_hotspots, region_id) {
+  require_package("ggplot2")
+  validate_spatial_cells(spatial_cells)
+  required <- c("edge_proxy", "qc_review_flag")
+  missing <- setdiff(required, names(spatial_cells))
+  if (length(missing)) stop(sprintf("Extended spatial plot data missing columns: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  cells <- spatial_cells
+  cells$review_status <- factor(ifelse(cells$qc_review_flag, "Review", "Pass"), levels = c("Pass", "Review"))
+  cells$location_class <- ifelse(cells$edge_proxy, "Edge proxy", "Interior")
+  if ("dense_aggregate" %in% names(cells)) {
+    cells$density_class <- ifelse(cells$dense_aggregate, "Dense aggregate proxy", "Other")
+  } else {
+    cells$density_class <- "Density not calculated"
+  }
+  base_map <- ggplot2::ggplot(cells, ggplot2::aes(x = x_centroid, y = y_centroid)) +
+    ggplot2::coord_fixed() + cell_style_theme() +
+    ggplot2::labs(subtitle = region_id, x = "X centroid (microns)", y = "Y centroid (microns)")
+  hotspot_plot <- base_map +
+    ggplot2::geom_point(ggplot2::aes(colour = review_status), size = 0.45, alpha = 0.75) +
+    ggplot2::scale_colour_manual(values = c(Pass = "#BDBDBD", Review = "#D73027"), drop = FALSE) +
+    ggplot2::labs(title = "QC review flags and candidate spatial hotspots", colour = "QC")
+  review_hotspots <- spatial_hotspots[spatial_hotspots$hotspot_status == "MORPHOLOGY_REVIEW_REQUIRED", , drop = FALSE]
+  if (nrow(review_hotspots)) {
+    hotspot_plot <- hotspot_plot + ggplot2::geom_rect(
+      data = review_hotspots,
+      ggplot2::aes(xmin = x_min, xmax = x_max, ymin = y_min, ymax = y_max),
+      inherit.aes = FALSE, fill = NA, colour = "#6A3D9A", linewidth = 0.7
+    )
+  }
+  list(
+    review_map = base_map +
+      ggplot2::geom_point(ggplot2::aes(colour = review_status, shape = location_class), size = 0.5, alpha = 0.75) +
+      ggplot2::scale_colour_manual(values = c(Pass = "#BDBDBD", Review = "#D73027"), drop = FALSE) +
+      ggplot2::labs(title = "Spatial QC review map with tissue-edge proxy", colour = "QC", shape = "Location"),
+    edge_density = ggplot2::ggplot(spatial_edge_density, ggplot2::aes(x = class, y = review_rate, fill = class_type)) +
+      ggplot2::geom_col(width = 0.7, alpha = 0.9) +
+      ggplot2::facet_wrap(~class_type, scales = "free_x") +
+      ggplot2::scale_y_continuous(labels = function(x) paste0(round(100 * x, 1), "%")) +
+      ggplot2::labs(title = "QC review enrichment at edge and density proxies", subtitle = region_id,
+                    x = NULL, y = "Review-flag rate", fill = "Proxy") + cell_style_theme(),
+    hotspots = hotspot_plot
+  )
+}
+
+extended_section_required_artifacts <- function(region_id, mode = "LOCAL_SUBSET") {
+  mode <- toupper(as.character(mode))
+  if (length(mode) != 1L || !mode %in% c("LOCAL_SUBSET", "FULL_HPC")) stop("Extended section artifact mode must be LOCAL_SUBSET or FULL_HPC.", call. = FALSE)
+  c(
+    "extended_qc_preflight.tsv", "cycle_alarm_evidence.tsv", "gene_transcript_quality.tsv",
+    "spatial_qc_global.tsv", "spatial_qc_edge_density.tsv", "spatial_qc_hotspots.tsv",
+    "spatial_qc_cell_annotations.tsv.gz", "spatial_manual_review_manifest.tsv",
+    "extended_qc_status.tsv", file.path("figures", paste0(region_id, "_extended_spatial_qc.pdf"))
+  )
+}
+
+save_extended_spatial_plots <- function(plots, figure_dir, region_id, project_root) {
+  require_package("ggplot2")
+  if (!length(plots) || any(!vapply(plots, inherits, logical(1), what = "ggplot"))) stop("Extended spatial plots must be a non-empty named list of ggplot objects.", call. = FALSE)
+  assert_path_within(project_root, figure_dir)
+  dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+  pdf_path <- file.path(figure_dir, paste0(region_id, "_extended_spatial_qc.pdf"))
+  grDevices::pdf(pdf_path, width = 8, height = 5.5, onefile = TRUE)
+  on.exit(if (grDevices::dev.cur() > 1L) grDevices::dev.off(), add = TRUE)
+  for (plot in plots) print(plot)
+  grDevices::dev.off()
+  pdf_path
+}
+
+write_extended_section_artifacts <- function(project_root, output_dir, region_id, mode, preflight,
+                                             cycle_alarm_evidence, gene_quality, spatial_global,
+                                             spatial_edge_density, spatial_hotspots, spatial_cells,
+                                             manual_review_manifest, plots) {
+  mode <- toupper(as.character(mode))
+  extended_section_required_artifacts(region_id, mode)
+  assert_path_within(project_root, output_dir)
+  if (!"transcript_status" %in% names(gene_quality)) stop("Gene-quality table requires transcript_status.", call. = FALSE)
+  if (mode == "FULL_HPC" && any(gene_quality$transcript_status == "NOT_RUN_LOCAL_SUBSET", na.rm = TRUE)) {
+    stop("FULL_HPC artifacts cannot contain NOT_RUN_LOCAL_SUBSET transcript status.", call. = FALSE)
+  }
+  if (mode == "FULL_HPC" && any(preflight$status == "FAIL")) stop("FULL_HPC preflight contains FAIL checks.", call. = FALSE)
+  tables <- list(
+    extended_qc_preflight.tsv = preflight,
+    cycle_alarm_evidence.tsv = cycle_alarm_evidence,
+    gene_transcript_quality.tsv = gene_quality,
+    spatial_qc_global.tsv = spatial_global,
+    spatial_qc_edge_density.tsv = spatial_edge_density,
+    spatial_qc_hotspots.tsv = spatial_hotspots,
+    spatial_manual_review_manifest.tsv = manual_review_manifest
+  )
+  table_paths <- vapply(names(tables), function(name) write_tsv(tables[[name]], file.path(output_dir, name), project_root), character(1))
+  cell_path <- write_gz_tsv(spatial_cells, file.path(output_dir, "spatial_qc_cell_annotations.tsv.gz"), project_root)
+  status <- data.frame(
+    region_id = region_id, mode = mode,
+    transcript_status = if (all(gene_quality$transcript_status == "NOT_RUN_LOCAL_SUBSET")) "NOT_RUN_LOCAL_SUBSET" else "COMPUTED",
+    diagnostic_status = if (mode == "LOCAL_SUBSET") "LOCAL_SUBSET_COMPLETE_WITH_EXPECTED_SKIPS" else "FULL_HPC_COMPLETE",
+    cells = nrow(spatial_cells), cells_deleted = 0L,
+    cycle_identity_status = "CYCLE_IDENTITY_UNRESOLVED_REQUIRES_10X",
+    morphology_status = "COORDINATE_DIAGNOSTICS_REQUIRE_IMAGE_REVIEW",
+    stringsAsFactors = FALSE
+  )
+  status_path <- write_tsv(status, file.path(output_dir, "extended_qc_status.tsv"), project_root)
+  plot_path <- save_extended_spatial_plots(plots, file.path(output_dir, "figures"), region_id, project_root)
+  paths <- c(unname(table_paths), cell_path, status_path, plot_path)
+  if (!validate_extended_section_artifacts(output_dir, region_id, mode)) stop("Extended section artifact reload validation failed.", call. = FALSE)
+  paths
+}
+
+read_extended_section_artifacts <- function(output_dir, region_id, mode = "LOCAL_SUBSET") {
+  if (!validate_extended_section_artifacts(output_dir, region_id, mode, stop_on_error = TRUE)) stop("Extended section artifact validation failed.", call. = FALSE)
+  read_table <- function(name) utils::read.delim(file.path(output_dir, name), check.names = FALSE, stringsAsFactors = FALSE)
+  list(
+    preflight = read_table("extended_qc_preflight.tsv"),
+    cycle_alarm_evidence = read_table("cycle_alarm_evidence.tsv"),
+    gene_quality = read_table("gene_transcript_quality.tsv"),
+    spatial_global = read_table("spatial_qc_global.tsv"),
+    spatial_edge_density = read_table("spatial_qc_edge_density.tsv"),
+    spatial_hotspots = read_table("spatial_qc_hotspots.tsv"),
+    spatial_cells = utils::read.delim(gzfile(file.path(output_dir, "spatial_qc_cell_annotations.tsv.gz")), check.names = FALSE, stringsAsFactors = FALSE),
+    manual_review_manifest = read_table("spatial_manual_review_manifest.tsv"),
+    status = read_table("extended_qc_status.tsv")
+  )
+}
+
+validate_extended_section_artifacts <- function(output_dir, region_id, mode = "LOCAL_SUBSET", stop_on_error = FALSE) {
+  fail <- function(message) {
+    if (isTRUE(stop_on_error)) stop(message, call. = FALSE)
+    FALSE
+  }
+  mode <- toupper(as.character(mode))
+  required <- tryCatch(extended_section_required_artifacts(region_id, mode), error = function(error) return(NULL))
+  if (is.null(required)) return(fail("Invalid extended section artifact mode."))
+  absent <- required[!file.exists(file.path(output_dir, required))]
+  if (length(absent)) return(fail(sprintf("Missing extended section artifacts: %s", paste(absent, collapse = ", "))))
+  gene_quality <- tryCatch(utils::read.delim(file.path(output_dir, "gene_transcript_quality.tsv"), check.names = FALSE, stringsAsFactors = FALSE), error = identity)
+  if (inherits(gene_quality, "error") || !"transcript_status" %in% names(gene_quality)) return(fail("Invalid gene_transcript_quality.tsv."))
+  if (mode == "FULL_HPC" && any(gene_quality$transcript_status == "NOT_RUN_LOCAL_SUBSET", na.rm = TRUE)) {
+    return(fail("FULL_HPC validation rejects NOT_RUN_LOCAL_SUBSET transcript status."))
+  }
+  status <- tryCatch(utils::read.delim(file.path(output_dir, "extended_qc_status.tsv"), check.names = FALSE, stringsAsFactors = FALSE), error = identity)
+  if (inherits(status, "error") || nrow(status) != 1L || !identical(as.character(status$region_id), region_id) || !identical(as.character(status$mode), mode)) {
+    return(fail("Extended QC status does not match section or mode."))
+  }
+  TRUE
+}
+
 section_required_artifacts <- function(region_id) {
   c(
     "configuration.tsv", "section_manifest.tsv", "environment_preflight.tsv", "file_inventory.tsv",

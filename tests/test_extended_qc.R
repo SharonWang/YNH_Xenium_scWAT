@@ -189,4 +189,44 @@ incomplete_concordance <- calculate_within_mouse_concordance(
 )
 stopifnot(incomplete_concordance$summary$concordance_status[incomplete_concordance$summary$mouse_id == "Mouse_1"] == "NOT_ESTIMABLE")
 
+# Extended section artifacts must preserve matrix metrics and record local transcript skips.
+extended_root <- file.path(tempdir(), "extended_section_artifacts")
+unlink(extended_root, recursive = TRUE, force = TRUE)
+dir.create(extended_root, recursive = TRUE)
+local_gene_quality <- matrix_qc
+local_gene_quality$transcript_rows <- NA_integer_
+local_gene_quality$mean_qv <- NA_real_
+local_gene_quality$fraction_q20 <- NA_real_
+local_gene_quality$represented_codewords <- NA_integer_
+local_gene_quality$transcript_status <- "NOT_RUN_LOCAL_SUBSET"
+spatial_annotations <- spatial_grid
+spatial_annotations$local_density <- calculate_knn_density(spatial_annotations, k = 4L, mode = "LOCAL_SUBSET")
+spatial_annotations$dense_aggregate <- spatial_annotations$local_density >= stats::quantile(spatial_annotations$local_density, 0.90)
+spatial_global <- test_spatial_flag_clustering(spatial_annotations, k = 4L, permutations = 19L, seed = 20260814L, mode = "LOCAL_SUBSET")
+spatial_enrichment <- summarise_spatial_enrichment(spatial_annotations)
+manual_review <- hotspots_1[hotspots_1$hotspot_status == "MORPHOLOGY_REVIEW_REQUIRED", , drop = FALSE]
+extended_plots <- plot_extended_spatial_qc(spatial_annotations, spatial_enrichment, hotspots_1, "Region_1")
+stopifnot(all(c("review_map", "edge_density", "hotspots") %in% names(extended_plots)))
+stopifnot(all(vapply(extended_plots, inherits, logical(1), what = "ggplot")))
+
+extended_paths <- write_extended_section_artifacts(
+  project_root = extended_root, output_dir = file.path(extended_root, "Region_1"), region_id = "Region_1",
+  mode = "LOCAL_SUBSET", preflight = preflight, cycle_alarm_evidence = evidence,
+  gene_quality = local_gene_quality, spatial_global = spatial_global,
+  spatial_edge_density = spatial_enrichment, spatial_hotspots = hotspots_1,
+  spatial_cells = spatial_annotations, manual_review_manifest = manual_review,
+  plots = extended_plots
+)
+required_extended <- extended_section_required_artifacts("Region_1", "LOCAL_SUBSET")
+stopifnot(all(file.exists(file.path(extended_root, "Region_1", required_extended))))
+stopifnot(all(file.exists(extended_paths)))
+stopifnot(validate_extended_section_artifacts(file.path(extended_root, "Region_1"), "Region_1", "LOCAL_SUBSET"))
+reloaded_extended <- read_extended_section_artifacts(file.path(extended_root, "Region_1"), "Region_1", "LOCAL_SUBSET")
+stopifnot(all(reloaded_extended$gene_quality$transcript_status == "NOT_RUN_LOCAL_SUBSET"))
+stopifnot(all(reloaded_extended$gene_quality$raw_counts == local_gene_quality$raw_counts))
+expect_error(
+  validate_extended_section_artifacts(file.path(extended_root, "Region_1"), "Region_1", "FULL_HPC", stop_on_error = TRUE),
+  "NOT_RUN_LOCAL_SUBSET"
+)
+
 cat("All extended scWAT Xenium QC tests passed.\n")

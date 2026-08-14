@@ -30,8 +30,8 @@ def notebook(cells):
 
 def section_cells(incomplete=False):
     cells = [
-        markdown("# scWAT Xenium section QC: Phases 0-2\n\nRun this notebook once per section. It retains every cell and preserves raw sparse counts."),
-        markdown("## Goal\n\nValidate one Xenium section, reconcile its panel, import sparse counts, calculate section-specific QC flags, and write a reload-validated artifact bundle."),
+        markdown("# scWAT Xenium section QC: Phases 0-2\n\nRun this notebook once per section. It retains every cell, preserves raw sparse counts, and adds advisory alarm/gene/spatial diagnostics."),
+        markdown("## Goal\n\nValidate one Xenium section, reconcile its panel, import sparse counts, calculate section-specific QC flags, and write reload-validated core and extended artifact bundles."),
         markdown("## Setup\n\n### Parameters\n\nChange `REGION_ID` for manual execution. Launchers inject the same parameters without editing the source notebook."),
         code(
             'PROJECT_ROOT <- "/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu"\n'
@@ -42,7 +42,9 @@ def section_cells(incomplete=False):
             'METADATA_PATH <- file.path(PIPELINE_REPO, "config", "scwat_sample_manifest.tsv")\n'
             'EXPECTED_SECTION_COUNT <- 4L\n'
             'SEED <- 20260814L\n'
-            'STRICT_MODE <- FALSE\n',
+            'STRICT_MODE <- FALSE\n'
+            'EXTENDED_QC_MODE <- "AUTO"\n'
+            'EXTENDED_QC_CONFIG_PATH <- file.path(PIPELINE_REPO, "config", "extended_qc_defaults.tsv")\n',
             tags=["parameters"],
         ),
         code(
@@ -114,6 +116,57 @@ def section_cells(incomplete=False):
             'print(section_plots$area)\n'
             'print(section_plots$spatial)\n'
         ),
+        markdown("## Extended QC preflight and direct alarm evidence\n\nInputs are the section directory, versioned extended-QC settings, and existing Xenium alarm records. The exact affected cycle remains unresolved without 10x diagnostics."),
+        code(
+            'extended_config <- read_extended_qc_config(EXTENDED_QC_CONFIG_PATH)\n'
+            'extended_mode <- resolve_extended_qc_mode(EXTENDED_QC_MODE, region_dir)\n'
+            'extended_preflight <- extended_qc_preflight(extended_mode, region_dir, extended_config)\n'
+            'if (extended_mode == "FULL_HPC" && any(extended_preflight$status == "FAIL")) {\n'
+            '  stop(paste("FULL_HPC extended preflight failed:", paste(extended_preflight$check[extended_preflight$status == "FAIL"], collapse = ", ")))\n'
+            '}\n'
+            'cycle_alarm_evidence <- build_cycle_alarm_evidence(alarms, REGION_ID)\n'
+            'cat("Extended mode:", extended_mode, "\\nInput:", region_dir, "\\nOutput:", SECTION_OUTPUT_DIR, "\\n")\n'
+            'extended_preflight\n'
+            'cycle_alarm_evidence\n'
+        ),
+        markdown("## Extended per-gene quality diagnostics\n\nMatrix metrics are calculated for every panel feature. Full-HPC mode lazily aggregates `transcripts.parquet`; local subset mode records `NOT_RUN_LOCAL_SUBSET` and does not imply acceptable transcript quality."),
+        code(
+            'matrix_gene_quality <- summarise_gene_matrix_qc(xenium$counts, REGION_ID, gene_sets)\n'
+            'if (extended_mode == "FULL_HPC") {\n'
+            '  transcript_gene_quality <- summarise_transcript_quality_arrow(file.path(region_dir, "transcripts.parquet"), REGION_ID, extended_config$qv_threshold)\n'
+            '  gene_quality <- combine_gene_quality(matrix_gene_quality, transcript_gene_quality)\n'
+            '} else {\n'
+            '  gene_quality <- matrix_gene_quality\n'
+            '  gene_quality$transcript_rows <- NA_integer_\n'
+            '  gene_quality$mean_qv <- NA_real_\n'
+            '  gene_quality$fraction_q20 <- NA_real_\n'
+            '  gene_quality$represented_codewords <- NA_integer_\n'
+            '  gene_quality$transcript_status <- "NOT_RUN_LOCAL_SUBSET"\n'
+            '}\n'
+            'gene_quality[seq_len(min(12L, nrow(gene_quality))), , drop = FALSE]\n'
+        ),
+        markdown("## Extended spatial diagnostics\n\nCoordinates test global clustering, an occupied-grid tissue-edge proxy, a kNN dense-aggregate proxy, and candidate hotspot bins. These labels are coordinate evidence only: folds, tears, and other morphology require image review."),
+        code(
+            'spatial_cells <- assign_spatial_grid(qc$cell_metadata, extended_config$grid_size_um)\n'
+            'spatial_k <- min(as.integer(extended_config$spatial_k), nrow(spatial_cells) - 1L)\n'
+            'spatial_cells$local_density <- calculate_knn_density(spatial_cells, spatial_k, extended_mode)\n'
+            'density_cutoff <- stats::quantile(spatial_cells$local_density, extended_config$dense_quantile, na.rm = TRUE)\n'
+            'spatial_cells$dense_aggregate <- spatial_cells$local_density >= density_cutoff\n'
+            'spatial_global <- test_spatial_flag_clustering(spatial_cells, spatial_k, extended_config$permutations, extended_config$seed, extended_mode)\n'
+            'spatial_global$region_id <- REGION_ID\n'
+            'spatial_edge_density <- summarise_spatial_enrichment(spatial_cells)\n'
+            'spatial_edge_density$region_id <- REGION_ID\n'
+            'spatial_hotspots <- find_spatial_qc_hotspots(spatial_cells, extended_config$permutations, extended_config$min_bin_cells, extended_config$hotspot_fdr, extended_config$seed)\n'
+            'spatial_hotspots$region_id <- rep(REGION_ID, nrow(spatial_hotspots))\n'
+            'manual_review_manifest <- spatial_hotspots[spatial_hotspots$hotspot_status == "MORPHOLOGY_REVIEW_REQUIRED", , drop = FALSE]\n'
+            'if (!nrow(manual_review_manifest)) manual_review_manifest$review_note <- character() else manual_review_manifest$review_note <- "Inspect morphology/image for edge, fold, tear, or dense aggregate context"\n'
+            'list(global = spatial_global, enrichment = spatial_edge_density, candidate_hotspots = manual_review_manifest)\n'
+        ),
+        markdown("## Extended spatial figures"),
+        code(
+            'extended_plots <- plot_extended_spatial_qc(spatial_cells, spatial_edge_density, spatial_hotspots, REGION_ID)\n'
+            'for (plot in extended_plots) print(plot)\n'
+        ),
         markdown("## Checks\n\nWrite every required artifact, then reload the saved sparse object and verify dimensions and cell alignment."),
         code(
             'artifact_paths <- write_section_artifacts(\n'
@@ -127,10 +180,23 @@ def section_cells(incomplete=False):
             'readiness <- utils::read.delim(file.path(SECTION_OUTPUT_DIR, "section_readiness_gates.tsv"), check.names = FALSE)\n'
             'readiness\n'
         ),
+        code(
+            'extended_artifact_paths <- write_extended_section_artifacts(\n'
+            '  project_root = PROJECT_ROOT, output_dir = SECTION_OUTPUT_DIR, region_id = REGION_ID, mode = extended_mode,\n'
+            '  preflight = extended_preflight, cycle_alarm_evidence = cycle_alarm_evidence, gene_quality = gene_quality,\n'
+            '  spatial_global = spatial_global, spatial_edge_density = spatial_edge_density, spatial_hotspots = spatial_hotspots,\n'
+            '  spatial_cells = spatial_cells, manual_review_manifest = manual_review_manifest, plots = extended_plots\n'
+            ')\n'
+            'stopifnot(validate_extended_section_artifacts(SECTION_OUTPUT_DIR, REGION_ID, extended_mode))\n'
+            'extended_reload <- read_extended_section_artifacts(SECTION_OUTPUT_DIR, REGION_ID, extended_mode)\n'
+            'stopifnot(nrow(extended_reload$spatial_cells) == nrow(qc$cell_metadata))\n'
+            'extended_reload$status\n'
+        ),
         markdown("## Outputs\n\nAll outputs are section-specific. A `HOLD` or `PENDING` gate blocks biological interpretation but preserves diagnostic QC."),
         code(
             'data.frame(artifact = basename(artifact_paths), path = artifact_paths)[seq_len(min(length(artifact_paths), 20L)), , drop = FALSE]\n'
-            'cat("Completed", REGION_ID, "with", nrow(qc$cell_metadata), "cells; zero cells deleted.\\n")\n'
+            'data.frame(artifact = basename(extended_artifact_paths), path = extended_artifact_paths)\n'
+            'cat("Completed", REGION_ID, "with", nrow(qc$cell_metadata), "cells; zero cells deleted. Extended mode:", extended_mode, "\\n")\n'
         ),
     ]
     if incomplete:
@@ -205,8 +271,8 @@ def validate_notebook(path, notebook_type="section"):
     parameter_cells = [c for c in data.get("cells", []) if "parameters" in c.get("metadata", {}).get("tags", [])]
     if len(parameter_cells) != 1: errors.append("exactly one tagged parameters cell is required")
     if notebook_type == "section":
-        required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "INPUT_ROOT", "REGION_ID", "RUN_LABEL", "METADATA_PATH", "EXPECTED_SECTION_COUNT", "SEED", "STRICT_MODE"]
-        required_sections = ["## Goal", "## Setup", "## Inputs", "## Phase 0", "## Phase 1", "## Phase 2", "## Checks", "## Outputs"]
+        required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "INPUT_ROOT", "REGION_ID", "RUN_LABEL", "METADATA_PATH", "EXPECTED_SECTION_COUNT", "SEED", "STRICT_MODE", "EXTENDED_QC_MODE", "EXTENDED_QC_CONFIG_PATH"]
+        required_sections = ["## Goal", "## Setup", "## Inputs", "## Phase 0", "## Phase 1", "## Phase 2", "## Extended QC preflight", "## Extended per-gene", "## Extended spatial diagnostics", "## Checks", "## Outputs"]
         for value in required_parameters + required_sections:
             if value not in text: errors.append(f"missing required section/parameter: {value}")
     if notebook_type == "summary":
