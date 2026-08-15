@@ -5,8 +5,9 @@ This repository contains the reusable scWAT Xenium QC code. Run one parameterize
 ## Files
 
 - `R/source.R`: general Xenium path, metadata, integrity, panel, sparse-import, QC, aggregation, artifact, and plotting functions.
-- `notebooks/01_section_phase0_2_QC.ipynb`: combined Phase 0-2 notebook for one section.
-- `notebooks/02_slide_QC_summary.ipynb`: final four-section QC tables and Cell-inspired figures.
+- `notebooks/01_section_phase0_2_QC.ipynb`: reusable combined Phase 0-2 source template.
+- `notebooks/01_section_phase0_2_QC_Region1.ipynb` through `01_section_phase0_2_QC_Region4.ipynb`: committed, parameter-locked notebooks to run and review one section at a time.
+- `notebooks/02_slide_QC_summary.ipynb`: the sole slide-level QC summary/report, with final decision tables and Cell-inspired figures inline.
 - `config/eos_gene_sets.tsv`: 100 unique expected genes: 7 common, 47 short-lived, and 46 long-lived.
 - `tests/test_source.R`: reusable-function tests.
 - `tests/test_extended_qc.R`: alarm, gene-quality, spatial, ranking, concordance, and artifact-contract tests.
@@ -65,8 +66,11 @@ Local execution uses only `adipose_analysis/subset_input/adipose_data` and write
 & 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -NoProfile -ExecutionPolicy Bypass `
   -File 'D:\Xiaonan\CODEX_projects\Yanan_Xenium\adipose_analysis\YNH_Xenium_scWAT\scripts\execute_local_subset.ps1' `
   -ProjectRoot 'D:\Xiaonan\CODEX_projects\Yanan_Xenium' `
-  -RunLabel 'local_extended_qc_test'
+  -RunLabel 'local_extended_qc_test' `
+  -RegionId 'ALL'
 ```
+
+Use `-RegionId Region_1`, `Region_2`, `Region_3`, or `Region_4` to execute only one named section notebook. Use `-RegionId SUMMARY` after all four section bundles exist under the same run label. `ALL` runs the four sections and then the summary.
 
 The local computer does not have IRkernel/Jupyter notebook packages. Therefore, local validation evaluates the R cells sequentially in one clean R environment and saves executed notebook JSON. HPC uses the standard registered Jupyter R kernel.
 
@@ -81,7 +85,7 @@ PROJECT_ROOT=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Y
 export PROJECT_ROOT
 export PIPELINE_REPO="${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT"
 export INPUT_ROOT="${PROJECT_ROOT}/adipose_data"
-export RUN_LABEL="full_extended_qc_v1"
+export RUN_LABEL="full_notebook_qc_v2"
 export METADATA_PATH="${PIPELINE_REPO}/config/scwat_sample_manifest.tsv"
 export RUN_ROOT="${PROJECT_ROOT}/adipose_analysis/scwat_qc_outputs/${RUN_LABEL}"
 export TMPDIR="${PROJECT_ROOT}/adipose_analysis/tmp"
@@ -112,31 +116,28 @@ bash -n "${PIPELINE_REPO}/shell/run_notebook_qc_hpc.sh"
 bash -n "${PIPELINE_REPO}/slurm/scwat_notebook_qc.sbatch"
 ```
 
-### Chunk 3 - One-section interactive checkpoint
+### Chunk 3 - Run and inspect one section notebook
 
-This tests Region 1 first and writes its executed notebook plus section bundle under `${RUN_ROOT}`.
+Set `REGION_ID` to run one committed section notebook. Inputs are the matching Xenium section directory and `transcripts.parquet`. Outputs are `${RUN_ROOT}/sections/<Region_ID>/` and `${RUN_ROOT}/executed_notebooks/<Region_ID>.executed.ipynb`.
 
 ```bash
-python3 "${PIPELINE_REPO}/scripts/render_notebooks.py" --inject \
-  "${PIPELINE_REPO}/notebooks/01_section_phase0_2_QC.ipynb" \
-  "${RUN_ROOT}/executed_notebooks/Region_1.executed.ipynb" \
-  --set "PROJECT_ROOT=${PROJECT_ROOT}" --set "PIPELINE_REPO=${PIPELINE_REPO}" \
-  --set "INPUT_ROOT=${INPUT_ROOT}" --set "REGION_ID=Region_1" --set "RUN_LABEL=${RUN_LABEL}" \
-  --set "METADATA_PATH=${METADATA_PATH}" --set "EXPECTED_SECTION_COUNT=4L" \
-  --set "SEED=20260814L" --set "STRICT_MODE=FALSE" --set "EXTENDED_QC_MODE=FULL_HPC" \
-  --set "EXTENDED_QC_CONFIG_PATH=${PIPELINE_REPO}/config/extended_qc_defaults.tsv"
-jupyter nbconvert --execute --to notebook --inplace \
-  --ExecutePreprocessor.kernel_name=ir --ExecutePreprocessor.timeout=-1 \
-  "${RUN_ROOT}/executed_notebooks/Region_1.executed.ipynb"
-Rscript -e "source('${PIPELINE_REPO}/R/source.R'); stopifnot(validate_extended_section_artifacts('${RUN_ROOT}/sections/Region_1','Region_1','FULL_HPC',stop_on_error=TRUE))"
+REGION_ID=Region_1 bash "${PIPELINE_REPO}/shell/run_notebook_qc_hpc.sh"
 ```
 
-### Chunk 4 - Full four-section run
-
-The runner repeats/overwrites Region 1 within the same run label, then processes Regions 2-4 and the slide summary.
+After reviewing Region 1, repeat with the same `RUN_LABEL`:
 
 ```bash
-bash "${PIPELINE_REPO}/shell/run_notebook_qc_hpc.sh"
+REGION_ID=Region_2 bash "${PIPELINE_REPO}/shell/run_notebook_qc_hpc.sh"
+REGION_ID=Region_3 bash "${PIPELINE_REPO}/shell/run_notebook_qc_hpc.sh"
+REGION_ID=Region_4 bash "${PIPELINE_REPO}/shell/run_notebook_qc_hpc.sh"
+```
+
+### Chunk 4 - Run all sections and summary in one job
+
+`ALL` executes the four named notebooks in order and then the summary notebook.
+
+```bash
+REGION_ID=ALL bash "${PIPELINE_REPO}/shell/run_notebook_qc_hpc.sh"
 ```
 
 Alternatively submit the configured Slurm wrapper:
@@ -145,22 +146,12 @@ Alternatively submit the configured Slurm wrapper:
 sbatch "${PIPELINE_REPO}/slurm/scwat_notebook_qc.sbatch"
 ```
 
-### Chunk 5 - Summary-only rerun
+### Chunk 5 - Final summary notebook only
 
-Use this only after all four full-HPC section bundles validate.
+Use `SUMMARY` only after all four full-HPC section bundles exist under the same `RUN_LABEL`. Inputs are `${RUN_ROOT}/sections/Region_1` through `Region_4`. Outputs are `${RUN_ROOT}/slide_summary/` and `${RUN_ROOT}/executed_notebooks/slide_summary.executed.ipynb`.
 
 ```bash
-python3 "${PIPELINE_REPO}/scripts/render_notebooks.py" --inject \
-  "${PIPELINE_REPO}/notebooks/02_slide_QC_summary.ipynb" \
-  "${RUN_ROOT}/executed_notebooks/slide_summary.executed.ipynb" \
-  --set "PROJECT_ROOT=${PROJECT_ROOT}" --set "PIPELINE_REPO=${PIPELINE_REPO}" \
-  --set "RUN_LABEL=${RUN_LABEL}" --set "EXPECTED_SECTION_COUNT=4L" \
-  --set "METADATA_PATH=${METADATA_PATH}" \
-  --set "EXTENDED_QC_CONFIG_PATH=${PIPELINE_REPO}/config/extended_qc_defaults.tsv" \
-  --set "SUBSET_REFERENCE_PATH=${PIPELINE_REPO}/config/subset_qc_reference.tsv"
-jupyter nbconvert --execute --to notebook --inplace \
-  --ExecutePreprocessor.kernel_name=ir --ExecutePreprocessor.timeout=-1 \
-  "${RUN_ROOT}/executed_notebooks/slide_summary.executed.ipynb"
+REGION_ID=SUMMARY bash "${PIPELINE_REPO}/shell/run_notebook_qc_hpc.sh"
 ```
 
 ### Chunk 6 - Post-run validation and output locations
@@ -178,7 +169,7 @@ The metadata-aware subset rerun reproduces 500 cells per section and 2,000 total
 
 The applied study design is: sections 62308 and 62309 are from Mouse 1; sections 62310 and 62311 are from Mouse 2. All samples are untreated WT scWAT from normal 8-week-old mice. Left/right is not a design factor. Section is the technical processing unit and mouse is the biological replicate.
 
-The updated portable technical QC report is at `reports/2026-08-14_scwat_qc_summary/report.html`; its canonical data/provenance specification is `reports/2026-08-14_scwat_qc_summary/artifact.json`. It reports verified local alarm/spatial/concordance evidence, a clearly labelled depletion-only candidate preview, and the exact full-HPC/10x evidence still required.
+The current reader-facing QC report is `notebooks/02_slide_QC_summary.ipynb`. It reports direct alarm evidence, clearly labelled candidate-gene evidence, spatial and within-mouse diagnostics, section decisions, and the exact full-HPC/10x evidence still required.
 
 ### Local validation evidence (2026-08-14)
 

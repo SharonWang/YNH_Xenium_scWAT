@@ -376,6 +376,16 @@ def build_region_notebooks(repo):
     return built
 
 
+def region_notebook_path(repo, region_id):
+    if region_id not in REGION_NOTEBOOKS:
+        raise ValueError(f"Unknown region: {region_id}")
+    path = repo / "notebooks" / REGION_NOTEBOOKS[region_id]
+    if not path.is_file():
+        raise ValueError(f"Committed region notebook is missing: {path}")
+    validate_notebook(path, "section", expected_region_id=region_id)
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-section", action="store_true")
@@ -383,6 +393,7 @@ def main():
     parser.add_argument("--build-summary", action="store_true")
     parser.add_argument("--incomplete", action="store_true")
     parser.add_argument("--validate")
+    parser.add_argument("--region-notebook")
     parser.add_argument("--type", default="section", choices=["section", "summary"])
     parser.add_argument("--inject", nargs=2, metavar=("SOURCE", "OUTPUT"))
     parser.add_argument("--set", action="append", default=[])
@@ -405,6 +416,11 @@ def main():
     if args.validate:
         validate_notebook(args.validate, args.type)
         print(f"Notebook validation passed: {args.validate}")
+    if args.region_notebook:
+        try:
+            print(region_notebook_path(repo, args.region_notebook))
+        except ValueError as error:
+            parser.error(str(error))
 
 
 if __name__ == "__main__":

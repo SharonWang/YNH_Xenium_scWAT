@@ -1,5 +1,7 @@
 import json
 import re
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -65,6 +67,29 @@ class NotebookContracts(unittest.TestCase):
         self.assertNotIn("build_report.R", text)
         self.assertNotIn("report.html", text)
         self.assertEqual(notebook["metadata"]["kernelspec"]["name"], "ir")
+
+    def test_region_notebook_cli_resolves_only_valid_committed_copies(self):
+        renderer = REPO / "scripts" / "render_notebooks.py"
+        valid = subprocess.run(
+            [sys.executable, str(renderer), "--region-notebook", "Region_3"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+        self.assertEqual(
+            Path(valid.stdout.strip()).name,
+            "01_section_phase0_2_QC_Region3.ipynb",
+        )
+
+        invalid = subprocess.run(
+            [sys.executable, str(renderer), "--region-notebook", "Region_5"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn("Unknown region", invalid.stderr)
 
 
 if __name__ == "__main__":
