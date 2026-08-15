@@ -91,6 +91,17 @@ class NotebookContracts(unittest.TestCase):
         self.assertNotEqual(invalid.returncode, 0)
         self.assertIn("Unknown region", invalid.stderr)
 
+    def test_duplicate_acceptance_report_package_is_retired(self):
+        report_dir = REPO / "reports" / "2026-08-15_full_hpc_qc_acceptance"
+        retired_files = [
+            "build_report.R",
+            "report.html",
+            "artifact.json",
+            "candidate_cycle_affected_genes_affected_only.tsv",
+        ]
+        remaining = [name for name in retired_files if (report_dir / name).exists()]
+        self.assertEqual(remaining, [], f"duplicate report files remain: {remaining}")
+
 
 if __name__ == "__main__":
     unittest.main()
