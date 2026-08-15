@@ -294,33 +294,82 @@ summarise_transcript_quality_table <- function(transcripts, region_id, qv_thresh
   out[order(out$gene), , drop = FALSE]
 }
 
+build_transcript_quality_queries <- function(projected, qv_threshold = 20, has_codeword = TRUE) {
+  require_package("dplyr")
+  required <- c("gene", "qv", if (isTRUE(has_codeword)) "codeword")
+  missing <- setdiff(required, names(projected))
+  if (length(missing)) {
+    stop(sprintf("Projected transcript table missing columns: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  }
+  filtered <- projected |>
+    dplyr::filter(!is.na(.data$gene), .data$gene != "", !is.na(.data$qv))
+  summary <- filtered |>
+    dplyr::group_by(.data$gene) |>
+    dplyr::summarise(
+      transcript_rows = dplyr::n(),
+      mean_qv = mean(.data$qv),
+      fraction_q20 = mean(.data$qv >= qv_threshold),
+      .groups = "drop"
+    )
+  codewords <- if (isTRUE(has_codeword)) {
+    filtered |>
+      dplyr::filter(!is.na(.data$codeword)) |>
+      dplyr::distinct(.data$gene, .data$codeword)
+  } else {
+    NULL
+  }
+  list(summary = summary, codewords = codewords)
+}
+
 summarise_transcript_quality_arrow <- function(path, region_id, qv_threshold = 20) {
   require_package("arrow")
   require_package("dplyr")
   if (!file.exists(path)) stop(sprintf("Transcript Parquet not found: %s", path), call. = FALSE)
   dataset <- arrow::open_dataset(path, format = "parquet")
   schema <- resolve_transcript_schema(names(dataset$schema))
-  selected <- c(schema$gene, schema$qv, schema$codeword[!is.na(schema$codeword)])
-  projected <- dplyr::select(dataset, dplyr::all_of(selected))
-  grouped <- dplyr::group_by(projected, .data[[schema$gene]])
   if (!is.na(schema$codeword)) {
-    bounded <- dplyr::summarise(
-      grouped, transcript_rows = dplyr::n(), mean_qv = mean(.data[[schema$qv]], na.rm = TRUE),
-      fraction_q20 = mean(.data[[schema$qv]] >= qv_threshold, na.rm = TRUE),
-      represented_codewords = dplyr::n_distinct(.data[[schema$codeword]]), .groups = "drop"
+    projected <- dplyr::select(
+      dataset,
+      gene = dplyr::all_of(schema$gene),
+      qv = dplyr::all_of(schema$qv),
+      codeword = dplyr::all_of(schema$codeword)
     )
   } else {
-    bounded <- dplyr::summarise(
-      grouped, transcript_rows = dplyr::n(), mean_qv = mean(.data[[schema$qv]], na.rm = TRUE),
-      fraction_q20 = mean(.data[[schema$qv]] >= qv_threshold, na.rm = TRUE),
-      represented_codewords = NA_integer_, .groups = "drop"
+    projected <- dplyr::select(
+      dataset,
+      gene = dplyr::all_of(schema$gene),
+      qv = dplyr::all_of(schema$qv)
     )
   }
-  out <- dplyr::collect(bounded)
-  names(out)[names(out) == schema$gene] <- "gene"
+  queries <- build_transcript_quality_queries(
+    projected,
+    qv_threshold = qv_threshold,
+    has_codeword = !is.na(schema$codeword)
+  )
+  out <- dplyr::collect(queries$summary)
+  if (!is.na(schema$codeword)) {
+    codewords <- dplyr::collect(queries$codewords)
+    represented <- if (nrow(codewords)) {
+      counts <- table(codewords$gene)
+      data.frame(
+        gene = names(counts),
+        represented_codewords = as.integer(counts),
+        stringsAsFactors = FALSE
+      )
+    } else {
+      data.frame(gene = character(), represented_codewords = integer(), stringsAsFactors = FALSE)
+    }
+    out <- merge(out, represented, by = "gene", all.x = TRUE, sort = FALSE)
+    out$represented_codewords[is.na(out$represented_codewords)] <- 0L
+  } else {
+    out$represented_codewords <- NA_integer_
+  }
+  out$mean_qv[is.nan(out$mean_qv)] <- NA_real_
+  out$fraction_q20[is.nan(out$fraction_q20)] <- NA_real_
   out$region_id <- region_id
   out$transcript_status <- "MEASURED_ARROW_PROJECTED_AGGREGATE"
-  out[, c("region_id", "gene", "transcript_rows", "mean_qv", "fraction_q20", "represented_codewords", "transcript_status")]
+  out <- out[, c("region_id", "gene", "transcript_rows", "mean_qv", "fraction_q20", "represented_codewords", "transcript_status")]
+  out[order(out$gene), , drop = FALSE]
 }
 
 summarise_gene_matrix_qc <- function(counts, region_id, gene_sets = NULL) {
@@ -532,6 +581,20 @@ rank_candidate_cycle_genes <- function(gene_quality, config, reference_region = 
   out$abundance_depletion <- is.finite(out$log2_count_ratio) & out$log2_count_ratio <= -as.numeric(config$candidate_abs_log2_ratio)
   out$quality_degradation <- is.finite(out$q20_difference) & out$q20_difference <= -as.numeric(config$candidate_abs_q20_delta)
   out$insufficient_quality <- !is.finite(out$q20_difference)
+  out$section_candidate_flag <- out$abundance_depletion | out$quality_degradation
+  out$section_evidence_status <- ifelse(
+    out$abundance_depletion & out$quality_degradation,
+    "DEPLETION_AND_Q20_LOSS",
+    ifelse(
+      out$abundance_depletion,
+      "DEPLETION_ONLY",
+      ifelse(
+        out$quality_degradation,
+        "Q20_LOSS_ONLY",
+        ifelse(out$insufficient_quality, "INSUFFICIENT_Q20_EVIDENCE", "NO_SECTION_LEVEL_SIGNAL")
+      )
+    )
+  )
   tiers <- vapply(split(seq_len(nrow(out)), out$gene), function(index) {
     paired <- any(out$region_id[index] == "Region_4" & out$abundance_depletion[index] & out$quality_degradation[index])
     recurring <- sum(out$abundance_depletion[index] & out$quality_degradation[index]) >= 2L
@@ -1074,7 +1137,8 @@ validate_extended_section_artifacts <- function(output_dir, region_id, mode = "L
 extended_slide_required_artifacts <- function() {
   c(
     "combined_cycle_alarm_evidence.tsv", "combined_gene_transcript_quality.tsv",
-    "candidate_cycle_affected_genes.tsv", "subset_full_qc_ranking.tsv",
+    "candidate_cycle_affected_genes.tsv", "candidate_cycle_affected_genes_affected_only.tsv",
+    "subset_full_qc_ranking.tsv",
     "subset_full_qc_rank_agreement.tsv", "combined_spatial_qc.tsv",
     "combined_spatial_hotspots.tsv", "within_mouse_section_concordance.tsv",
     "within_mouse_gene_concordance.tsv", "extended_slide_qc_status.tsv",
@@ -1191,8 +1255,9 @@ plot_extended_slide_qc <- function(extended_slide_data, extended_slide_summary) 
   alarm <- extended_slide_data$cycle_alarm_evidence
   alarm$alarm_state <- ifelse(alarm$evidence_status == "DIRECT_EVIDENCE", "Alarm reported", "No alarm reported")
   candidate <- extended_slide_summary$candidates
-  candidate_counts <- as.data.frame(table(candidate$evidence_tier), stringsAsFactors = FALSE)
-  names(candidate_counts) <- c("evidence_tier", "comparisons")
+  candidate <- candidate[candidate$section_candidate_flag, , drop = FALSE]
+  candidate_counts <- as.data.frame(table(candidate$region_id, candidate$section_evidence_status), stringsAsFactors = FALSE)
+  names(candidate_counts) <- c("region_id", "section_evidence_status", "genes")
   ranking <- extended_slide_summary$ranking
   ranking_long <- rbind(
     data.frame(region_id = ranking$region_id, source = "Validated subset", review_fraction = ranking$review_fraction),
@@ -1205,8 +1270,8 @@ plot_extended_slide_qc <- function(extended_slide_data, extended_slide_summary) 
       ggplot2::geom_col(width = 0.7) + ggplot2::scale_fill_manual(values = c("Alarm reported" = "#D73027", "No alarm reported" = "#4DAF4A")) +
       ggplot2::labs(title = "Direct poor-cycle alarm evidence", x = NULL, y = NULL, fill = NULL) + cell_style_theme() +
       ggplot2::theme(axis.text.y = ggplot2::element_blank(), axis.ticks.y = ggplot2::element_blank()),
-    candidate_genes = ggplot2::ggplot(candidate_counts, ggplot2::aes(evidence_tier, comparisons, fill = evidence_tier)) +
-      ggplot2::geom_col(width = 0.7) + ggplot2::labs(title = "Candidate affected-gene evidence tiers", subtitle = "Candidates are not confirmed; exact cycle identity requires 10x diagnostics", x = NULL, y = "Region-gene comparisons") + cell_style_theme() + ggplot2::theme(legend.position = "none"),
+    candidate_genes = ggplot2::ggplot(candidate_counts, ggplot2::aes(region_id, genes, fill = section_evidence_status)) +
+      ggplot2::geom_col(width = 0.7) + ggplot2::labs(title = "Section-level candidate affected genes", subtitle = "Candidates are not confirmed; exact cycle identity requires 10x diagnostics", x = NULL, y = "Candidate genes", fill = "Evidence") + cell_style_theme(),
     ranking = ggplot2::ggplot(ranking_long, ggplot2::aes(region_id, review_fraction, colour = source, group = source)) +
       ggplot2::geom_line(linewidth = 0.7) + ggplot2::geom_point(size = 2) +
       ggplot2::scale_y_continuous(labels = function(x) paste0(round(100 * x, 1), "%")) +
@@ -1230,6 +1295,7 @@ write_extended_slide_qc_artifacts <- function(project_root, run_root, extended_s
     combined_cycle_alarm_evidence.tsv = extended_slide_data$cycle_alarm_evidence,
     combined_gene_transcript_quality.tsv = extended_slide_data$gene_quality,
     candidate_cycle_affected_genes.tsv = extended_slide_summary$candidates,
+    candidate_cycle_affected_genes_affected_only.tsv = extended_slide_summary$candidates[extended_slide_summary$candidates$section_candidate_flag, , drop = FALSE],
     subset_full_qc_ranking.tsv = extended_slide_summary$ranking,
     subset_full_qc_rank_agreement.tsv = extended_slide_summary$rank_agreement,
     combined_spatial_qc.tsv = extended_slide_summary$spatial_qc,

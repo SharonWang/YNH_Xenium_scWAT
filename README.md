@@ -55,7 +55,7 @@ The summary notebook requires all four section bundles and writes below `<RUN_RO
 - a multi-page PDF and six 300-dpi PNG figures;
 - `sessionInfo.txt`.
 
-The extended slide contract additionally writes combined alarm and gene-quality tables, `candidate_cycle_affected_genes.tsv`, subset/full ranking and agreement tables, combined spatial diagnostics/hotspots, within-mouse section/gene concordance tables, `extended_slide_qc_status.tsv`, and `figures/scwat_extended_qc_diagnostics.pdf`. Candidate genes remain labelled `CANDIDATE_NOT_CONFIRMED`; spatial hotspot labels require morphology/image review; concordance thresholds are advisory and do not change readiness.
+The extended slide contract additionally writes combined alarm and gene-quality tables, the complete `candidate_cycle_affected_genes.tsv`, the filtered `candidate_cycle_affected_genes_affected_only.tsv`, subset/full ranking and agreement tables, combined spatial diagnostics/hotspots, within-mouse section/gene concordance tables, `extended_slide_qc_status.tsv`, and `figures/scwat_extended_qc_diagnostics.pdf`. The filtered table contains only section-gene comparisons crossing the prespecified depletion and/or Q20-loss thresholds. Candidate genes remain labelled `CANDIDATE_NOT_CONFIRMED`; spatial hotspot labels require morphology/image review; concordance thresholds are advisory and do not change readiness.
 
 ## Local subset validation
 
@@ -77,7 +77,7 @@ Required HPC software: `Rscript`, `python3`, `jupyter`, registered kernelspec `i
 ### Chunk 1 - Environment and D/HPC-local paths
 
 ```bash
-PROJECT_ROOT=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu
+PROJECT_ROOT=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu/YNH_Xenium
 export PROJECT_ROOT
 export PIPELINE_REPO="${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT"
 export INPUT_ROOT="${PROJECT_ROOT}/adipose_data"

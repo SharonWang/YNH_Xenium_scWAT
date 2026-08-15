@@ -3,12 +3,12 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
 #SBATCH --time=24:00:00
-#SBATCH --chdir=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu
-#SBATCH --output=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu/adipose_analysis/scwat_qc_logs/%x_%j.out
-#SBATCH --error=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu/adipose_analysis/scwat_qc_logs/%x_%j.err
+#SBATCH --chdir=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu/YNH_Xenium
+#SBATCH --output=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu/YNH_Xenium/adipose_analysis/scwat_qc_logs/%x_%j.out
+#SBATCH --error=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu/YNH_Xenium/adipose_analysis/scwat_qc_logs/%x_%j.err
 
 set -euo pipefail
-export PROJECT_ROOT=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu
+export PROJECT_ROOT=/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu/YNH_Xenium
 export PIPELINE_REPO="${PROJECT_ROOT}/adipose_analysis/YNH_Xenium_scWAT"
 export INPUT_ROOT="${PROJECT_ROOT}/adipose_data"
 export RUN_LABEL="full_extended_qc_${SLURM_JOB_ID}"

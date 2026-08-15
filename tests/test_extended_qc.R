@@ -76,6 +76,20 @@ stopifnot(transcript_qc$mean_qv[transcript_qc$gene == "A"] == 20)
 stopifnot(transcript_qc$fraction_q20[transcript_qc$gene == "A"] == 0.5)
 stopifnot(transcript_qc$represented_codewords[transcript_qc$gene == "A"] == 1L)
 
+# Arrow-compatible queries aggregate before collection and avoid unsupported n_distinct().
+require_package("dplyr")
+projected_fixture <- data.frame(
+  gene = c("A", "A", "B", "B"), qv = c(30, 10, 25, NA),
+  codeword = c(1L, 1L, 2L, 3L), stringsAsFactors = FALSE
+)
+transcript_queries <- build_transcript_quality_queries(projected_fixture, qv_threshold = 20, has_codeword = TRUE)
+bounded_fixture <- dplyr::collect(transcript_queries$summary)
+codeword_fixture <- dplyr::collect(transcript_queries$codewords)
+stopifnot(nrow(bounded_fixture) == 2L, nrow(codeword_fixture) == 2L)
+stopifnot(bounded_fixture$transcript_rows[bounded_fixture$gene == "A"] == 2L)
+stopifnot(bounded_fixture$fraction_q20[bounded_fixture$gene == "A"] == 0.5)
+stopifnot(!anyNA(bounded_fixture$mean_qv), !anyNA(bounded_fixture$fraction_q20))
+
 # Matrix summaries preserve all panel genes, including zero-count genes.
 require_package("Matrix")
 count_fixture <- Matrix::Matrix(matrix(c(2, 0, 3, 0, 0, 0), nrow = 3L, byrow = TRUE), sparse = TRUE)
@@ -143,6 +157,10 @@ stopifnot(tier[["A"]] == "Tier_A", tier[["B"]] == "Tier_B", tier[["C"]] == "Tier
 stopifnot(all(candidate_rank$candidate_status == "CANDIDATE_NOT_CONFIRMED"))
 stopifnot(all(candidate_rank$exact_cycle_status == "REQUIRES_10X_DIAGNOSTICS"))
 stopifnot(candidate_rank$comparison_type[candidate_rank$gene == "A" & candidate_rank$region_id == "Region_4"] == "WITHIN_MOUSE_TECHNICAL_PAIR")
+stopifnot(candidate_rank$section_candidate_flag[candidate_rank$gene == "A" & candidate_rank$region_id == "Region_4"])
+stopifnot(!candidate_rank$section_candidate_flag[candidate_rank$gene == "A" & candidate_rank$region_id == "Region_1"])
+stopifnot(candidate_rank$section_evidence_status[candidate_rank$gene == "A" & candidate_rank$region_id == "Region_4"] == "DEPLETION_AND_Q20_LOSS")
+stopifnot(candidate_rank$section_evidence_status[candidate_rank$gene == "C" & candidate_rank$region_id == "Region_1"] == "DEPLETION_ONLY")
 
 # Full-data ranks are compared descriptively with the fixed subset reference.
 subset_reference_fixture <- utils::read.delim(file.path(repo_root, "config", "subset_qc_reference.tsv"), check.names = FALSE)
@@ -297,6 +315,11 @@ extended_slide_paths <- write_extended_slide_qc_artifacts(
   plots = extended_slide_plots
 )
 stopifnot(all(file.exists(extended_slide_paths)), validate_extended_slide_qc_artifacts(extended_slide_root))
+affected_only <- utils::read.delim(
+  file.path(extended_slide_root, "slide_summary", "candidate_cycle_affected_genes_affected_only.tsv"),
+  check.names = FALSE
+)
+stopifnot(nrow(affected_only) > 0L, all(affected_only$section_candidate_flag))
 
 status_path <- file.path(extended_slide_root, "sections", "Region_4", "extended_qc_status.tsv")
 status_fixture <- utils::read.delim(status_path, check.names = FALSE)

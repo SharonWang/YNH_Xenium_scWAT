@@ -1,0 +1,1990 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "scWAT Xenium Full-Data QC Acceptance Report",
+    "description": "Technical acceptance assessment of four full scWAT Xenium sections returned from HPC on 2026-08-15.",
+    "generatedAt": "2026-08-15T18:00:00+08:00",
+    "sources": [
+      {
+        "id": "qc-summary-source",
+        "label": "Full-data combined section QC summary",
+        "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/combined_qc_summary.tsv",
+        "query": {
+          "sql": "SELECT region_id, input_cells, core_qc_pass, review_flagged, nucleus_missing, multiple_nuclei, area_outlier, high_control FROM combined_qc_summary ORDER BY region_id",
+          "description": "Section-specific summaries generated from all 286,178 segmented cells.",
+          "tables_used": [
+            "combined_qc_summary.tsv",
+            "combined_cell_qc_metadata.tsv.gz"
+          ],
+          "filters": [
+            "scWAT",
+            "Regions 1-4",
+            "complete full-HPC sections"
+          ],
+          "metric_definitions": [
+            "Core pass uses section-specific robust transcript-count and detected-gene intervals.",
+            "Review flagged means at least one overlapping QC review flag."
+          ]
+        }
+      },
+      {
+        "id": "readiness-source",
+        "label": "Section readiness gates",
+        "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/combined_readiness.tsv",
+        "query": {
+          "sql": "SELECT region_id, status, biological_interpretation_allowed FROM combined_readiness ORDER BY region_id",
+          "description": "Worst-case readiness from integrity, panel, metadata, and Xenium-alarm gates.",
+          "tables_used": [
+            "combined_readiness.tsv"
+          ]
+        }
+      },
+      {
+        "id": "alarm-source",
+        "label": "Xenium analysis alarms",
+        "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/combined_analysis_alerts.tsv",
+        "query": {
+          "sql": "SELECT region_id, id, level, title, message FROM combined_analysis_alerts WHERE raised = TRUE ORDER BY region_id, level, id",
+          "description": "Raised alarms parsed from each section analysis summary.",
+          "tables_used": [
+            "combined_analysis_alerts.tsv"
+          ],
+          "filters": [
+            "raised = TRUE"
+          ]
+        }
+      },
+      {
+        "id": "extended-alarm-source",
+        "label": "Direct poor-cycle alarm evidence",
+        "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/combined_cycle_alarm_evidence.tsv",
+        "query": {
+          "sql": "SELECT region_id, evidence_status, cycle_identity_status, gene_effect_status FROM combined_cycle_alarm_evidence ORDER BY region_id",
+          "description": "Directly available per-section alarm evidence with explicit cycle/gene interpretation limits.",
+          "tables_used": [
+            "combined_cycle_alarm_evidence.tsv"
+          ]
+        }
+      },
+      {
+        "id": "candidate-source",
+        "label": "Full-data provisional candidate affected-gene diagnostics",
+        "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/candidate_cycle_affected_genes.tsv",
+        "query": {
+          "sql": "SELECT gene, region_id, comparison_type, log2_count_ratio, detection_fraction_difference, q20_difference, evidence_tier, candidate_status FROM candidate_cycle_affected_genes",
+          "description": "Cross-section count-depletion and transcript-QV diagnostics; candidates are not cycle-confirmed.",
+          "tables_used": [
+            "candidate_cycle_affected_genes.tsv",
+            "combined_gene_transcript_quality.tsv"
+          ],
+          "filters": [
+            "alarm-positive Regions 1, 2, and 4",
+            "prespecified depletion/Q20 thresholds"
+          ]
+        }
+      },
+      {
+        "id": "ranking-source",
+        "label": "Subset versus full-data QC ranking",
+        "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/subset_full_qc_ranking.tsv",
+        "query": {
+          "sql": "SELECT region_id, review_fraction, subset_rank, full_rank, comparison_status FROM subset_full_qc_ranking ORDER BY region_id",
+          "description": "Descriptive comparison of fixed subset and complete-section review burden.",
+          "tables_used": [
+            "subset_full_qc_ranking.tsv",
+            "subset_full_qc_rank_agreement.tsv"
+          ]
+        }
+      },
+      {
+        "id": "spatial-source",
+        "label": "Full-data spatial QC diagnostics",
+        "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/combined_spatial_qc.tsv",
+        "query": {
+          "sql": "SELECT region_id, statistic, empirical_p, k, permutations FROM combined_spatial_qc WHERE diagnostic_type='global_clustering' ORDER BY region_id",
+          "description": "Complete-section kNN permutation, edge/density proxy, and grid-hotspot diagnostics.",
+          "tables_used": [
+            "combined_spatial_qc.tsv",
+            "combined_spatial_hotspots.tsv"
+          ],
+          "filters": [
+            "FULL_HPC",
+            "k=15",
+            "999 permutations",
+            "100-micron bins"
+          ]
+        }
+      },
+      {
+        "id": "concordance-source",
+        "label": "Within-mouse full-data technical concordance",
+        "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/within_mouse_section_concordance.tsv",
+        "query": {
+          "sql": "SELECT mouse_id, section_a, section_b, review_rate_difference, gene_count_spearman, gene_detection_spearman, concordance_status FROM within_mouse_section_concordance ORDER BY mouse_id",
+          "description": "Advisory complete-section comparison for the two verified technical pairs.",
+          "tables_used": [
+            "within_mouse_section_concordance.tsv",
+            "within_mouse_gene_concordance.tsv"
+          ]
+        }
+      },
+      {
+        "id": "panel-source",
+        "label": "Expected and installed Xenium panel reconciliation",
+        "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/sections/Region_1/panel_reconciliation.tsv",
+        "query": {
+          "sql": "SELECT expected_gene, gene_set, status FROM panel_reconciliation ORDER BY expected_gene",
+          "description": "The 100 expected Eos genes reconciled with the installed custom Xenium panel.",
+          "tables_used": [
+            "config/eos_gene_sets.tsv",
+            "panel_reconciliation.tsv"
+          ],
+          "filters": [
+            "7 common",
+            "47 short-lived",
+            "46 long-lived"
+          ]
+        }
+      },
+      {
+        "id": "methods-source",
+        "label": "Reusable Xenium QC implementation",
+        "path": "R/source.R",
+        "query": {
+          "sql": "SOURCE R/source.R; EXECUTE notebooks/01_section_phase0_2_QC.ipynb PER SECTION; EXECUTE notebooks/02_slide_QC_summary.ipynb",
+          "description": "Reusable implementation and notebook execution path.",
+          "tables_used": [
+            "R/source.R",
+            "notebooks/01_section_phase0_2_QC.ipynb",
+            "notebooks/02_slide_QC_summary.ipynb"
+          ]
+        }
+      },
+      {
+        "id": "metadata-source",
+        "label": "User-verified scWAT experimental design",
+        "path": "config/scwat_sample_manifest.tsv",
+        "query": {
+          "sql": "SELECT section_id, mouse_id, genotype, treatment, age_weeks FROM verified_scwat_metadata ORDER BY section_id",
+          "description": "Experimental design supplied by the investigator after the local subset QC run.",
+          "tables_used": [
+            "config/scwat_sample_manifest.tsv"
+          ],
+          "filters": [
+            "scWAT only"
+          ]
+        }
+      }
+    ],
+    "cards": [
+      {
+        "id": "total-cells-card",
+        "dataset": "headline_metrics",
+        "sourceId": "qc-summary-source",
+        "description": "All segmented cells assessed across the four complete sections.",
+        "metrics": [
+          {
+            "label": "Cells assessed",
+            "field": "total_cells",
+            "format": "number"
+          }
+        ]
+      },
+      {
+        "id": "core-pass-card",
+        "dataset": "headline_metrics",
+        "sourceId": "qc-summary-source",
+        "description": "Cells within section-specific robust transcript-count and detected-feature intervals.",
+        "metrics": [
+          {
+            "label": "Core QC pass",
+            "field": "core_pass_rate",
+            "format": "percent"
+          }
+        ]
+      },
+      {
+        "id": "review-card",
+        "dataset": "headline_metrics",
+        "sourceId": "qc-summary-source",
+        "description": "Cells carrying at least one overlapping QC review flag.",
+        "metrics": [
+          {
+            "label": "Review flagged",
+            "field": "review_rate",
+            "format": "percent"
+          }
+        ]
+      },
+      {
+        "id": "panel-card",
+        "dataset": "headline_metrics",
+        "sourceId": "panel-source",
+        "description": "Expected Eos target genes reconciled with every installed section panel.",
+        "metrics": [
+          {
+            "label": "Panel genes matched",
+            "field": "panel_genes_matched",
+            "format": "number"
+          }
+        ]
+      },
+      {
+        "id": "deleted-card",
+        "dataset": "headline_metrics",
+        "sourceId": "qc-summary-source",
+        "description": "The QC pipeline flags but does not automatically delete cells.",
+        "metrics": [
+          {
+            "label": "Cells deleted",
+            "field": "cells_deleted",
+            "format": "number"
+          }
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "review-rate-chart",
+        "title": "Full-data QC review-flag rate by section",
+        "subtitle": "Complete sections; denominator is all segmented cells in each section",
+        "type": "bar",
+        "intent": "comparison",
+        "question": "Which sections have the highest burden of cells needing QC review?",
+        "rationale": "A zero-baseline bar chart gives the clearest comparison of four section-level rates.",
+        "dataset": "qc_by_section",
+        "sourceId": "qc-summary-source",
+        "encodings": {
+          "x": {
+            "field": "region_id",
+            "type": "nominal",
+            "label": "Section"
+          },
+          "y": {
+            "field": "review_rate",
+            "type": "quantitative",
+            "format": "percent",
+            "label": "Review-flag rate"
+          },
+          "tooltip": [
+            {
+              "field": "review_flagged",
+              "type": "quantitative",
+              "label": "Review-flagged cells"
+            },
+            {
+              "field": "input_cells",
+              "type": "quantitative",
+              "label": "Cells assessed"
+            },
+            {
+              "field": "core_pass_rate",
+              "type": "quantitative",
+              "format": "percent",
+              "label": "Core pass rate"
+            }
+          ]
+        },
+        "valueFormat": "percent",
+        "layout": "full",
+        "labels": {
+          "values": "all"
+        },
+        "settings": {
+          "sort": "none",
+          "showValues": true
+        },
+        "surface": {
+          "surface": "card",
+          "viewMode": "both",
+          "showControls": false
+        }
+      },
+      {
+        "id": "spatial-clustering-chart",
+        "title": "Global spatial clustering statistic by section",
+        "subtitle": "Complete sections; k=15 and 999 within-section label permutations",
+        "type": "bar",
+        "intent": "comparison",
+        "question": "Which local subsets show concentration of QC review flags among neighboring cells?",
+        "rationale": "A zero-referenced bar chart preserves the sign and relative size of the four section statistics; empirical p-values remain in tooltips and the adjacent table.",
+        "dataset": "spatial_global",
+        "sourceId": "spatial-source",
+        "encodings": {
+          "x": {
+            "field": "region_id",
+            "type": "nominal",
+            "label": "Section"
+          },
+          "y": {
+            "field": "statistic",
+            "type": "quantitative",
+            "format": "decimal",
+            "label": "kNN clustering statistic"
+          },
+          "tooltip": [
+            {
+              "field": "empirical_p",
+              "type": "quantitative",
+              "format": "decimal",
+              "label": "Empirical p"
+            },
+            {
+              "field": "review_flagged",
+              "type": "quantitative",
+              "label": "Review-flagged cells"
+            },
+            {
+              "field": "input_cells",
+              "type": "quantitative",
+              "label": "Cells sampled"
+            }
+          ]
+        },
+        "valueFormat": "decimal",
+        "layout": "full",
+        "labels": {
+          "values": "all"
+        },
+        "settings": {
+          "sort": "none",
+          "showValues": true
+        },
+        "surface": {
+          "surface": "card",
+          "viewMode": "both",
+          "showControls": false
+        }
+      }
+    ],
+    "tables": [
+      {
+        "id": "section-qc-table",
+        "title": "Section-level cell QC",
+        "subtitle": "Complete sections; exact counts and rates",
+        "dataset": "qc_by_section",
+        "sourceId": "qc-summary-source",
+        "defaultSort": {
+          "field": "region_id",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "region_id",
+            "label": "Section",
+            "type": "text"
+          },
+          {
+            "field": "input_cells",
+            "label": "Cells",
+            "format": "number"
+          },
+          {
+            "field": "core_pass_rate",
+            "label": "Core pass",
+            "format": "percent"
+          },
+          {
+            "field": "review_rate",
+            "label": "Review flagged",
+            "format": "percent"
+          },
+          {
+            "field": "nucleus_missing",
+            "label": "No nucleus",
+            "format": "number"
+          },
+          {
+            "field": "multiple_nuclei",
+            "label": "Multiple nuclei",
+            "format": "number"
+          },
+          {
+            "field": "area_outlier",
+            "label": "Area outlier",
+            "format": "number"
+          },
+          {
+            "field": "high_control",
+            "label": "High control",
+            "format": "number"
+          }
+        ]
+      },
+      {
+        "id": "readiness-table",
+        "title": "Section readiness for downstream biology",
+        "subtitle": "Worst-case integrity, panel, metadata, and Xenium-alarm gate",
+        "dataset": "readiness_by_section",
+        "sourceId": "readiness-source",
+        "defaultSort": {
+          "field": "region_id",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "region_id",
+            "label": "Section",
+            "type": "text"
+          },
+          {
+            "field": "status",
+            "label": "Readiness",
+            "type": "text"
+          },
+          {
+            "field": "xenium_alarm",
+            "label": "Xenium ERROR",
+            "type": "text"
+          },
+          {
+            "field": "biological_interpretation_allowed",
+            "label": "Biology allowed",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "alarm-evidence-table",
+        "title": "Direct alarm evidence and interpretation limit",
+        "subtitle": "All four sections; exact affected cycle and gene mapping are not present in the available 10x summary",
+        "dataset": "alarm_evidence",
+        "sourceId": "extended-alarm-source",
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "region_id",
+            "label": "Section",
+            "type": "text"
+          },
+          {
+            "field": "evidence_status",
+            "label": "Direct evidence",
+            "type": "text"
+          },
+          {
+            "field": "cycle_identity_status",
+            "label": "Cycle identity",
+            "type": "text"
+          },
+          {
+            "field": "gene_effect_status",
+            "label": "Gene effect",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "candidate-table",
+        "title": "Selected Eos candidate affected-gene comparisons",
+        "subtitle": "Up to eight strongest Eos-target rows per alarm-positive section; complete filtered list is saved separately",
+        "dataset": "candidate_top",
+        "sourceId": "candidate-source",
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "region_id",
+            "label": "Section",
+            "type": "text"
+          },
+          {
+            "field": "gene",
+            "label": "Gene",
+            "type": "text"
+          },
+          {
+            "field": "gene_set",
+            "label": "Eos set",
+            "type": "text"
+          },
+          {
+            "field": "comparison_type",
+            "label": "Comparison",
+            "type": "text"
+          },
+          {
+            "field": "log2_count_ratio",
+            "label": "log2 count ratio",
+            "format": "decimal"
+          },
+          {
+            "field": "q20_difference",
+            "label": "Q20 fraction difference",
+            "format": "decimal"
+          },
+          {
+            "field": "evidence_tier",
+            "label": "Cross-section tier",
+            "type": "text"
+          },
+          {
+            "field": "candidate_status",
+            "label": "Confirmation",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "ranking-status-table",
+        "title": "Subset versus full-data review burden",
+        "subtitle": "Descriptive rank agreement across four sections: Spearman rho 0.80; Kendall tau 0.67",
+        "dataset": "ranking_status",
+        "sourceId": "ranking-source",
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "region_id",
+            "label": "Section",
+            "type": "text"
+          },
+          {
+            "field": "subset_review_fraction",
+            "label": "Subset review rate",
+            "format": "percent"
+          },
+          {
+            "field": "subset_rank",
+            "label": "Subset rank",
+            "format": "number"
+          },
+          {
+            "field": "full_review_fraction",
+            "label": "Full review rate",
+            "format": "percent"
+          },
+          {
+            "field": "full_rank",
+            "label": "Full rank",
+            "format": "number"
+          },
+          {
+            "field": "rank_change",
+            "label": "Rank change",
+            "format": "number"
+          },
+          {
+            "field": "review_rate_change_pp",
+            "label": "Rate change, pp",
+            "format": "decimal"
+          }
+        ]
+      },
+      {
+        "id": "spatial-table",
+        "title": "Full-data spatial clustering and hotspot screen",
+        "subtitle": "Global permutation test plus FDR-screened 100-micron candidate bins",
+        "dataset": "spatial_global",
+        "sourceId": "spatial-source",
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "region_id",
+            "label": "Section",
+            "type": "text"
+          },
+          {
+            "field": "statistic",
+            "label": "kNN statistic",
+            "format": "decimal"
+          },
+          {
+            "field": "empirical_p",
+            "label": "Empirical p",
+            "format": "decimal"
+          },
+          {
+            "field": "hotspot_bins",
+            "label": "Candidate bins",
+            "format": "number"
+          },
+          {
+            "field": "interpretation",
+            "label": "Interpretation",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "concordance-table",
+        "title": "Within-mouse advisory technical concordance",
+        "subtitle": "Prespecified criteria plus a separate non-gated cell-area caution",
+        "dataset": "within_mouse_concordance",
+        "sourceId": "concordance-source",
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "mouse_id",
+            "label": "Mouse",
+            "type": "text"
+          },
+          {
+            "field": "sections",
+            "label": "Sections",
+            "type": "text"
+          },
+          {
+            "field": "review_rate_difference",
+            "label": "Review-rate difference",
+            "format": "percent"
+          },
+          {
+            "field": "median_count_ratio",
+            "label": "Median count ratio",
+            "format": "decimal"
+          },
+          {
+            "field": "median_feature_ratio",
+            "label": "Median feature ratio",
+            "format": "decimal"
+          },
+          {
+            "field": "median_area_ratio",
+            "label": "Median area ratio",
+            "format": "decimal"
+          },
+          {
+            "field": "gene_count_spearman",
+            "label": "Gene count rho",
+            "format": "decimal"
+          },
+          {
+            "field": "gene_detection_spearman",
+            "label": "Gene detection rho",
+            "format": "decimal"
+          },
+          {
+            "field": "qualified_status",
+            "label": "Qualified assessment",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "candidate-burden-table",
+        "title": "Candidate affected-gene burden by section",
+        "subtitle": "Threshold-crossing genes; Regions 1/2 are cross-mouse diagnostics and Region 4 is within-mouse",
+        "dataset": "candidate_burden",
+        "sourceId": "candidate-source",
+        "defaultSort": {
+          "field": "region_id",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "region_id",
+            "label": "Section",
+            "type": "text"
+          },
+          {
+            "field": "affected_genes",
+            "label": "Affected",
+            "format": "number"
+          },
+          {
+            "field": "depletion_genes",
+            "label": "Depleted",
+            "format": "number"
+          },
+          {
+            "field": "q20_loss_genes",
+            "label": "Q20 loss",
+            "format": "number"
+          },
+          {
+            "field": "both_signals",
+            "label": "Both",
+            "format": "number"
+          },
+          {
+            "field": "eos_common",
+            "label": "Eos common",
+            "format": "number"
+          },
+          {
+            "field": "eos_short_lived",
+            "label": "Eos short-lived",
+            "format": "number"
+          },
+          {
+            "field": "eos_long_lived",
+            "label": "Eos long-lived",
+            "format": "number"
+          },
+          {
+            "field": "comparison_type",
+            "label": "Comparison",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "gene-quality-table",
+        "title": "Per-gene transcript-quality distribution",
+        "subtitle": "All 479 panel genes per section; Q20 values are descriptive and not cycle identities",
+        "dataset": "gene_quality",
+        "sourceId": "candidate-source",
+        "defaultSort": {
+          "field": "region_id",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "region_id",
+            "label": "Section",
+            "type": "text"
+          },
+          {
+            "field": "panel_genes",
+            "label": "Panel genes",
+            "format": "number"
+          },
+          {
+            "field": "zero_count_genes",
+            "label": "Zero-count genes",
+            "format": "number"
+          },
+          {
+            "field": "median_fraction_q20",
+            "label": "Median fraction Q20",
+            "format": "percent"
+          },
+          {
+            "field": "genes_fraction_q20_below_0_8",
+            "label": "Genes below 0.8",
+            "format": "number"
+          },
+          {
+            "field": "median_mean_qv",
+            "label": "Median mean QV",
+            "format": "decimal"
+          }
+        ]
+      },
+      {
+        "id": "cell-distribution-table",
+        "title": "Cell-level QC distributions",
+        "subtitle": "Medians and 5th/95th percentiles from complete sections",
+        "dataset": "cell_distribution",
+        "sourceId": "qc-summary-source",
+        "defaultSort": {
+          "field": "region_id",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "region_id",
+            "label": "Section",
+            "type": "text"
+          },
+          {
+            "field": "median_counts",
+            "label": "Median counts",
+            "format": "number"
+          },
+          {
+            "field": "p05_counts",
+            "label": "Count P05",
+            "format": "number"
+          },
+          {
+            "field": "p95_counts",
+            "label": "Count P95",
+            "format": "number"
+          },
+          {
+            "field": "median_features",
+            "label": "Median features",
+            "format": "number"
+          },
+          {
+            "field": "p05_features",
+            "label": "Feature P05",
+            "format": "number"
+          },
+          {
+            "field": "p95_features",
+            "label": "Feature P95",
+            "format": "number"
+          },
+          {
+            "field": "median_cell_area",
+            "label": "Median area",
+            "format": "decimal"
+          },
+          {
+            "field": "p95_cell_area",
+            "label": "Area P95",
+            "format": "decimal"
+          }
+        ]
+      },
+      {
+        "id": "spatial-effect-table",
+        "title": "Edge and dense-aggregate proxy effect sizes",
+        "subtitle": "Coordinate proxies do not establish morphology",
+        "dataset": "spatial_effect",
+        "sourceId": "spatial-source",
+        "defaultSort": {
+          "field": "region_id",
+          "direction": "asc"
+        },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          {
+            "field": "region_id",
+            "label": "Section",
+            "type": "text"
+          },
+          {
+            "field": "contrast",
+            "label": "Contrast",
+            "type": "text"
+          },
+          {
+            "field": "cells",
+            "label": "Proxy cells",
+            "format": "number"
+          },
+          {
+            "field": "flagged",
+            "label": "Flagged",
+            "format": "number"
+          },
+          {
+            "field": "review_rate",
+            "label": "Proxy rate",
+            "format": "percent"
+          },
+          {
+            "field": "risk_ratio",
+            "label": "Risk ratio",
+            "format": "decimal"
+          },
+          {
+            "field": "absolute_rate_difference",
+            "label": "Absolute difference",
+            "format": "percent"
+          }
+        ]
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# scWAT Xenium Full-Data QC Acceptance Report",
+        "layout": "full"
+      },
+      {
+        "id": "technical-summary",
+        "type": "markdown",
+        "sourceId": "qc-summary-source",
+        "layout": "full",
+        "body": "## Cell-level QC passes, but the slide is not yet acceptable for unrestricted gene-level biology\n\nAcross 286,178 cells, 99.30% pass the section-specific core count/feature gate and 4.63% carry at least one broader review flag; no cells were deleted. This supports continued technical processing and morphology review. It does **not** override the separate Xenium alarm gate described below."
+      },
+      {
+        "id": "acceptance-summary",
+        "type": "markdown",
+        "sourceId": "readiness-source",
+        "layout": "full",
+        "body": "### Acceptance decision\n\n**Overall: HOLD for comparative biological analysis.** Region 3 is conditionally acceptable for section-level exploratory work with the morphology caveat documented below. Regions 1, 2, and 4 remain HOLD until 10x diagnostics identify the affected cycles/codewords and the resulting gene scope is documented. Raw data and all cells should be retained."
+      },
+      {
+        "id": "headline-metrics",
+        "type": "metric-strip",
+        "cardIds": [
+          "total-cells-card",
+          "core-pass-card",
+          "review-card",
+          "panel-card",
+          "deleted-card"
+        ],
+        "layout": "full"
+      },
+      {
+        "id": "cell-heading",
+        "type": "markdown",
+        "sourceId": "qc-summary-source",
+        "layout": "full",
+        "body": "## All four sections have strong cell-level QC\n\nCore-pass rates are 99.06% to 99.62%, while review-flag rates are 3.22% to 5.62%. Region 3 has the highest full-data review burden and Region 4 the lowest. These rates quantify segmentation/count review burden; they do not override the independent imaging-cycle alarm gate."
+      },
+      {
+        "id": "review-chart-block",
+        "type": "chart",
+        "chartId": "review-rate-chart",
+        "layout": "full"
+      },
+      {
+        "id": "section-table-block",
+        "type": "table",
+        "tableId": "section-qc-table",
+        "layout": "full"
+      },
+      {
+        "id": "cell-distribution-block",
+        "type": "table",
+        "tableId": "cell-distribution-table",
+        "layout": "full"
+      },
+      {
+        "id": "alarm-heading",
+        "type": "markdown",
+        "sourceId": "extended-alarm-source",
+        "layout": "full",
+        "body": "## Direct 10x evidence identifies three alarm-positive sections, not the exact cycles\n\nRegions 1, 2, and 4 each report `poor_quality_cycles_detected`; Region 3 reports no poor-cycle alarm. The supplied Xenium summaries do not identify cycle number, fluorophore, codeword, or a confirmed gene list. Exact cycle identity therefore requires the corresponding 10x diagnostic package/support output."
+      },
+      {
+        "id": "alarm-evidence-table-block",
+        "type": "table",
+        "tableId": "alarm-evidence-table",
+        "layout": "full"
+      },
+      {
+        "id": "candidate-heading",
+        "type": "markdown",
+        "sourceId": "candidate-source",
+        "layout": "full",
+        "body": "## Region 4 shows broad within-mouse depletion and Q20 loss; Regions 1 and 2 remain cross-mouse diagnostics\n\nAgainst its paired section Region 3, Region 4 has 353/479 genes crossing at least one candidate threshold, including 200 with both depletion and Q20 loss. This broad pattern is consistent with a substantial section-level technical effect, but it is not a cycle assignment. Regions 1 and 2 have 198 and 174 candidates respectively; because their reference is from the other mouse, those counts can mix technical and inter-mouse biological variation. Every row remains `CANDIDATE_NOT_CONFIRMED`."
+      },
+      {
+        "id": "candidate-burden-block",
+        "type": "table",
+        "tableId": "candidate-burden-table",
+        "layout": "full"
+      },
+      {
+        "id": "candidate-table-block",
+        "type": "table",
+        "tableId": "candidate-table",
+        "layout": "full"
+      },
+      {
+        "id": "gene-quality-block",
+        "type": "table",
+        "tableId": "gene-quality-table",
+        "layout": "full"
+      },
+      {
+        "id": "ranking-heading",
+        "type": "markdown",
+        "sourceId": "ranking-source",
+        "layout": "full",
+        "body": "## Full data broadly reproduces, but does not exactly preserve, the subset ranking\n\nThe full-data order is Region 3, Region 1, Region 2, Region 4 versus Region 1, Region 3, Region 2, Region 4 in the subset. Spearman rho is 0.80 and Kendall tau is 0.67 across only four sections. The subset correctly identified the two lower-burden sections, but Regions 1 and 3 swapped; full-data values should be used for decisions."
+      },
+      {
+        "id": "ranking-table-block",
+        "type": "table",
+        "tableId": "ranking-status-table",
+        "layout": "full"
+      },
+      {
+        "id": "spatial-heading",
+        "type": "markdown",
+        "sourceId": "spatial-source",
+        "layout": "full",
+        "body": "## Review flags are weakly globally clustered, with localized candidate bins only in Region 3\n\nAll four global kNN tests have empirical p=0.001, but the statistics are small (0.0197 to 0.0496) and the very large cell counts make statistical significance easy to obtain. Edge proxies show modest enrichment in Regions 1, 2, and 4 (risk ratios 1.49, 1.35, and 1.81) but essentially none in Region 3 (1.03). Dense-cell proxies are not enriched in any section. Only Region 3 contains FDR-positive grid bins: 34 bins with median review rate 29.5% versus 5.62% globally. Coordinates alone cannot label edges, folds, tears, or aggregates; these bins require image review."
+      },
+      {
+        "id": "spatial-chart-block",
+        "type": "chart",
+        "chartId": "spatial-clustering-chart",
+        "layout": "full"
+      },
+      {
+        "id": "spatial-table-block",
+        "type": "table",
+        "tableId": "spatial-table",
+        "layout": "full"
+      },
+      {
+        "id": "spatial-effect-block",
+        "type": "table",
+        "tableId": "spatial-effect-table",
+        "layout": "full"
+      },
+      {
+        "id": "concordance-heading",
+        "type": "markdown",
+        "sourceId": "concordance-source",
+        "layout": "full",
+        "body": "## Both mouse pairs meet the prespecified concordance criteria, but Mouse 2 has a large cell-area shift\n\nMouse 1 (62308/62309) and Mouse 2 (62310/62311) meet all five prespecified advisory criteria for review rate, median counts, median features, gene-count correlation, and gene-detection correlation. Mouse 2 nevertheless has a 1.82-fold median cell-area ratio and area-distribution distance 0.665; cell area was reported but not part of the original gate. Treat Mouse 2 as concordant for the prespecified metrics with a separate segmentation/morphology review requirement."
+      },
+      {
+        "id": "concordance-table-block",
+        "type": "table",
+        "tableId": "concordance-table",
+        "layout": "full"
+      },
+      {
+        "id": "readiness-table-block",
+        "type": "table",
+        "tableId": "readiness-table",
+        "layout": "full"
+      },
+      {
+        "id": "scope-definitions",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Scope, data, and metric definitions\n\n**Population:** all 286,178 segmented cells in four WT, untreated, normal 8-week scWAT sections. **Biological replicate:** mouse (n=2). **Technical unit:** section; 62308/62309 are Mouse 1 and 62310/62311 are Mouse 2. **Core pass:** count and detected-feature values within robust section-specific bounds. **Review flagged:** one or more overlapping core, nucleus, cell-area, high-control, or segmentation-multiplet flags. **Candidate gene:** a section/reference comparison crossing log2 depletion <= -0.5 and/or Q20-fraction difference <= -0.05. Candidate status is diagnostic, not confirmed."
+      },
+      {
+        "id": "methodology",
+        "type": "markdown",
+        "sourceId": "methods-source",
+        "layout": "full",
+        "body": "## Methodology and robustness\n\nEach section was processed independently. Full transcript tables were projected to gene/QV/codeword fields and summarized per gene; cell matrices remained sparse. Spatial clustering used k=15 and 999 deterministic within-section label permutations; hotspots used 100-micron bins, at least 20 cells, and BH FDR <=0.05. Subset/full agreement is descriptive because there are only four sections. No cell was automatically removed, and no cell is treated as a biological replicate."
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Limitations and uncertainty\n\nThe poor-cycle alarm is direct evidence, but cycle identity and affected-gene mapping are absent. Region 3 is used as the diagnostic reference; only Region 4 is a within-mouse comparison, so Region 1/2 gene candidates are confounded by mouse. Spatial proxies are coordinate-based and cannot diagnose morphology without DAPI/morphology images. Two mice are insufficient for population-level biological inference. The verified 100-gene Eos list contains 7 common, 47 short-lived, and 46 long-lived genes; this resolves the earlier arithmetic inconsistency with the stated six common genes."
+      },
+      {
+        "id": "next-steps",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Recommended next steps\n\n1. Request/export the 10x cycle/codeword diagnostics for Regions 1, 2, and 4; keep their biological gate at HOLD until reviewed.\n2. Inspect Region 3's 34 candidate bins and the edge-enriched regions against morphology/DAPI images in Xenium Explorer.\n3. Review the Mouse 2 cell-area shift, especially segmentation boundaries and tissue composition in Regions 3/4.\n4. If 10x identifies affected genes, exclude or sensitivity-test those genes before normalization, annotation, Eos-state scoring, or spatial differential analysis.\n5. Use mouse as the replicate for downstream inference; with n=2 and no treatment contrast, keep analyses descriptive/exploratory unless more animals are added."
+      },
+      {
+        "id": "further-questions",
+        "type": "markdown",
+        "layout": "full",
+        "body": "## Further questions\n\n- Which exact cycles, channels, and codewords were impaired according to 10x diagnostics?\n- Do Region 3 hotspots correspond to tissue edge, fold, tear, segmentation crowding, or true anatomical structure?\n- Does the Region 3/4 cell-area shift persist after morphology-guided segmentation review?\n- After confirmed affected genes are handled, do within-mouse expression profiles remain concordant?"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-15T18:00:00+08:00",
+    "status": "ready",
+    "datasets": {
+      "headline_metrics": [
+        {
+          "total_cells": 286178,
+          "sections": 4,
+          "core_pass_cells": 284170,
+          "core_pass_rate": 0.992983387961339,
+          "review_flagged_cells": 13257,
+          "review_rate": 0.0463243156357232,
+          "panel_genes_matched": 100,
+          "alarm_positive_sections": 3,
+          "cells_deleted": 0
+        }
+      ],
+      "qc_by_section": [
+        {
+          "region_id": "Region_1",
+          "input_cells": 92911,
+          "core_qc_pass": 92040,
+          "core_qc_fail": 871,
+          "review_flagged": 4664,
+          "nucleus_missing": 1262,
+          "multiple_nuclei": 1716,
+          "segmentation_multiplet": 1831,
+          "area_outlier": 1057,
+          "high_control": 11,
+          "cells_deleted": 0,
+          "core_pass_fraction": 0.990625437246397,
+          "review_fraction": 0.0501985771329552,
+          "core_pass_rate": 0.990625437246397,
+          "review_rate": 0.0501985771329552,
+          "section_id": "62308",
+          "mouse_id": "Mouse_1"
+        },
+        {
+          "region_id": "Region_2",
+          "input_cells": 66980,
+          "core_qc_pass": 66567,
+          "core_qc_fail": 413,
+          "review_flagged": 2703,
+          "nucleus_missing": 908,
+          "multiple_nuclei": 892,
+          "segmentation_multiplet": 952,
+          "area_outlier": 640,
+          "high_control": 18,
+          "cells_deleted": 0,
+          "core_pass_fraction": 0.993833980292625,
+          "review_fraction": 0.0403553299492386,
+          "core_pass_rate": 0.993833980292625,
+          "review_rate": 0.0403553299492386,
+          "section_id": "62309",
+          "mouse_id": "Mouse_1"
+        },
+        {
+          "region_id": "Region_3",
+          "input_cells": 75957,
+          "core_qc_pass": 75423,
+          "core_qc_fail": 534,
+          "review_flagged": 4268,
+          "nucleus_missing": 1673,
+          "multiple_nuclei": 1073,
+          "segmentation_multiplet": 1128,
+          "area_outlier": 1156,
+          "high_control": 5,
+          "cells_deleted": 0,
+          "core_pass_fraction": 0.992969706544492,
+          "review_fraction": 0.0561896862698632,
+          "core_pass_rate": 0.992969706544492,
+          "review_rate": 0.0561896862698632,
+          "section_id": "62310",
+          "mouse_id": "Mouse_2"
+        },
+        {
+          "region_id": "Region_4",
+          "input_cells": 50330,
+          "core_qc_pass": 50140,
+          "core_qc_fail": 190,
+          "review_flagged": 1622,
+          "nucleus_missing": 589,
+          "multiple_nuclei": 610,
+          "segmentation_multiplet": 637,
+          "area_outlier": 269,
+          "high_control": 13,
+          "cells_deleted": 0,
+          "core_pass_fraction": 0.996224915557322,
+          "review_fraction": 0.0322272998211802,
+          "core_pass_rate": 0.996224915557322,
+          "review_rate": 0.0322272998211802,
+          "section_id": "62311",
+          "mouse_id": "Mouse_2"
+        }
+      ],
+      "readiness_by_section": [
+        {
+          "region_id": "Region_1",
+          "status": "HOLD",
+          "biological_interpretation_allowed": "No",
+          "xenium_alarm": "poor_quality_cycles_detected (ERROR)"
+        },
+        {
+          "region_id": "Region_2",
+          "status": "HOLD",
+          "biological_interpretation_allowed": "No",
+          "xenium_alarm": "poor_quality_cycles_detected (ERROR)"
+        },
+        {
+          "region_id": "Region_3",
+          "status": "PASS",
+          "biological_interpretation_allowed": "Section only, with morphology caveat",
+          "xenium_alarm": "None reported"
+        },
+        {
+          "region_id": "Region_4",
+          "status": "HOLD",
+          "biological_interpretation_allowed": "No",
+          "xenium_alarm": "poor_quality_cycles_detected (ERROR)"
+        }
+      ],
+      "alarm_evidence": [
+        {
+          "region_id": "Region_1",
+          "raised": true,
+          "title": "Poor quality imaging cycles detected",
+          "message": "A significant fraction of transcripts were missing from one or more imaging cycles. This could be caused by improper sample handling, insufficient reagent loading, high sample auto-fluorescence, or due to an algorithmic failure. This error may impact the quality score of transcripts from one or more genes. Please contact 10x support (support@10xgenomics.com) for diagnostics and troubleshooting.",
+          "level": "ERROR",
+          "id": "poor_quality_cycles_detected",
+          "evidence_status": "DIRECT_EVIDENCE",
+          "cycle_identity_status": "CYCLE_IDENTITY_UNRESOLVED_REQUIRES_10X",
+          "gene_effect_status": "GENE_EFFECT_UNCONFIRMED"
+        },
+        {
+          "region_id": "Region_2",
+          "raised": true,
+          "title": "Poor quality imaging cycles detected",
+          "message": "A significant fraction of transcripts were missing from one or more imaging cycles. This could be caused by improper sample handling, insufficient reagent loading, high sample auto-fluorescence, or due to an algorithmic failure. This error may impact the quality score of transcripts from one or more genes. Please contact 10x support (support@10xgenomics.com) for diagnostics and troubleshooting.",
+          "level": "ERROR",
+          "id": "poor_quality_cycles_detected",
+          "evidence_status": "DIRECT_EVIDENCE",
+          "cycle_identity_status": "CYCLE_IDENTITY_UNRESOLVED_REQUIRES_10X",
+          "gene_effect_status": "GENE_EFFECT_UNCONFIRMED"
+        },
+        {
+          "region_id": "Region_3",
+          "raised": false,
+          "title": null,
+          "message": null,
+          "level": null,
+          "id": null,
+          "evidence_status": "NO_ALARM_REPORTED",
+          "cycle_identity_status": "NO_POOR_CYCLE_ALARM_REPORTED",
+          "gene_effect_status": "NO_POOR_CYCLE_ALARM_REPORTED"
+        },
+        {
+          "region_id": "Region_4",
+          "raised": true,
+          "title": "Poor quality imaging cycles detected",
+          "message": "A significant fraction of transcripts were missing from one or more imaging cycles. This could be caused by improper sample handling, insufficient reagent loading, high sample auto-fluorescence, or due to an algorithmic failure. This error may impact the quality score of transcripts from one or more genes. Please contact 10x support (support@10xgenomics.com) for diagnostics and troubleshooting.",
+          "level": "ERROR",
+          "id": "poor_quality_cycles_detected",
+          "evidence_status": "DIRECT_EVIDENCE",
+          "cycle_identity_status": "CYCLE_IDENTITY_UNRESOLVED_REQUIRES_10X",
+          "gene_effect_status": "GENE_EFFECT_UNCONFIRMED"
+        }
+      ],
+      "candidate_top": [
+        {
+          "region_id": "Region_1",
+          "gene": "Nr4a1",
+          "gene_set": "short_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -1.49600708181566,
+          "q20_difference": -0.0724826422286861,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_1",
+          "gene": "Rps13",
+          "gene_set": "short_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -1.36615056008784,
+          "q20_difference": -0.0693893340633099,
+          "evidence_tier": "Tier_A",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_1",
+          "gene": "Arhgap18",
+          "gene_set": "long_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -1.08139783981416,
+          "q20_difference": -0.3922174701191,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_1",
+          "gene": "Ptafr",
+          "gene_set": "short_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -0.841635721928889,
+          "q20_difference": -0.164475807069925,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_1",
+          "gene": "Coro2a",
+          "gene_set": "long_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -0.767625390100109,
+          "q20_difference": -0.334612700925095,
+          "evidence_tier": "Tier_A",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_1",
+          "gene": "Cd24a",
+          "gene_set": "long_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -1.64047644073892,
+          "q20_difference": 0.099328932542598,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_1",
+          "gene": "Rpl32",
+          "gene_set": "short_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -1.57537854037739,
+          "q20_difference": 0.074945917472882,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_1",
+          "gene": "Cebpb",
+          "gene_set": "short_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -1.47109455095316,
+          "q20_difference": 0.089182307148817,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_2",
+          "gene": "Atp2b1",
+          "gene_set": "long_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -1.62567455531174,
+          "q20_difference": -0.388609902689421,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_2",
+          "gene": "Ncf1",
+          "gene_set": "short_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -1.27782384504968,
+          "q20_difference": -0.184525216737638,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_2",
+          "gene": "Alox15",
+          "gene_set": "common",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -0.743024579146689,
+          "q20_difference": -0.069722491134504,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_2",
+          "gene": "Cdkn1a",
+          "gene_set": "long_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -0.601478998943219,
+          "q20_difference": -0.105545544842082,
+          "evidence_tier": "Tier_A",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_2",
+          "gene": "Cdk2ap2",
+          "gene_set": "short_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -0.507485686451146,
+          "q20_difference": -0.149082538177173,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_2",
+          "gene": "Cd24a",
+          "gene_set": "long_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -1.57594381034739,
+          "q20_difference": 0.243003874905129,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_2",
+          "gene": "Nr4a1",
+          "gene_set": "short_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -1.51616741275124,
+          "q20_difference": 0.012193170935757,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_2",
+          "gene": "Mxd1",
+          "gene_set": "short_lived",
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE",
+          "log2_count_ratio": -1.46422928957849,
+          "q20_difference": 0.026391987937911,
+          "evidence_tier": "Tier_C",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_4",
+          "gene": "Rps13",
+          "gene_set": "short_lived",
+          "comparison_type": "WITHIN_MOUSE_TECHNICAL_PAIR",
+          "log2_count_ratio": -2.06189939834056,
+          "q20_difference": -0.150496692113922,
+          "evidence_tier": "Tier_A",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_4",
+          "gene": "Il5ra",
+          "gene_set": "common",
+          "comparison_type": "WITHIN_MOUSE_TECHNICAL_PAIR",
+          "log2_count_ratio": -1.7696211111812,
+          "q20_difference": -0.207594105067476,
+          "evidence_tier": "Tier_A",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_4",
+          "gene": "Itgal",
+          "gene_set": "short_lived",
+          "comparison_type": "WITHIN_MOUSE_TECHNICAL_PAIR",
+          "log2_count_ratio": -1.64873911779039,
+          "q20_difference": -0.12290219018869,
+          "evidence_tier": "Tier_A",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_4",
+          "gene": "Cd300a",
+          "gene_set": "long_lived",
+          "comparison_type": "WITHIN_MOUSE_TECHNICAL_PAIR",
+          "log2_count_ratio": -1.44133894421633,
+          "q20_difference": -0.374462182134506,
+          "evidence_tier": "Tier_A",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_4",
+          "gene": "Cdkn1a",
+          "gene_set": "long_lived",
+          "comparison_type": "WITHIN_MOUSE_TECHNICAL_PAIR",
+          "log2_count_ratio": -1.42170029828407,
+          "q20_difference": -0.362628815625494,
+          "evidence_tier": "Tier_A",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_4",
+          "gene": "Coro2a",
+          "gene_set": "long_lived",
+          "comparison_type": "WITHIN_MOUSE_TECHNICAL_PAIR",
+          "log2_count_ratio": -1.41637514028507,
+          "q20_difference": -0.235425199140472,
+          "evidence_tier": "Tier_A",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_4",
+          "gene": "F5",
+          "gene_set": "long_lived",
+          "comparison_type": "WITHIN_MOUSE_TECHNICAL_PAIR",
+          "log2_count_ratio": -1.41617896751621,
+          "q20_difference": -0.227517730496454,
+          "evidence_tier": "Tier_A",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        },
+        {
+          "region_id": "Region_4",
+          "gene": "Srsf2",
+          "gene_set": "long_lived",
+          "comparison_type": "WITHIN_MOUSE_TECHNICAL_PAIR",
+          "log2_count_ratio": -1.38267847882112,
+          "q20_difference": -0.406071125658262,
+          "evidence_tier": "Tier_A",
+          "candidate_status": "CANDIDATE_NOT_CONFIRMED"
+        }
+      ],
+      "candidate_burden": [
+        {
+          "region_id": "Region_1",
+          "affected_genes": 198,
+          "depletion_genes": 98,
+          "q20_loss_genes": 131,
+          "both_signals": 31,
+          "eos_common": 2,
+          "eos_short_lived": 18,
+          "eos_long_lived": 24,
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE"
+        },
+        {
+          "region_id": "Region_2",
+          "affected_genes": 174,
+          "depletion_genes": 92,
+          "q20_loss_genes": 104,
+          "both_signals": 22,
+          "eos_common": 2,
+          "eos_short_lived": 15,
+          "eos_long_lived": 19,
+          "comparison_type": "CROSS_MOUSE_DIAGNOSTIC_REFERENCE"
+        },
+        {
+          "region_id": "Region_4",
+          "affected_genes": 353,
+          "depletion_genes": 297,
+          "q20_loss_genes": 256,
+          "both_signals": 200,
+          "eos_common": 6,
+          "eos_short_lived": 30,
+          "eos_long_lived": 33,
+          "comparison_type": "WITHIN_MOUSE_TECHNICAL_PAIR"
+        }
+      ],
+      "ranking_status": [
+        {
+          "region_id": "Region_1",
+          "subset_review_fraction": 0.074,
+          "subset_rank": 1,
+          "full_review_fraction": 0.0501985771329552,
+          "full_rank": 2,
+          "rank_change": 1,
+          "review_rate_change_pp": -2.38014228670448,
+          "comparison_status": "FULL_DATA_COMPARISON"
+        },
+        {
+          "region_id": "Region_2",
+          "subset_review_fraction": 0.032,
+          "subset_rank": 3,
+          "full_review_fraction": 0.0403553299492386,
+          "full_rank": 3,
+          "rank_change": 0,
+          "review_rate_change_pp": 0.835532994923858,
+          "comparison_status": "FULL_DATA_COMPARISON"
+        },
+        {
+          "region_id": "Region_3",
+          "subset_review_fraction": 0.054,
+          "subset_rank": 2,
+          "full_review_fraction": 0.0561896862698632,
+          "full_rank": 1,
+          "rank_change": -1,
+          "review_rate_change_pp": 0.218968626986321,
+          "comparison_status": "FULL_DATA_COMPARISON"
+        },
+        {
+          "region_id": "Region_4",
+          "subset_review_fraction": 0.022,
+          "subset_rank": 4,
+          "full_review_fraction": 0.0322272998211802,
+          "full_rank": 4,
+          "rank_change": 0,
+          "review_rate_change_pp": 1.02272998211802,
+          "comparison_status": "FULL_DATA_COMPARISON"
+        }
+      ],
+      "spatial_global": [
+        {
+          "region_id": "Region_1",
+          "statistic": 0.0228261037456701,
+          "empirical_p": 0.001,
+          "permutations": 999,
+          "k": 15,
+          "hotspot_bins": 0,
+          "interpretation": "Small but significant global clustering; no grid hotspot passed FDR"
+        },
+        {
+          "region_id": "Region_2",
+          "statistic": 0.0214444303218687,
+          "empirical_p": 0.001,
+          "permutations": 999,
+          "k": 15,
+          "hotspot_bins": 0,
+          "interpretation": "Small but significant global clustering; no grid hotspot passed FDR"
+        },
+        {
+          "region_id": "Region_3",
+          "statistic": 0.0495976234846443,
+          "empirical_p": 0.001,
+          "permutations": 999,
+          "k": 15,
+          "hotspot_bins": 34,
+          "interpretation": "Global clustering plus candidate morphology-review bins"
+        },
+        {
+          "region_id": "Region_4",
+          "statistic": 0.0196582207885123,
+          "empirical_p": 0.001,
+          "permutations": 999,
+          "k": 15,
+          "hotspot_bins": 0,
+          "interpretation": "Small but significant global clustering; no grid hotspot passed FDR"
+        }
+      ],
+      "spatial_effect": [
+        {
+          "region_id": "Region_1",
+          "contrast": "Edge vs interior",
+          "cells": 6886,
+          "flagged": 498,
+          "review_rate": 0.072320650595411,
+          "risk_ratio": 1.4944914102648,
+          "absolute_rate_difference": 0.02389286797408
+        },
+        {
+          "region_id": "Region_1",
+          "contrast": "Dense vs non-dense",
+          "cells": 9292,
+          "flagged": 191,
+          "review_rate": 0.0205553164012053,
+          "risk_ratio": 0.38519049570957,
+          "absolute_rate_difference": -0.0329373108725004
+        },
+        {
+          "region_id": "Region_2",
+          "contrast": "Edge vs interior",
+          "cells": 4272,
+          "flagged": 227,
+          "review_rate": 0.0531367041198502,
+          "risk_ratio": 1.34815569654542,
+          "absolute_rate_difference": 0.0136521088528986
+        },
+        {
+          "region_id": "Region_2",
+          "contrast": "Dense vs non-dense",
+          "cells": 6698,
+          "flagged": 127,
+          "review_rate": 0.0189608838459242,
+          "risk_ratio": 0.445312531910898,
+          "absolute_rate_difference": -0.0237716067814605
+        },
+        {
+          "region_id": "Region_3",
+          "contrast": "Edge vs interior",
+          "cells": 4603,
+          "flagged": 265,
+          "review_rate": 0.0575711492504888,
+          "risk_ratio": 1.02781224660394,
+          "absolute_rate_difference": 0.00147058025645905
+        },
+        {
+          "region_id": "Region_3",
+          "contrast": "Dense vs non-dense",
+          "cells": 7597,
+          "flagged": 85,
+          "review_rate": 0.0111886270896406,
+          "risk_ratio": 0.183880408225788,
+          "absolute_rate_difference": -0.0500021277377438
+        },
+        {
+          "region_id": "Region_4",
+          "contrast": "Edge vs interior",
+          "cells": 4555,
+          "flagged": 247,
+          "review_rate": 0.0542261251372119,
+          "risk_ratio": 1.80787639198325,
+          "absolute_rate_difference": 0.0241878946620617
+        },
+        {
+          "region_id": "Region_4",
+          "contrast": "Dense vs non-dense",
+          "cells": 5033,
+          "flagged": 123,
+          "review_rate": 0.0244387045499702,
+          "risk_ratio": 0.741116195134837,
+          "absolute_rate_difference": -0.0086539947457889
+        }
+      ],
+      "within_mouse_concordance": [
+        {
+          "mouse_id": "Mouse_1",
+          "section_a": 62308,
+          "section_b": 62309,
+          "region_a": "Region_1",
+          "region_b": "Region_2",
+          "pair_status": "ESTIMABLE",
+          "review_rate_a": 0.0501985771329552,
+          "review_rate_b": 0.0403553299492386,
+          "review_rate_difference": 0.00984324718371662,
+          "median_count_ratio": 1.16216216216216,
+          "median_feature_ratio": 1.125,
+          "median_area_ratio": 1.22679509632224,
+          "median_control_fraction_ratio": null,
+          "count_quantile_distance": 0.193203218626947,
+          "feature_quantile_distance": 0.0911111111111111,
+          "area_quantile_distance": 0.219598547524888,
+          "control_quantile_distance": 9.22957989896886e-05,
+          "gene_count_spearman": 0.936144554041828,
+          "gene_detection_spearman": 0.934301724203594,
+          "review_criterion": true,
+          "count_criterion": true,
+          "feature_criterion": true,
+          "gene_count_criterion": true,
+          "gene_detection_criterion": true,
+          "concordance_status": "CONCORDANT",
+          "interpretation": "ADVISORY_TECHNICAL_CONCORDANCE_NOT_BIOLOGICAL_TEST",
+          "sections": "62308 / 62309",
+          "qualified_status": "CONCORDANT"
+        },
+        {
+          "mouse_id": "Mouse_2",
+          "section_a": 62310,
+          "section_b": 62311,
+          "region_a": "Region_3",
+          "region_b": "Region_4",
+          "pair_status": "ESTIMABLE",
+          "review_rate_a": 0.0561896862698632,
+          "review_rate_b": 0.0322272998211802,
+          "review_rate_difference": 0.023962386448683,
+          "median_count_ratio": 0.969543147208122,
+          "median_feature_ratio": 0.857142857142857,
+          "median_area_ratio": 1.82026431718062,
+          "median_control_fraction_ratio": null,
+          "count_quantile_distance": 0.0657860657860658,
+          "feature_quantile_distance": 0.173400673400673,
+          "area_quantile_distance": 0.665384026341987,
+          "control_quantile_distance": 0.000234623473909984,
+          "gene_count_spearman": 0.929825675797917,
+          "gene_detection_spearman": 0.927799872844734,
+          "review_criterion": true,
+          "count_criterion": true,
+          "feature_criterion": true,
+          "gene_count_criterion": true,
+          "gene_detection_criterion": true,
+          "concordance_status": "CONCORDANT",
+          "interpretation": "ADVISORY_TECHNICAL_CONCORDANCE_NOT_BIOLOGICAL_TEST",
+          "sections": "62310 / 62311",
+          "qualified_status": "PRESPECIFIED_CONCORDANT; AREA_REVIEW"
+        }
+      ],
+      "gene_quality": [
+        {
+          "region_id": "Region_1",
+          "panel_genes": 479,
+          "zero_count_genes": 0,
+          "median_fraction_q20": 0.786773794808405,
+          "genes_fraction_q20_below_0_8": 266,
+          "median_mean_qv": 26.5450421940928
+        },
+        {
+          "region_id": "Region_2",
+          "panel_genes": 479,
+          "zero_count_genes": 0,
+          "median_fraction_q20": 0.793141260786131,
+          "genes_fraction_q20_below_0_8": 250,
+          "median_mean_qv": 26.9613352545629
+        },
+        {
+          "region_id": "Region_3",
+          "panel_genes": 479,
+          "zero_count_genes": 0,
+          "median_fraction_q20": 0.765043638033992,
+          "genes_fraction_q20_below_0_8": 307,
+          "median_mean_qv": 30.8197757068394
+        },
+        {
+          "region_id": "Region_4",
+          "panel_genes": 479,
+          "zero_count_genes": 0,
+          "median_fraction_q20": 0.688726864834548,
+          "genes_fraction_q20_below_0_8": 350,
+          "median_mean_qv": 24.1617608409987
+        }
+      ],
+      "cell_distribution": [
+        {
+          "region_id": "Region_1",
+          "median_counts": 111,
+          "p05_counts": 25,
+          "p95_counts": 317,
+          "median_features": 48,
+          "p05_features": 17,
+          "p95_features": 96,
+          "median_cell_area": 51.5684393718839,
+          "p95_cell_area": 150.099380448461
+        },
+        {
+          "region_id": "Region_2",
+          "median_counts": 129,
+          "p05_counts": 22,
+          "p95_counts": 374,
+          "median_features": 54,
+          "p05_features": 15,
+          "p95_features": 99,
+          "median_cell_area": 63.263908546418,
+          "p95_cell_area": 175.161100108176
+        },
+        {
+          "region_id": "Region_3",
+          "median_counts": 197,
+          "p05_counts": 46,
+          "p95_counts": 473,
+          "median_features": 70,
+          "p05_features": 28,
+          "p95_features": 117,
+          "median_cell_area": 51.25234561041,
+          "p95_cell_area": 158.272661995143
+        },
+        {
+          "region_id": "Region_4",
+          "median_counts": 191,
+          "p05_counts": 27,
+          "p95_counts": 498,
+          "median_features": 60,
+          "p05_features": 18,
+          "p95_features": 99,
+          "median_cell_area": 93.2928158864379,
+          "p95_cell_area": 243.076102573425
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "qc-summary-source",
+      "label": "Full-data combined section QC summary",
+      "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/combined_qc_summary.tsv",
+      "query": {
+        "sql": "SELECT region_id, input_cells, core_qc_pass, review_flagged, nucleus_missing, multiple_nuclei, area_outlier, high_control FROM combined_qc_summary ORDER BY region_id",
+        "description": "Section-specific summaries generated from all 286,178 segmented cells.",
+        "tables_used": [
+          "combined_qc_summary.tsv",
+          "combined_cell_qc_metadata.tsv.gz"
+        ],
+        "filters": [
+          "scWAT",
+          "Regions 1-4",
+          "complete full-HPC sections"
+        ],
+        "metric_definitions": [
+          "Core pass uses section-specific robust transcript-count and detected-gene intervals.",
+          "Review flagged means at least one overlapping QC review flag."
+        ]
+      }
+    },
+    {
+      "id": "readiness-source",
+      "label": "Section readiness gates",
+      "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/combined_readiness.tsv",
+      "query": {
+        "sql": "SELECT region_id, status, biological_interpretation_allowed FROM combined_readiness ORDER BY region_id",
+        "description": "Worst-case readiness from integrity, panel, metadata, and Xenium-alarm gates.",
+        "tables_used": [
+          "combined_readiness.tsv"
+        ]
+      }
+    },
+    {
+      "id": "alarm-source",
+      "label": "Xenium analysis alarms",
+      "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/combined_analysis_alerts.tsv",
+      "query": {
+        "sql": "SELECT region_id, id, level, title, message FROM combined_analysis_alerts WHERE raised = TRUE ORDER BY region_id, level, id",
+        "description": "Raised alarms parsed from each section analysis summary.",
+        "tables_used": [
+          "combined_analysis_alerts.tsv"
+        ],
+        "filters": [
+          "raised = TRUE"
+        ]
+      }
+    },
+    {
+      "id": "extended-alarm-source",
+      "label": "Direct poor-cycle alarm evidence",
+      "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/combined_cycle_alarm_evidence.tsv",
+      "query": {
+        "sql": "SELECT region_id, evidence_status, cycle_identity_status, gene_effect_status FROM combined_cycle_alarm_evidence ORDER BY region_id",
+        "description": "Directly available per-section alarm evidence with explicit cycle/gene interpretation limits.",
+        "tables_used": [
+          "combined_cycle_alarm_evidence.tsv"
+        ]
+      }
+    },
+    {
+      "id": "candidate-source",
+      "label": "Full-data provisional candidate affected-gene diagnostics",
+      "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/candidate_cycle_affected_genes.tsv",
+      "query": {
+        "sql": "SELECT gene, region_id, comparison_type, log2_count_ratio, detection_fraction_difference, q20_difference, evidence_tier, candidate_status FROM candidate_cycle_affected_genes",
+        "description": "Cross-section count-depletion and transcript-QV diagnostics; candidates are not cycle-confirmed.",
+        "tables_used": [
+          "candidate_cycle_affected_genes.tsv",
+          "combined_gene_transcript_quality.tsv"
+        ],
+        "filters": [
+          "alarm-positive Regions 1, 2, and 4",
+          "prespecified depletion/Q20 thresholds"
+        ]
+      }
+    },
+    {
+      "id": "ranking-source",
+      "label": "Subset versus full-data QC ranking",
+      "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/subset_full_qc_ranking.tsv",
+      "query": {
+        "sql": "SELECT region_id, review_fraction, subset_rank, full_rank, comparison_status FROM subset_full_qc_ranking ORDER BY region_id",
+        "description": "Descriptive comparison of fixed subset and complete-section review burden.",
+        "tables_used": [
+          "subset_full_qc_ranking.tsv",
+          "subset_full_qc_rank_agreement.tsv"
+        ]
+      }
+    },
+    {
+      "id": "spatial-source",
+      "label": "Full-data spatial QC diagnostics",
+      "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/combined_spatial_qc.tsv",
+      "query": {
+        "sql": "SELECT region_id, statistic, empirical_p, k, permutations FROM combined_spatial_qc WHERE diagnostic_type='global_clustering' ORDER BY region_id",
+        "description": "Complete-section kNN permutation, edge/density proxy, and grid-hotspot diagnostics.",
+        "tables_used": [
+          "combined_spatial_qc.tsv",
+          "combined_spatial_hotspots.tsv"
+        ],
+        "filters": [
+          "FULL_HPC",
+          "k=15",
+          "999 permutations",
+          "100-micron bins"
+        ]
+      }
+    },
+    {
+      "id": "concordance-source",
+      "label": "Within-mouse full-data technical concordance",
+      "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/slide_summary/within_mouse_section_concordance.tsv",
+      "query": {
+        "sql": "SELECT mouse_id, section_a, section_b, review_rate_difference, gene_count_spearman, gene_detection_spearman, concordance_status FROM within_mouse_section_concordance ORDER BY mouse_id",
+        "description": "Advisory complete-section comparison for the two verified technical pairs.",
+        "tables_used": [
+          "within_mouse_section_concordance.tsv",
+          "within_mouse_gene_concordance.tsv"
+        ]
+      }
+    },
+    {
+      "id": "panel-source",
+      "label": "Expected and installed Xenium panel reconciliation",
+      "path": "adipose_analysis/hpc_return/2026-08-15_full_qc/scwat_qc_outputs/full_notebook_qc_v1/sections/Region_1/panel_reconciliation.tsv",
+      "query": {
+        "sql": "SELECT expected_gene, gene_set, status FROM panel_reconciliation ORDER BY expected_gene",
+        "description": "The 100 expected Eos genes reconciled with the installed custom Xenium panel.",
+        "tables_used": [
+          "config/eos_gene_sets.tsv",
+          "panel_reconciliation.tsv"
+        ],
+        "filters": [
+          "7 common",
+          "47 short-lived",
+          "46 long-lived"
+        ]
+      }
+    },
+    {
+      "id": "methods-source",
+      "label": "Reusable Xenium QC implementation",
+      "path": "R/source.R",
+      "query": {
+        "sql": "SOURCE R/source.R; EXECUTE notebooks/01_section_phase0_2_QC.ipynb PER SECTION; EXECUTE notebooks/02_slide_QC_summary.ipynb",
+        "description": "Reusable implementation and notebook execution path.",
+        "tables_used": [
+          "R/source.R",
+          "notebooks/01_section_phase0_2_QC.ipynb",
+          "notebooks/02_slide_QC_summary.ipynb"
+        ]
+      }
+    },
+    {
+      "id": "metadata-source",
+      "label": "User-verified scWAT experimental design",
+      "path": "config/scwat_sample_manifest.tsv",
+      "query": {
+        "sql": "SELECT section_id, mouse_id, genotype, treatment, age_weeks FROM verified_scwat_metadata ORDER BY section_id",
+        "description": "Experimental design supplied by the investigator after the local subset QC run.",
+        "tables_used": [
+          "config/scwat_sample_manifest.tsv"
+        ],
+        "filters": [
+          "scWAT only"
+        ]
+      }
+    }
+  ]
+}

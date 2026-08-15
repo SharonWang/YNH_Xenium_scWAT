@@ -34,11 +34,11 @@ def section_cells(incomplete=False):
         markdown("## Goal\n\nValidate one Xenium section, reconcile its panel, import sparse counts, calculate section-specific QC flags, and write reload-validated core and extended artifact bundles."),
         markdown("## Setup\n\n### Parameters\n\nChange `REGION_ID` for manual execution. Launchers inject the same parameters without editing the source notebook."),
         code(
-            'PROJECT_ROOT <- "/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu"\n'
+            'PROJECT_ROOT <- "/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu/YNH_Xenium"\n'
             'PIPELINE_REPO <- file.path(PROJECT_ROOT, "adipose_analysis", "YNH_Xenium_scWAT")\n'
             'INPUT_ROOT <- file.path(PROJECT_ROOT, "adipose_data")\n'
             'REGION_ID <- "Region_1"\n'
-            'RUN_LABEL <- "full_notebook_qc_v1"\n'
+            'RUN_LABEL <- "full_notebook_qc_v2"\n'
             'METADATA_PATH <- file.path(PIPELINE_REPO, "config", "scwat_sample_manifest.tsv")\n'
             'EXPECTED_SECTION_COUNT <- 4L\n'
             'SEED <- 20260814L\n'
@@ -210,9 +210,9 @@ def summary_cells(incomplete=False):
         markdown("## Goal\n\nVerify complete Region 1-4 coverage and answer four technical-QC questions: direct alarm/candidate-gene evidence, subset-versus-full review burden, spatial clustering/morphology-review targets, and within-mouse section concordance."),
         markdown("## Setup\n\n### Parameters"),
         code(
-            'PROJECT_ROOT <- "/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu"\n'
+            'PROJECT_ROOT <- "/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu/YNH_Xenium"\n'
             'PIPELINE_REPO <- file.path(PROJECT_ROOT, "adipose_analysis", "YNH_Xenium_scWAT")\n'
-            'RUN_LABEL <- "full_notebook_qc_v1"\n'
+            'RUN_LABEL <- "full_notebook_qc_v2"\n'
             'EXPECTED_SECTION_COUNT <- 4L\n'
             'METADATA_PATH <- file.path(PIPELINE_REPO, "config", "scwat_sample_manifest.tsv")\n'
             'EXTENDED_QC_CONFIG_PATH <- file.path(PIPELINE_REPO, "config", "extended_qc_defaults.tsv")\n'
@@ -247,10 +247,16 @@ def summary_cells(incomplete=False):
             'extended_slide_summary <- summarise_extended_slide_qc(extended_slide_data, slide_summary$section_summary, manifest, extended_config, subset_reference)\n'
             'slide_summary$section_summary\n'
         ),
-        markdown("## Question 1 - Which alarms and candidate genes are affected?\n\nThe alarm table reports directly available 10x evidence. Candidate genes are ranked from cross-section abundance and transcript-QV patterns, remain `CANDIDATE_NOT_CONFIRMED`, and cannot identify the exact cycle; cycle identity requires 10x diagnostics."),
+        markdown("## Question 1 - Which alarms and candidate genes are affected?\n\nThe alarm table reports directly available 10x evidence. The displayed candidate list contains only section-gene comparisons crossing the prespecified depletion and/or Q20-loss thresholds. These remain `CANDIDATE_NOT_CONFIRMED`; exact cycle identity requires 10x diagnostics."),
         code(
             'extended_slide_data$cycle_alarm_evidence\n'
-            'candidate_display <- extended_slide_summary$candidates[order(extended_slide_summary$candidates$evidence_tier, extended_slide_summary$candidates$gene), , drop = FALSE]\n'
+            'candidate_display <- extended_slide_summary$candidates[extended_slide_summary$candidates$section_candidate_flag, , drop = FALSE]\n'
+            'gene_sets <- unique(extended_slide_data$gene_quality[, c("gene", "gene_set")])\n'
+            'candidate_display <- merge(candidate_display, gene_sets, by = "gene", all.x = TRUE, sort = FALSE)\n'
+            'candidate_counts <- aggregate(section_candidate_flag ~ region_id + section_evidence_status, candidate_display, sum)\n'
+            'candidate_counts\n'
+            'with(candidate_display, table(region_id, gene_set, useNA = "ifany"))\n'
+            'candidate_display <- candidate_display[order(candidate_display$region_id, candidate_display$evidence_tier, candidate_display$log2_count_ratio, candidate_display$q20_difference), , drop = FALSE]\n'
             'candidate_display[seq_len(min(30L, nrow(candidate_display))), , drop = FALSE]\n'
         ),
         markdown("## Question 2 - Does full-data QC reproduce the subset ranking?\n\nThe comparison is descriptive across four technical sections. `NOT_RUN_LOCAL_SUBSET` means this question remains pending until the full-HPC run."),
