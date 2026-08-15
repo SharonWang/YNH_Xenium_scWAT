@@ -201,4 +201,30 @@ stopifnot(all(c("cell_yield", "counts", "features", "review", "flags", "threshol
 unlink(file.path(slide_run_root, "sections", "Region_4"), recursive = TRUE)
 expect_error(validate_four_section_outputs(slide_run_root), "exactly four")
 
+# Evidence-only downstream masks are annotations and preserve every cell.
+mask_fixture <- data.frame(
+  region_id = rep("Region_3", 4), cell_id = paste0("mask", 1:4),
+  grid_id = c("g1", "g1", "g2", "g3"),
+  qc_core_pass = c(TRUE, FALSE, TRUE, TRUE),
+  segmentation_multiplet_flag = c(FALSE, FALSE, TRUE, FALSE),
+  high_control_flag = c(FALSE, FALSE, FALSE, TRUE),
+  qc_review_flag = c(FALSE, TRUE, TRUE, TRUE), stringsAsFactors = FALSE
+)
+hotspot_fixture <- data.frame(
+  grid_id = "g1", hotspot_status = "MORPHOLOGY_REVIEW_REQUIRED",
+  stringsAsFactors = FALSE
+)
+masks <- build_cell_downstream_masks(mask_fixture, hotspot_fixture, provenance = "unit_fixture")
+stopifnot(nrow(masks) == nrow(mask_fixture))
+stopifnot(identical(masks$primary_include, c(TRUE, FALSE, FALSE, FALSE)))
+stopifnot(identical(masks$strict_include, c(TRUE, FALSE, FALSE, FALSE)))
+stopifnot(identical(masks$hotspot_sensitivity_include, c(FALSE, FALSE, FALSE, FALSE)))
+stopifnot(identical(section_downstream_status(paste0("Region_", 1:4)),
+                    c("PRIMARY_CONDITIONAL", "PRIMARY_CONDITIONAL", "PRIMARY", "SENSITIVITY_ONLY")))
+mask_section_decision <- build_one_section_downstream_decision(
+  masks, "unit_run", "LOCAL_SUBSET", "unit_fixture", "2026-08-15 UTC"
+)
+stopifnot(nrow(mask_section_decision) == 1L)
+stopifnot(mask_section_decision$region_id == "Region_3", mask_section_decision$section_status == "PRIMARY")
+
 cat("All reusable scWAT Xenium function tests passed.\n")

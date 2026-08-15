@@ -526,7 +526,9 @@ find_spatial_qc_hotspots <- function(annotated_cells, permutations = 999L, min_b
   if (!length(bins)) return(data.frame(
     grid_id = character(), cells = integer(), flagged = integer(), review_rate = numeric(), global_rate = numeric(),
     rate_difference = numeric(), empirical_p = numeric(), adjusted_p = numeric(), hotspot_status = character(),
-    x_min = numeric(), x_max = numeric(), y_min = numeric(), y_max = numeric(), stringsAsFactors = FALSE
+    x_min = numeric(), x_max = numeric(), y_min = numeric(), y_max = numeric(),
+    fdr_threshold = numeric(), min_bin_cells_threshold = integer(), permutations = integer(), seed = integer(),
+    stringsAsFactors = FALSE
   ))
   observed <- flagged_per_bin[eligible]
   denominators <- cells_per_bin[eligible]
@@ -549,7 +551,8 @@ find_spatial_qc_hotspots <- function(annotated_cells, permutations = 999L, min_b
     global_rate = global_rate, rate_difference = observed / denominators - global_rate,
     empirical_p = empirical_p, adjusted_p = adjusted_p,
     hotspot_status = ifelse(adjusted_p <= fdr & observed / denominators > global_rate, "MORPHOLOGY_REVIEW_REQUIRED", "NO_HOTSPOT_EVIDENCE"),
-    bounds, stringsAsFactors = FALSE
+    bounds, fdr_threshold = as.numeric(fdr), min_bin_cells_threshold = as.integer(min_bin_cells),
+    permutations = as.integer(permutations), seed = as.integer(seed), stringsAsFactors = FALSE
   )
 }
 
@@ -608,6 +611,107 @@ rank_candidate_cycle_genes <- function(gene_quality, config, reference_region = 
   out$threshold_abs_q20_delta <- as.numeric(config$candidate_abs_q20_delta)
   rownames(out) <- NULL
   out[order(out$gene, out$region_id), , drop = FALSE]
+}
+
+build_gene_downstream_decision <- function(candidates, panel_genes, run_label,
+                                           execution_mode, provenance) {
+  required <- c(
+    "gene", "region_id", "section_candidate_flag", "section_evidence_status",
+    "threshold_abs_log2_ratio", "threshold_abs_q20_delta"
+  )
+  missing <- setdiff(required, names(candidates))
+  if (length(missing)) {
+    stop(sprintf("Candidate evidence lacks gene-decision fields: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  }
+  if (is.data.frame(panel_genes)) {
+    gene_column <- intersect(c("gene", "feature_name", "name"), names(panel_genes))
+    if (!length(gene_column)) stop("Panel features require a gene column.", call. = FALSE)
+    panel_genes <- panel_genes[[gene_column[[1]]]]
+  }
+  panel_genes <- unique(as.character(panel_genes))
+  panel_genes <- panel_genes[!is.na(panel_genes) & nzchar(panel_genes)]
+  if (!length(panel_genes)) stop("Panel genes cannot be empty.", call. = FALSE)
+  if (!all(panel_genes %in% candidates$gene)) {
+    stop("Candidate evidence must contain every panel gene.", call. = FALSE)
+  }
+  alarm_regions <- c("Region_1", "Region_2", "Region_4")
+  candidate_alarm <- candidates[candidates$region_id %in% alarm_regions, , drop = FALSE]
+  recurrence <- vapply(panel_genes, function(gene) {
+    rows <- candidate_alarm[candidate_alarm$gene == gene, , drop = FALSE]
+    length(unique(rows$region_id[as.logical(rows$section_candidate_flag)]))
+  }, integer(1))
+  flag_for <- function(gene, region) {
+    rows <- candidate_alarm[candidate_alarm$gene == gene & candidate_alarm$region_id == region, , drop = FALSE]
+    if (!nrow(rows)) return(NA)
+    any(as.logical(rows$section_candidate_flag))
+  }
+  evidence_for <- function(gene, region) {
+    rows <- candidate_alarm[candidate_alarm$gene == gene & candidate_alarm$region_id == region, , drop = FALSE]
+    if (!nrow(rows)) return(NA_character_)
+    paste(unique(as.character(rows$section_evidence_status)), collapse = ";")
+  }
+  out <- data.frame(
+    gene = panel_genes,
+    raw_panel_status = "RAW_COMPLETE_PANEL",
+    alarm_positive_section_count = recurrence,
+    conservative_evidence_status = ifelse(
+      recurrence == 0L, "CONSERVATIVE_NO_SIGNAL_DETECTED", "NOT_IN_CONSERVATIVE_ZERO_ALARM_SET"
+    ),
+    primary_feature_status = ifelse(
+      recurrence <= 1L, "PROVISIONAL_PRIMARY_FEATURES", "EXCLUDED_FROM_PRIMARY_FEATURES"
+    ),
+    technical_risk_status = ifelse(
+      recurrence >= 2L, "TECHNICAL_RISK_SENSITIVITY_ONLY", "NOT_IN_TECHNICAL_RISK_SET"
+    ),
+    region_1_flag = vapply(panel_genes, flag_for, logical(1), region = "Region_1"),
+    region_2_flag = vapply(panel_genes, flag_for, logical(1), region = "Region_2"),
+    region_4_flag = vapply(panel_genes, flag_for, logical(1), region = "Region_4"),
+    region_1_evidence = vapply(panel_genes, evidence_for, character(1), region = "Region_1"),
+    region_2_evidence = vapply(panel_genes, evidence_for, character(1), region = "Region_2"),
+    region_4_evidence = vapply(panel_genes, evidence_for, character(1), region = "Region_4"),
+    threshold_abs_log2_ratio = unique(candidates$threshold_abs_log2_ratio)[[1]],
+    threshold_abs_q20_delta = unique(candidates$threshold_abs_q20_delta)[[1]],
+    expected_full_raw_count = 479L,
+    expected_full_conservative_count = 67L,
+    expected_full_provisional_count = 245L,
+    expected_full_technical_risk_count = 234L,
+    decision_rule = "0 alarm sections=conservative subset; 0-1=provisional primary; >=2=technical-risk sensitivity-only",
+    cycle_mapping_status = "UNAVAILABLE_EVIDENCE_ONLY_DECISION",
+    run_label = run_label, execution_mode = toupper(execution_mode),
+    provenance = provenance, stringsAsFactors = FALSE
+  )
+  out[order(out$gene), , drop = FALSE]
+}
+
+build_eos_gene_decision <- function(gene_decision, eos_gene_sets, run_label,
+                                    execution_mode, provenance) {
+  required_gene <- c("gene", "primary_feature_status", "conservative_evidence_status", "technical_risk_status")
+  required_eos <- c("gene", "gene_set")
+  if (length(setdiff(required_gene, names(gene_decision)))) stop("Gene decision lacks Eos decision fields.", call. = FALSE)
+  if (length(setdiff(required_eos, names(eos_gene_sets)))) stop("Eos gene set requires gene and gene_set.", call. = FALSE)
+  if (anyDuplicated(eos_gene_sets$gene)) stop("Eos gene set contains duplicated genes.", call. = FALSE)
+  matched <- match(as.character(eos_gene_sets$gene), gene_decision$gene)
+  out <- eos_gene_sets[, required_eos, drop = FALSE]
+  out$panel_membership <- !is.na(matched)
+  out$retained_provisional <- !is.na(matched) &
+    gene_decision$primary_feature_status[matched] == "PROVISIONAL_PRIMARY_FEATURES"
+  out$conservative_sensitivity <- !is.na(matched) &
+    gene_decision$conservative_evidence_status[matched] == "CONSERVATIVE_NO_SIGNAL_DETECTED"
+  out$technical_risk <- !is.na(matched) &
+    gene_decision$technical_risk_status[matched] == "TECHNICAL_RISK_SENSITIVITY_ONLY"
+  out$provisional_signature_status <- ifelse(
+    out$retained_provisional, "EOS_PROVISIONAL_PRIMARY_53", "NOT_IN_EOS_PROVISIONAL_PRIMARY"
+  )
+  out$complete_signature_status <- "RAW_COMPLETE_EOS_100"
+  expected_by_set <- c(common = 4L, short_lived = 27L, long_lived = 22L)
+  out$expected_full_retained_total <- 53L
+  out$expected_full_gene_set_count <- unname(expected_by_set[as.character(out$gene_set)])
+  out$selection_threshold <- "alarm_positive_section_count <= 1"
+  out$decision_rule <- "Retain Eos genes eligible as PROVISIONAL_PRIMARY_FEATURES; compare with complete Eos signature in Region_3"
+  out$run_label <- run_label
+  out$execution_mode <- toupper(execution_mode)
+  out$provenance <- provenance
+  out
 }
 
 compare_subset_full_qc <- function(full_summary, subset_reference) {
@@ -930,6 +1034,62 @@ section_palette <- function() {
   c(Region_1 = "#3C5488", Region_2 = "#00A087", Region_3 = "#E64B35", Region_4 = "#F39B7F")
 }
 
+section_downstream_status <- function(region_id) {
+  status <- c(
+    Region_1 = "PRIMARY_CONDITIONAL",
+    Region_2 = "PRIMARY_CONDITIONAL",
+    Region_3 = "PRIMARY",
+    Region_4 = "SENSITIVITY_ONLY"
+  )
+  region_id <- as.character(region_id)
+  unknown <- setdiff(unique(region_id), names(status))
+  if (length(unknown)) {
+    stop(sprintf("Unknown scWAT region: %s", paste(unknown, collapse = ", ")), call. = FALSE)
+  }
+  unname(status[region_id])
+}
+
+build_cell_downstream_masks <- function(cell_metadata, spatial_hotspots = data.frame(), provenance) {
+  required <- c(
+    "region_id", "cell_id", "qc_core_pass", "segmentation_multiplet_flag",
+    "high_control_flag", "qc_review_flag"
+  )
+  missing <- setdiff(required, names(cell_metadata))
+  if (length(missing)) {
+    stop(sprintf("Cell metadata lacks downstream-mask fields: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  }
+  if (anyDuplicated(paste(cell_metadata$region_id, cell_metadata$cell_id, sep = "::"))) {
+    stop("Cell downstream-mask keys must be unique within region.", call. = FALSE)
+  }
+  if (length(provenance) != 1L || is.na(provenance) || !nzchar(provenance)) {
+    stop("A non-empty provenance value is required for downstream masks.", call. = FALSE)
+  }
+  out <- cell_metadata
+  out$primary_include <- as.logical(out$qc_core_pass) &
+    !as.logical(out$segmentation_multiplet_flag) & !as.logical(out$high_control_flag)
+  out$strict_include <- !as.logical(out$qc_review_flag)
+  hotspot_ids <- character()
+  if (nrow(spatial_hotspots)) {
+    hotspot_required <- c("grid_id", "hotspot_status")
+    hotspot_missing <- setdiff(hotspot_required, names(spatial_hotspots))
+    if (length(hotspot_missing)) stop("Spatial hotspots lack grid_id or hotspot_status.", call. = FALSE)
+    hotspot_ids <- unique(as.character(spatial_hotspots$grid_id[
+      spatial_hotspots$hotspot_status == "MORPHOLOGY_REVIEW_REQUIRED"
+    ]))
+  }
+  out$hotspot_review_cell <- FALSE
+  if ("grid_id" %in% names(out)) {
+    out$hotspot_review_cell <- out$region_id == "Region_3" & as.character(out$grid_id) %in% hotspot_ids
+  }
+  out$hotspot_sensitivity_include <- out$primary_include & !out$hotspot_review_cell
+  out$section_status <- section_downstream_status(out$region_id)
+  out$mask_rule_primary <- "qc_core_pass AND NOT segmentation_multiplet_flag AND NOT high_control_flag"
+  out$mask_rule_strict <- "NOT qc_review_flag"
+  out$mask_rule_hotspot_sensitivity <- "primary_include AND NOT Region_3 morphology-review hotspot cell"
+  out$provenance <- provenance
+  out
+}
+
 cell_style_theme <- function(base_size = 10) {
   require_package("ggplot2")
   ggplot2::theme_classic(base_size = base_size) +
@@ -1130,6 +1290,319 @@ validate_extended_section_artifacts <- function(output_dir, region_id, mode = "L
   status <- tryCatch(utils::read.delim(file.path(output_dir, "extended_qc_status.tsv"), check.names = FALSE, stringsAsFactors = FALSE), error = identity)
   if (inherits(status, "error") || nrow(status) != 1L || !identical(as.character(status$region_id), region_id) || !identical(as.character(status$mode), mode)) {
     return(fail("Extended QC status does not match section or mode."))
+  }
+  TRUE
+}
+
+evidence_only_required_artifacts <- function() {
+  c(
+    "cell_downstream_masks.tsv.gz",
+    "section_downstream_decision.tsv",
+    "gene_downstream_decision.tsv",
+    "eos_gene_decision_summary.tsv",
+    "hotspot_sensitivity_decision.tsv",
+    "evidence_only_qc_release.tsv"
+  )
+}
+
+add_evidence_provenance <- function(table, run_label, execution_mode, provenance,
+                                    source_artifact, generated_utc) {
+  table$run_label <- run_label
+  table$execution_mode <- toupper(execution_mode)
+  table$generated_utc <- generated_utc
+  table$source_artifact <- source_artifact
+  table$provenance <- provenance
+  table
+}
+
+build_one_section_downstream_decision <- function(masks, run_label, execution_mode,
+                                                  provenance, generated_utc) {
+  regions <- unique(as.character(masks$region_id))
+  if (length(regions) != 1L) stop("One-section downstream decision requires exactly one region.", call. = FALSE)
+  region <- regions[[1]]
+  x <- masks
+  out <- data.frame(
+    region_id = region, section_status = section_downstream_status(region),
+    input_cells = nrow(x), primary_include_cells = sum(x$primary_include),
+    primary_exclude_cells = sum(!x$primary_include), strict_include_cells = sum(x$strict_include),
+    strict_exclude_cells = sum(!x$strict_include),
+    hotspot_sensitivity_include_cells = sum(x$hotspot_sensitivity_include),
+    hotspot_review_cells = sum(x$hotspot_review_cell),
+    cluster_discovery_eligible = region %in% c("Region_1", "Region_2", "Region_3"),
+    primary_gene_result_eligible = region %in% c("Region_1", "Region_2", "Region_3"),
+    region4_mapping_rule = if (region == "Region_4") "MAP_TO_FINAL_REGION_1_3_REFERENCE; LOW_CONFIDENCE=Uncertain" else "NOT_APPLICABLE",
+    primary_mask_rule = "qc_core_pass AND NOT segmentation_multiplet_flag AND NOT high_control_flag",
+    strict_mask_rule = "NOT qc_review_flag",
+    hotspot_sensitivity_mask_rule = "primary_include AND NOT Region_3 morphology-review hotspot cell",
+    decision_rule = "Fixed evidence-only section decision approved 2026-08-15; masks annotate without deleting raw cells",
+    stringsAsFactors = FALSE
+  )
+  add_evidence_provenance(
+    out, run_label, execution_mode, provenance,
+    "section cell and spatial QC artifacts", generated_utc
+  )
+}
+
+build_section_downstream_decision <- function(masks, run_label, execution_mode,
+                                              provenance, generated_utc) {
+  regions <- paste0("Region_", 1:4)
+  if (!identical(sort(unique(as.character(masks$region_id))), regions)) {
+    stop("Slide section decisions require Region_1 through Region_4.", call. = FALSE)
+  }
+  rows <- lapply(regions, function(region) {
+    build_one_section_downstream_decision(
+      masks[masks$region_id == region, , drop = FALSE], run_label,
+      execution_mode, provenance, generated_utc
+    )
+  })
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  out
+}
+
+build_hotspot_sensitivity_decision <- function(spatial_hotspots, masks, run_label,
+                                               execution_mode, provenance, generated_utc) {
+  positive <- spatial_hotspots[
+    spatial_hotspots$region_id == "Region_3" &
+      spatial_hotspots$hotspot_status == "MORPHOLOGY_REVIEW_REQUIRED", , drop = FALSE
+  ]
+  if (nrow(positive)) {
+    positive$hotspot_cells_from_mask <- vapply(as.character(positive$grid_id), function(id) {
+      sum(masks$region_id == "Region_3" & masks$grid_id == id, na.rm = TRUE)
+    }, integer(1))
+    positive$primary_handling <- "KEEP_IN_PRIMARY"
+    positive$sensitivity_handling <- "EXCLUDE_IN_HOTSPOT_SENSITIVITY"
+    positive$morphology_status <- "NOT_CONFIRMED_AS_ARTIFACT"
+    positive$decision_rule <- "FDR-positive Region_3 bins are retained in primary and excluded only in hotspot sensitivity"
+    out <- positive
+  } else {
+    out <- data.frame(
+      region_id = "Region_3", grid_id = NA_character_, cells = 0L, flagged = 0L,
+      review_rate = NA_real_, global_rate = NA_real_, rate_difference = NA_real_,
+      empirical_p = NA_real_, adjusted_p = NA_real_, hotspot_status = "NO_FDR_POSITIVE_BIN_IN_THIS_RUN",
+      x_min = NA_real_, x_max = NA_real_, y_min = NA_real_, y_max = NA_real_,
+      fdr_threshold = NA_real_, min_bin_cells_threshold = NA_integer_,
+      permutations = NA_integer_, seed = NA_integer_,
+      hotspot_cells_from_mask = 0L, primary_handling = "KEEP_IN_PRIMARY",
+      sensitivity_handling = "NO_CELLS_TO_EXCLUDE",
+      morphology_status = "NOT_ESTIMABLE_LOCAL_SUBSET",
+      decision_rule = "Full-data hotspot reconciliation required; no primary exclusion is made",
+      stringsAsFactors = FALSE
+    )
+  }
+  add_evidence_provenance(
+    out, run_label, execution_mode, provenance,
+    "slide_summary/combined_spatial_hotspots.tsv", generated_utc
+  )
+}
+
+build_evidence_only_release <- function(section_decision, masks, gene_decision,
+                                        eos_decision, hotspot_decision,
+                                        run_label, execution_mode, provenance,
+                                        generated_utc) {
+  mode <- toupper(execution_mode)
+  counts <- c(
+    raw = nrow(gene_decision),
+    conservative = sum(gene_decision$conservative_evidence_status == "CONSERVATIVE_NO_SIGNAL_DETECTED"),
+    provisional = sum(gene_decision$primary_feature_status == "PROVISIONAL_PRIMARY_FEATURES"),
+    risk = sum(gene_decision$technical_risk_status == "TECHNICAL_RISK_SENSITIVITY_ONLY"),
+    eos = sum(eos_decision$retained_provisional)
+  )
+  full_expected <- identical(mode, "FULL_HPC")
+  gene_reconciled <- identical(unname(counts[c("raw", "conservative", "provisional", "risk")]), c(479, 67, 245, 234))
+  eos_partition <- table(factor(eos_decision$gene_set[eos_decision$retained_provisional], levels = c("common", "short_lived", "long_lived")))
+  eos_reconciled <- sum(eos_partition) == 53L && identical(as.integer(eos_partition), c(4L, 27L, 22L))
+  qc_rows <- data.frame(
+    gate_id = c("fixed_section_decisions", "cell_mask_reconciliation", "gene_tier_reconciliation",
+                "eos_gene_reconciliation", "region4_excluded_from_reference_definition"),
+    scope = c("sections", "cells", "genes", "Eos genes", "Region_4"),
+    gate_status = c(
+      if (identical(section_decision$section_status, c("PRIMARY_CONDITIONAL", "PRIMARY_CONDITIONAL", "PRIMARY", "SENSITIVITY_ONLY"))) "PASS" else "STOP",
+      if (!anyNA(masks[, c("primary_include", "strict_include", "hotspot_sensitivity_include")]) && all(!masks$strict_include | masks$primary_include) && all(!masks$hotspot_sensitivity_include | masks$primary_include)) "PASS" else "STOP",
+      if (full_expected) if (gene_reconciled) "PASS" else "STOP" else "PENDING_DOWNSTREAM_ANALYSIS",
+      if (full_expected) if (eos_reconciled) "PASS" else "STOP" else "PENDING_DOWNSTREAM_ANALYSIS",
+      if (!section_decision$cluster_discovery_eligible[section_decision$region_id == "Region_4"]) "PASS" else "STOP"
+    ),
+    measured_value = c(
+      paste(section_decision$region_id, section_decision$section_status, sep = "=", collapse = ";"),
+      sprintf("primary=%d;strict=%d;hotspot_sensitivity=%d;total=%d", sum(masks$primary_include), sum(masks$strict_include), sum(masks$hotspot_sensitivity_include), nrow(masks)),
+      sprintf("raw=%d;conservative=%d;provisional=%d;risk=%d", counts[["raw"]], counts[["conservative"]], counts[["provisional"]], counts[["risk"]]),
+      sprintf("retained=%d;common=%d;short_lived=%d;long_lived=%d", counts[["eos"]], eos_partition[[1]], eos_partition[[2]], eos_partition[[3]]),
+      "cluster_discovery_eligible=FALSE"
+    ),
+    threshold = c("R1/R2 conditional; R3 primary; R4 sensitivity-only", "strict and hotspot masks must be subsets of primary", "FULL_HPC: 479/67/245/234", "FULL_HPC: 53=4/27/22", "FALSE"),
+    evidence_source = c("section_downstream_decision.tsv", "cell_downstream_masks.tsv.gz", "gene_downstream_decision.tsv", "eos_gene_decision_summary.tsv", "section_downstream_decision.tsv"),
+    interpretation = c("Fixed approved decisions", "Non-destructive masks reconcile", "Local subset cannot freeze full-data counts", "Local subset cannot freeze full-data Eos retention", "Region_4 is mapping-only"),
+    next_required_artifact = c("none", "none", if (full_expected) "none" else "FULL_HPC summary", if (full_expected) "none" else "FULL_HPC summary", "Region_1-3 reference"),
+    stringsAsFactors = FALSE
+  )
+  pending <- data.frame(
+    gate_id = c("section_identity_dominance", "primary_strict_celltype_stability", "feature245_vs_gene67_celltype_agreement",
+                "eos_state_stability", "region3_hotspot_conclusion_stability", "region4_mapping_quality", "technical_risk_gene_dependence"),
+    scope = c("PCA/clustering", "major cell types", "major cell types", "Eos state", "Region_3", "Region_4", "primary conclusions"),
+    gate_status = "PENDING_DOWNSTREAM_ANALYSIS", measured_value = NA_character_,
+    threshold = c("section identity must not dominate", "stable assignments", "no contradictory major cell types", "no reversal or unstable assignments", "main conclusion unchanged", "confidence acceptable and not strongly cell-type dependent", "conclusion not primarily dependent on 234 risk genes"),
+    evidence_source = c("downstream PCA and cluster diagnostics", "primary/strict label comparison", "245/67 sensitivity comparison", "Region_3 Eos robustness grid", "Region_3 hotspot sensitivity", "held-out calibrated label transfer", "risk-gene dependence sensitivity"),
+    interpretation = "Primary release cannot pass until downstream evidence is supplied",
+    next_required_artifact = c("PCA section-mixing diagnostics", "cell-type stability table", "245-vs-67 comparison", "Eos stability table", "hotspot sensitivity comparison", "Region_4 mapping metrics", "technical-risk dependence analysis"),
+    stringsAsFactors = FALSE
+  )
+  out <- rbind(qc_rows, pending)
+  overall <- if (any(out$gate_status == "STOP")) "STOP" else if (any(out$gate_status == "PENDING_DOWNSTREAM_ANALYSIS")) "PENDING_DOWNSTREAM_ANALYSIS" else "PASS"
+  out <- rbind(out, data.frame(
+    gate_id = "overall_primary_release", scope = "scWAT primary release", gate_status = overall,
+    measured_value = overall, threshold = "PASS only after every required gate passes",
+    evidence_source = "all evidence-only and downstream gates",
+    interpretation = "Automatic worst-case release status", next_required_artifact = "all pending downstream artifacts",
+    stringsAsFactors = FALSE
+  ))
+  add_evidence_provenance(out, run_label, execution_mode, provenance, "evidence-only QC decision engine", generated_utc)
+}
+
+summarise_evidence_only_qc <- function(extended_slide_data, candidates, eos_gene_sets,
+                                       run_label, execution_mode, provenance) {
+  generated_utc <- format(Sys.time(), tz = "UTC", usetz = TRUE)
+  masks <- build_cell_downstream_masks(
+    extended_slide_data$spatial_cells, extended_slide_data$spatial_hotspots, provenance
+  )
+  masks <- add_evidence_provenance(
+    masks, run_label, execution_mode, provenance,
+    "sections/*/spatial_qc_cell_annotations.tsv.gz", generated_utc
+  )
+  masks$section_input_cells <- ave(rep(1L, nrow(masks)), masks$region_id, FUN = sum)
+  masks$section_primary_include_cells <- ave(as.integer(masks$primary_include), masks$region_id, FUN = sum)
+  masks$section_strict_include_cells <- ave(as.integer(masks$strict_include), masks$region_id, FUN = sum)
+  masks$section_hotspot_sensitivity_include_cells <- ave(as.integer(masks$hotspot_sensitivity_include), masks$region_id, FUN = sum)
+  masks$qc_threshold_source <- file.path("sections", masks$region_id, "qc_thresholds.tsv")
+  sections <- build_section_downstream_decision(
+    masks, run_label, execution_mode, provenance, generated_utc
+  )
+  genes <- build_gene_downstream_decision(
+    candidates, unique(as.character(extended_slide_data$gene_quality$gene)),
+    run_label, execution_mode, provenance
+  )
+  genes$generated_utc <- generated_utc
+  genes$source_artifact <- "slide_summary/candidate_cycle_affected_genes.tsv"
+  eos <- build_eos_gene_decision(genes, eos_gene_sets, run_label, execution_mode, provenance)
+  eos$generated_utc <- generated_utc
+  eos$source_artifact <- "config/eos_gene_sets.tsv + gene_downstream_decision.tsv"
+  eos$retained_total <- sum(eos$retained_provisional)
+  eos$retained_gene_set_count <- ave(as.integer(eos$retained_provisional), eos$gene_set, FUN = sum)
+  hotspots <- build_hotspot_sensitivity_decision(
+    extended_slide_data$spatial_hotspots, masks, run_label, execution_mode,
+    provenance, generated_utc
+  )
+  release <- build_evidence_only_release(
+    sections, masks, genes, eos, hotspots, run_label, execution_mode,
+    provenance, generated_utc
+  )
+  list(cell_masks = masks, sections = sections, genes = genes, eos = eos,
+       hotspots = hotspots, release = release)
+}
+
+write_evidence_only_qc_artifacts <- function(project_root, run_root, evidence_summary) {
+  require_package("Matrix")
+  assert_path_within(project_root, run_root)
+  slide_dir <- file.path(run_root, "slide_summary")
+  downstream_dir <- file.path(run_root, "downstream_inputs")
+  dir.create(slide_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(downstream_dir, recursive = TRUE, showWarnings = FALSE)
+  tables <- list(
+    section_downstream_decision.tsv = evidence_summary$sections,
+    gene_downstream_decision.tsv = evidence_summary$genes,
+    eos_gene_decision_summary.tsv = evidence_summary$eos,
+    hotspot_sensitivity_decision.tsv = evidence_summary$hotspots,
+    evidence_only_qc_release.tsv = evidence_summary$release
+  )
+  paths <- vapply(names(tables), function(name) {
+    write_tsv(tables[[name]], file.path(slide_dir, name), project_root)
+  }, character(1))
+  mask_path <- write_gz_tsv(
+    evidence_summary$cell_masks, file.path(slide_dir, "cell_downstream_masks.tsv.gz"), project_root
+  )
+  region_paths <- character(4)
+  manifest_rows <- vector("list", 4)
+  for (index in seq_len(4L)) {
+    region <- paste0("Region_", index)
+    section_dir <- file.path(run_root, "sections", region)
+    section_rds <- file.path(section_dir, paste0(region, ".phase0_2_qc.rds"))
+    if (!file.exists(section_rds)) stop(sprintf("Missing raw section object: %s", section_rds), call. = FALSE)
+    section_object <- readRDS(section_rds)
+    if (!isTRUE(section_object$raw_counts_preserved) || !inherits(section_object$counts, "sparseMatrix")) {
+      stop(sprintf("Section object does not preserve sparse raw counts for %s.", region), call. = FALSE)
+    }
+    region_masks <- evidence_summary$cell_masks[evidence_summary$cell_masks$region_id == region, , drop = FALSE]
+    order_index <- match(colnames(section_object$counts), region_masks$cell_id)
+    if (anyNA(order_index)) stop(sprintf("Mask alignment failed for %s.", region), call. = FALSE)
+    region_masks <- region_masks[order_index, , drop = FALSE]
+    gene_sets <- list(
+      provisional_primary_features = evidence_summary$genes$gene[evidence_summary$genes$primary_feature_status == "PROVISIONAL_PRIMARY_FEATURES"],
+      conservative_no_signal_detected = evidence_summary$genes$gene[evidence_summary$genes$conservative_evidence_status == "CONSERVATIVE_NO_SIGNAL_DETECTED"],
+      technical_risk_sensitivity_only = evidence_summary$genes$gene[evidence_summary$genes$technical_risk_status == "TECHNICAL_RISK_SENSITIVITY_ONLY"],
+      raw_complete_panel = evidence_summary$genes$gene,
+      eos_provisional_primary = evidence_summary$eos$gene[evidence_summary$eos$retained_provisional]
+    )
+    bundle <- list(
+      schema_version = "evidence_only_qc_v1", region_id = region,
+      section_status = section_downstream_status(region),
+      counts = section_object$counts, features = section_object$features,
+      cell_metadata = region_masks, gene_sets = gene_sets,
+      raw_counts_preserved = TRUE,
+      downstream_contract = if (region == "Region_4") "MAP_TO_REGION_1_3_REFERENCE_WITH_UNCERTAIN" else "REFERENCE_ELIGIBILITY_FROM_CELL_MASKS",
+      mapping_requirements = if (region == "Region_4") c("mapping_confidence", "reference_distance", "second_best_label", "confidence_margin", "Uncertain") else character(),
+      provenance = unique(region_masks$provenance)
+    )
+    region_path <- file.path(downstream_dir, paste0(region, ".downstream_input.rds"))
+    saveRDS(bundle, region_path, compress = FALSE)
+    region_paths[[index]] <- region_path
+    write_gz_tsv(region_masks, file.path(section_dir, "cell_downstream_masks.tsv.gz"), project_root)
+    write_tsv(evidence_summary$sections[evidence_summary$sections$region_id == region, , drop = FALSE],
+              file.path(section_dir, "section_downstream_decision.tsv"), project_root)
+    manifest_rows[[index]] <- data.frame(
+      region_id = region, section_status = bundle$section_status,
+      cells = ncol(bundle$counts), genes = nrow(bundle$counts),
+      primary_include_cells = sum(bundle$cell_metadata$primary_include),
+      strict_include_cells = sum(bundle$cell_metadata$strict_include),
+      hotspot_sensitivity_include_cells = sum(bundle$cell_metadata$hotspot_sensitivity_include),
+      path = normalizePath(region_path, winslash = "/", mustWork = TRUE),
+      schema_version = bundle$schema_version, raw_counts_preserved = TRUE,
+      downstream_contract = bundle$downstream_contract, stringsAsFactors = FALSE
+    )
+  }
+  manifest <- do.call(rbind, manifest_rows)
+  manifest_path <- write_tsv(manifest, file.path(downstream_dir, "downstream_input_manifest.tsv"), project_root)
+  all_paths <- c(mask_path, unname(paths), region_paths, manifest_path)
+  if (!validate_evidence_only_qc_artifacts(run_root, stop_on_error = TRUE)) stop("Evidence-only QC reload validation failed.", call. = FALSE)
+  all_paths
+}
+
+validate_evidence_only_qc_artifacts <- function(run_root, stop_on_error = FALSE) {
+  require_package("Matrix")
+  fail <- function(message) {
+    if (isTRUE(stop_on_error)) stop(message, call. = FALSE)
+    FALSE
+  }
+  slide_dir <- file.path(run_root, "slide_summary")
+  required <- file.path(slide_dir, evidence_only_required_artifacts())
+  absent <- required[!file.exists(required)]
+  if (length(absent)) return(fail(sprintf("Missing evidence-only artifacts: %s", paste(basename(absent), collapse = ", "))))
+  sections <- tryCatch(utils::read.delim(file.path(slide_dir, "section_downstream_decision.tsv"), check.names = FALSE), error = identity)
+  genes <- tryCatch(utils::read.delim(file.path(slide_dir, "gene_downstream_decision.tsv"), check.names = FALSE), error = identity)
+  release <- tryCatch(utils::read.delim(file.path(slide_dir, "evidence_only_qc_release.tsv"), check.names = FALSE), error = identity)
+  masks <- tryCatch(utils::read.delim(gzfile(file.path(slide_dir, "cell_downstream_masks.tsv.gz")), check.names = FALSE), error = identity)
+  if (any(vapply(list(sections, genes, release, masks), inherits, logical(1), what = "error"))) return(fail("An evidence-only table cannot be reloaded."))
+  if (!identical(as.character(sections$region_id), paste0("Region_", 1:4))) return(fail("Section decisions must contain Region_1 through Region_4 in order."))
+  if (any(grepl("CONFIRMED_(AFFECTED|UNAFFECTED)", unlist(genes)))) return(fail("Prohibited confirmed gene terminology detected."))
+  if (!all(release$gate_status %in% c("PASS", "STOP", "PENDING_DOWNSTREAM_ANALYSIS"))) return(fail("Invalid release-gate status."))
+  for (region in paste0("Region_", 1:4)) {
+    path <- file.path(run_root, "downstream_inputs", paste0(region, ".downstream_input.rds"))
+    if (!file.exists(path)) return(fail(sprintf("Missing downstream bundle for %s.", region)))
+    object <- tryCatch(readRDS(path), error = identity)
+    if (inherits(object, "error") || !isTRUE(object$raw_counts_preserved) ||
+        ncol(object$counts) != nrow(object$cell_metadata) ||
+        !identical(colnames(object$counts), as.character(object$cell_metadata$cell_id))) {
+      return(fail(sprintf("Invalid downstream bundle for %s.", region)))
+    }
   }
   TRUE
 }

@@ -42,6 +42,16 @@ class NotebookContracts(unittest.TestCase):
             self.assertIsNotNone(match, f"fixed REGION_ID missing from {path.name}")
             observed.add(match.group(1))
             self.assertEqual(notebook["metadata"]["kernelspec"]["name"], "ir")
+            text = "\n".join(
+                "".join(cell.get("source", [])) for cell in notebook["cells"]
+            )
+            for token in [
+                "build_cell_downstream_masks",
+                "cell_downstream_masks.tsv.gz",
+                "section_downstream_decision.tsv",
+                "raw objects are not modified",
+            ]:
+                self.assertIn(token, text)
 
         self.assertEqual(observed, expected)
 
@@ -54,7 +64,7 @@ class NotebookContracts(unittest.TestCase):
             "## TL;DR and QC decision",
             "## Inputs and validation",
             "## Core QC distributions",
-            "## Alarm evidence and candidate genes",
+            "## Alarm evidence and evidence-only gene tiers",
             "## Subset versus full-data burden",
             "## Spatial QC",
             "## Within-mouse concordance",
@@ -62,8 +72,23 @@ class NotebookContracts(unittest.TestCase):
         ]
         for heading in required_headings:
             self.assertIn(heading, text)
-        self.assertIn("CANDIDATE_NOT_CONFIRMED", text)
-        self.assertIn("REQUIRES_10X_DIAGNOSTICS", text)
+        for token in [
+            "PROVISIONAL_PRIMARY_FEATURES",
+            "CONSERVATIVE_NO_SIGNAL_DETECTED",
+            "TECHNICAL_RISK_SENSITIVITY_ONLY",
+            "RAW_COMPLETE_PANEL",
+            "PENDING_DOWNSTREAM_ANALYSIS",
+            "cell_downstream_masks.tsv.gz",
+            "section_downstream_decision.tsv",
+            "gene_downstream_decision.tsv",
+            "eos_gene_decision_summary.tsv",
+            "hotspot_sensitivity_decision.tsv",
+            "evidence_only_qc_release.tsv",
+            "downstream_input_manifest.tsv",
+            "Uncertain",
+        ]:
+            self.assertIn(token, text)
+        self.assertNotIn("Obtain 10x poor-cycle diagnostics", text)
         self.assertNotIn("build_report.R", text)
         self.assertNotIn("report.html", text)
         self.assertEqual(notebook["metadata"]["kernelspec"]["name"], "ir")

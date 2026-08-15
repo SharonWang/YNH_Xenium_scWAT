@@ -130,6 +130,8 @@ hotspots_1 <- find_spatial_qc_hotspots(hotspot_grid, permutations = 199L, min_bi
 hotspots_2 <- find_spatial_qc_hotspots(hotspot_grid, permutations = 199L, min_bin_cells = 4L, fdr = 0.10, seed = 20260814L)
 stopifnot(identical(hotspots_1, hotspots_2))
 stopifnot(any(hotspots_1$hotspot_status == "MORPHOLOGY_REVIEW_REQUIRED"))
+stopifnot(all(c("fdr_threshold", "min_bin_cells_threshold") %in% names(hotspots_1)))
+stopifnot(all(hotspots_1$fdr_threshold == 0.10), all(hotspots_1$min_bin_cells_threshold == 4L))
 
 # kNN calculations are deterministic locally and return explicit non-estimable states.
 density <- calculate_knn_density(spatial_fixture, k = 4L, mode = "LOCAL_SUBSET")
@@ -161,6 +163,29 @@ stopifnot(candidate_rank$section_candidate_flag[candidate_rank$gene == "A" & can
 stopifnot(!candidate_rank$section_candidate_flag[candidate_rank$gene == "A" & candidate_rank$region_id == "Region_1"])
 stopifnot(candidate_rank$section_evidence_status[candidate_rank$gene == "A" & candidate_rank$region_id == "Region_4"] == "DEPLETION_AND_Q20_LOSS")
 stopifnot(candidate_rank$section_evidence_status[candidate_rank$gene == "C" & candidate_rank$region_id == "Region_1"] == "DEPLETION_ONLY")
+
+# Evidence-only gene decisions are overlapping status fields: the conservative
+# zero-alarm set is a subset of provisional primary features.
+gene_decision_fixture <- build_gene_downstream_decision(
+  candidate_rank, panel_genes = c("A", "B", "C", "D"),
+  run_label = "unit_run", execution_mode = "LOCAL_SUBSET", provenance = "unit_fixture"
+)
+decision_by_gene <- gene_decision_fixture[match(c("A", "B", "C", "D"), gene_decision_fixture$gene), ]
+stopifnot(identical(decision_by_gene$alarm_positive_section_count, c(1L, 2L, 1L, 0L)))
+stopifnot(identical(decision_by_gene$primary_feature_status,
+                    c("PROVISIONAL_PRIMARY_FEATURES", "EXCLUDED_FROM_PRIMARY_FEATURES",
+                      "PROVISIONAL_PRIMARY_FEATURES", "PROVISIONAL_PRIMARY_FEATURES")))
+stopifnot(decision_by_gene$conservative_evidence_status[[4]] == "CONSERVATIVE_NO_SIGNAL_DETECTED")
+stopifnot(decision_by_gene$technical_risk_status[[2]] == "TECHNICAL_RISK_SENSITIVITY_ONLY")
+stopifnot(all(decision_by_gene$raw_panel_status == "RAW_COMPLETE_PANEL"))
+stopifnot(!any(grepl("CONFIRMED_(AFFECTED|UNAFFECTED)", unlist(decision_by_gene))))
+
+eos_fixture <- data.frame(gene = c("A", "B", "D", "X"), gene_set = c("common", "common", "short_lived", "long_lived"))
+eos_decision_fixture <- build_eos_gene_decision(
+  gene_decision_fixture, eos_fixture, "unit_run", "LOCAL_SUBSET", "unit_fixture"
+)
+stopifnot(identical(eos_decision_fixture$retained_provisional, c(TRUE, FALSE, TRUE, FALSE)))
+stopifnot(all(eos_decision_fixture$complete_signature_status == "RAW_COMPLETE_EOS_100"))
 
 # Full-data ranks are compared descriptively with the fixed subset reference.
 subset_reference_fixture <- utils::read.delim(file.path(repo_root, "config", "subset_qc_reference.tsv"), check.names = FALSE)
@@ -261,6 +286,9 @@ for (region_index in seq_len(4L)) {
   region_cells$x_centroid <- seq_len(nrow(region_cells)) * 10
   region_cells$y_centroid <- seq_len(nrow(region_cells)) * 5 + region_index
   region_cells$qc_review_flag <- seq_len(nrow(region_cells)) == 1L
+  region_cells$qc_core_pass <- !region_cells$qc_review_flag
+  region_cells$segmentation_multiplet_flag <- FALSE
+  region_cells$high_control_flag <- FALSE
   region_cells <- assign_spatial_grid(region_cells, 20)
   region_cells$local_density <- calculate_knn_density(region_cells, 2L, "LOCAL_SUBSET")
   region_cells$dense_aggregate <- region_cells$local_density >= stats::quantile(region_cells$local_density, 0.90)
@@ -287,6 +315,19 @@ for (region_index in seq_len(4L)) {
     spatial_global = region_global, spatial_edge_density = region_enrichment,
     spatial_hotspots = region_hotspots, spatial_cells = region_cells,
     manual_review_manifest = region_hotspots, plots = region_plots
+  )
+  require_package("Matrix")
+  section_counts <- Matrix::Matrix(
+    matrix(seq_len(20L * nrow(region_cells)), nrow = 20L,
+           dimnames = list(paste0("Gene", seq_len(20L)), region_cells$cell_id)),
+    sparse = TRUE
+  )
+  saveRDS(
+    list(counts = section_counts, cells = region_cells,
+         features = data.frame(gene = rownames(section_counts)), region_id = region,
+         raw_counts_preserved = TRUE),
+    file.path(extended_slide_root, "sections", region, paste0(region, ".phase0_2_qc.rds")),
+    compress = FALSE
   )
 }
 extended_coverage <- validate_four_extended_section_outputs(extended_slide_root)
@@ -320,6 +361,46 @@ affected_only <- utils::read.delim(
   check.names = FALSE
 )
 stopifnot(nrow(affected_only) > 0L, all(affected_only$section_candidate_flag))
+
+# Evidence-only slide artifacts and downstream bundles have an explicit,
+# reloadable contract while biological-analysis gates remain pending.
+eos_release_fixture <- data.frame(
+  gene = paste0("Gene", 1:4),
+  gene_set = c("common", "common", "short_lived", "long_lived"),
+  stringsAsFactors = FALSE
+)
+evidence_release <- summarise_evidence_only_qc(
+  extended_slide_data = extended_slide_data,
+  candidates = extended_slide_summary$candidates,
+  eos_gene_sets = eos_release_fixture,
+  run_label = "unit_evidence_release", execution_mode = "LOCAL_SUBSET",
+  provenance = "unit_fixture"
+)
+stopifnot(all(c("section_input_cells", "section_primary_include_cells", "qc_threshold_source") %in% names(evidence_release$cell_masks)))
+stopifnot(all(c("expected_full_raw_count", "expected_full_provisional_count", "expected_full_technical_risk_count") %in% names(evidence_release$genes)))
+stopifnot(all(c("expected_full_retained_total", "expected_full_gene_set_count") %in% names(evidence_release$eos)))
+stopifnot(all(c("fdr_threshold", "min_bin_cells_threshold", "permutations", "seed") %in% names(evidence_release$hotspots)))
+required_release <- c(
+  "cell_downstream_masks.tsv.gz", "section_downstream_decision.tsv",
+  "gene_downstream_decision.tsv", "eos_gene_decision_summary.tsv",
+  "hotspot_sensitivity_decision.tsv", "evidence_only_qc_release.tsv"
+)
+stopifnot(all(required_release %in% evidence_only_required_artifacts()))
+release_paths <- write_evidence_only_qc_artifacts(
+  project_root = dirname(extended_slide_root), run_root = extended_slide_root,
+  evidence_summary = evidence_release
+)
+stopifnot(all(file.exists(release_paths)))
+stopifnot(all(file.exists(file.path(
+  extended_slide_root, "downstream_inputs", paste0("Region_", 1:4, ".downstream_input.rds")
+))))
+stopifnot(validate_evidence_only_qc_artifacts(extended_slide_root, stop_on_error = TRUE))
+stopifnot(all(evidence_release$release$gate_status %in% c("PASS", "STOP", "PENDING_DOWNSTREAM_ANALYSIS")))
+stopifnot(evidence_release$release$gate_status[evidence_release$release$gate_id == "overall_primary_release"] == "PENDING_DOWNSTREAM_ANALYSIS")
+region4_bundle <- readRDS(file.path(extended_slide_root, "downstream_inputs", "Region_4.downstream_input.rds"))
+stopifnot(region4_bundle$section_status == "SENSITIVITY_ONLY")
+stopifnot(region4_bundle$downstream_contract == "MAP_TO_REGION_1_3_REFERENCE_WITH_UNCERTAIN")
+stopifnot(ncol(region4_bundle$counts) == nrow(region4_bundle$cell_metadata))
 
 status_path <- file.path(extended_slide_root, "sections", "Region_4", "extended_qc_status.tsv")
 status_fixture <- utils::read.delim(status_path, check.names = FALSE)

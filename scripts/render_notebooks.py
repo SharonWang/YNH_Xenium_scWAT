@@ -38,7 +38,7 @@ def notebook(cells):
 
 def section_cells(incomplete=False):
     cells = [
-        markdown("# scWAT Xenium section QC: Phases 0-2\n\nRun this notebook once per section. It retains every cell, preserves raw sparse counts, and adds advisory alarm/gene/spatial diagnostics."),
+        markdown("# scWAT Xenium section QC: Phases 0-2\n\nRun this notebook once per section. It retains every cell, preserves raw sparse counts, and adds advisory alarm/gene/spatial diagnostics plus immutable downstream masks."),
         markdown("## Goal\n\nValidate one Xenium section, reconcile its panel, import sparse counts, calculate section-specific QC flags, and write reload-validated core and extended artifact bundles."),
         markdown("## Setup\n\n### Parameters\n\nChange `REGION_ID` for manual execution. Launchers inject the same parameters without editing the source notebook."),
         code(
@@ -175,6 +175,17 @@ def section_cells(incomplete=False):
             'extended_plots <- plot_extended_spatial_qc(spatial_cells, spatial_edge_density, spatial_hotspots, REGION_ID)\n'
             'for (plot in extended_plots) print(plot)\n'
         ),
+        markdown("## Evidence-only downstream masks\n\nThe raw objects are not modified. `primary_include`, `strict_include`, and `hotspot_sensitivity_include` are retained together so downstream notebooks can select a prespecified analysis without deleting cells. Region 3 hotspot cells remain in primary analysis; Region 4 is sensitivity-only."),
+        code(
+            'mask_provenance <- paste(RUN_LABEL, REGION_ID, extended_mode, normalizePath(region_dir, winslash = "/", mustWork = TRUE), sep = "|")\n'
+            'downstream_masks <- build_cell_downstream_masks(spatial_cells, spatial_hotspots, mask_provenance)\n'
+            'section_downstream_decision <- build_one_section_downstream_decision(\n'
+            '  downstream_masks, RUN_LABEL, extended_mode, mask_provenance,\n'
+            '  format(Sys.time(), tz = "UTC", usetz = TRUE)\n'
+            ')\n'
+            'section_downstream_decision\n'
+            'with(downstream_masks, c(primary_include = sum(primary_include), strict_include = sum(strict_include), hotspot_sensitivity_include = sum(hotspot_sensitivity_include)))\n'
+        ),
         markdown("## Checks\n\nWrite every required artifact, then reload the saved sparse object and verify dimensions and cell alignment."),
         code(
             'artifact_paths <- write_section_artifacts(\n'
@@ -200,7 +211,12 @@ def section_cells(incomplete=False):
             'stopifnot(nrow(extended_reload$spatial_cells) == nrow(qc$cell_metadata))\n'
             'extended_reload$status\n'
         ),
-        markdown("## Outputs\n\nAll outputs are section-specific. A `HOLD` or `PENDING` gate blocks biological interpretation but preserves diagnostic QC."),
+        code(
+            'section_mask_path <- write_gz_tsv(downstream_masks, file.path(SECTION_OUTPUT_DIR, "cell_downstream_masks.tsv.gz"), PROJECT_ROOT)\n'
+            'section_decision_path <- write_tsv(section_downstream_decision, file.path(SECTION_OUTPUT_DIR, "section_downstream_decision.tsv"), PROJECT_ROOT)\n'
+            'stopifnot(file.exists(section_mask_path), file.exists(section_decision_path))\n'
+        ),
+        markdown("## Outputs\n\nAll outputs are section-specific. The section notebook creates `cell_downstream_masks.tsv.gz` and `section_downstream_decision.tsv`; the slide summary later freezes cross-section gene tiers and creates the final per-region downstream RDS bundle."),
         code(
             'data.frame(artifact = basename(artifact_paths), path = artifact_paths)[seq_len(min(length(artifact_paths), 20L)), , drop = FALSE]\n'
             'data.frame(artifact = basename(extended_artifact_paths), path = extended_artifact_paths)\n'
@@ -214,7 +230,7 @@ def section_cells(incomplete=False):
 
 def summary_cells(incomplete=False):
     cells = [
-        markdown("# scWAT Xenium slide-level QC summary\n\nThis notebook is the sole reader-facing QC report for the four independently processed scWAT sections. Sections are technical units; the two mice are the biological units."),
+        markdown("# scWAT Xenium evidence-only QC and downstream-input summary\n\nThis notebook is the sole reader-facing QC report for the four independently processed scWAT sections. Sections are technical units; the two mice are the biological units. Confirmed cycle-to-codeword mapping is unavailable, so decisions use only the frozen cross-section evidence rules."),
         markdown("## Setup\n\n### Parameters\n\nInputs: four completed section bundles below `RUN_ROOT`, the verified sample manifest, and versioned QC settings. Outputs: combined tables and Cell-style figures below `${RUN_ROOT}/slide_summary/`."),
         code(
             'PROJECT_ROOT <- "/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu/YNH_Xenium"\n'
@@ -247,18 +263,21 @@ def summary_cells(incomplete=False):
             'extended_config <- read_extended_qc_config(EXTENDED_QC_CONFIG_PATH)\n'
             'subset_reference <- utils::read.delim(SUBSET_REFERENCE_PATH, check.names = FALSE)\n'
             'extended_slide_summary <- summarise_extended_slide_qc(extended_slide_data, slide_summary$section_summary, manifest, extended_config, subset_reference)\n'
+            'eos_gene_sets <- utils::read.delim(file.path(PIPELINE_REPO, "config", "eos_gene_sets.tsv"), check.names = FALSE)\n'
+            'release_provenance <- paste(RUN_LABEL, unique(extended_coverage$mode), normalizePath(RUN_ROOT, winslash = "/", mustWork = TRUE), sep = "|")\n'
+            'evidence_summary <- summarise_evidence_only_qc(\n'
+            '  extended_slide_data, extended_slide_summary$candidates, eos_gene_sets,\n'
+            '  RUN_LABEL, unique(extended_coverage$mode), release_provenance\n'
+            ')\n'
             'stopifnot(length(unique(slide_data$cell_metadata$region_id)) == 4L)\n'
             'list(core = coverage, extended = extended_coverage, cells = nrow(slide_data$cell_metadata))\n'
         ),
-        markdown("## TL;DR and QC decision\n\nThe table below is the review entry point. Direct poor-cycle alarms are available for Regions 1, 2, and 4. Exact cycle/channel/codeword identity is `REQUIRES_10X_DIAGNOSTICS`. Region 3 requires morphology review; Region 4 additionally requires segmentation/cell-area review."),
+        markdown("## TL;DR and QC decision\n\nFixed evidence-only status: Region 1 `PRIMARY_CONDITIONAL`, Region 2 `PRIMARY_CONDITIONAL`, Region 3 `PRIMARY`, and Region 4 `SENSITIVITY_ONLY`. Region 4 cannot enter cluster discovery or primary gene-level results; it will later map to the finalized Region 1-3 reference, with low-confidence assignments labelled `Uncertain`."),
         code(
-            'qc_decision <- merge(slide_summary$section_summary, slide_summary$readiness[, c("region_id", "status")], by = "region_id", all.x = TRUE, sort = FALSE)\n'
-            'qc_decision <- qc_decision[match(coverage$region_id, qc_decision$region_id), , drop = FALSE]\n'
             'direct_alarm_regions <- unique(extended_slide_data$cycle_alarm_evidence$region_id[extended_slide_data$cycle_alarm_evidence$evidence_status == "DIRECT_EVIDENCE"])\n'
-            'qc_decision$direct_poor_cycle_alarm <- qc_decision$region_id %in% direct_alarm_regions\n'
-            'qc_decision$reported_qc_status <- ifelse(qc_decision$region_id == "Region_3" & qc_decision$status == "PASS", "CONDITIONAL_PASS", qc_decision$status)\n'
-            'qc_decision$required_next_action <- c("Obtain 10x poor-cycle diagnostics", "Obtain 10x poor-cycle diagnostics", "Review morphology in FDR-positive hotspot bins", "Obtain 10x diagnostics and review segmentation/cell area")[match(qc_decision$region_id, paste0("Region_", 1:4))]\n'
-            'qc_decision[, c("region_id", "input_cells", "core_pass_fraction", "review_fraction", "direct_poor_cycle_alarm", "reported_qc_status", "required_next_action")]\n'
+            'qc_decision <- merge(evidence_summary$sections, data.frame(region_id = paste0("Region_",1:4), direct_poor_cycle_alarm = paste0("Region_",1:4) %in% direct_alarm_regions), by = "region_id", sort = FALSE)\n'
+            'qc_decision <- qc_decision[match(paste0("Region_",1:4), qc_decision$region_id), ]\n'
+            'qc_decision[, c("region_id", "section_status", "input_cells", "primary_include_cells", "strict_include_cells", "hotspot_sensitivity_include_cells", "direct_poor_cycle_alarm", "cluster_discovery_eligible")]\n'
         ),
         markdown("## Core QC distributions\n\nThese are descriptive section-level and cell-level QC summaries. No cells are automatically deleted, and cell-level distributions do not create biological replication."),
         code(
@@ -267,17 +286,15 @@ def summary_cells(incomplete=False):
             'slide_plots <- plot_slide_qc(slide_data, slide_summary)\n'
             'for (plot in slide_plots) print(plot)\n'
         ),
-        markdown("## Alarm evidence and candidate genes\n\nThe alarm table reports directly available evidence. The candidate list uses cross-section transcript depletion/quality patterns and remains `CANDIDATE_NOT_CONFIRMED`; it is not a definitive cycle-to-gene map. Exact cycle identity is `REQUIRES_10X_DIAGNOSTICS` and must come from 10x diagnostic output."),
+        markdown("## Alarm evidence and evidence-only gene tiers\n\nNo gene is described as confirmed affected or confirmed unaffected. All 479 genes remain `RAW_COMPLETE_PANEL`; the full-data contract expects 67 `CONSERVATIVE_NO_SIGNAL_DETECTED`, 245 `PROVISIONAL_PRIMARY_FEATURES`, and 234 `TECHNICAL_RISK_SENSITIVITY_ONLY`. The conservative 67 are a subset of the provisional 245. The 234 risk genes cannot define primary clusters."),
         code(
             'extended_slide_data$cycle_alarm_evidence\n'
-            'candidate_display <- extended_slide_summary$candidates[extended_slide_summary$candidates$section_candidate_flag, , drop = FALSE]\n'
-            'gene_sets <- unique(extended_slide_data$gene_quality[, c("gene", "gene_set")])\n'
-            'candidate_display <- merge(candidate_display, gene_sets, by = "gene", all.x = TRUE, sort = FALSE)\n'
-            'candidate_counts <- if (nrow(candidate_display)) aggregate(section_candidate_flag ~ region_id + section_evidence_status, candidate_display, sum) else data.frame(region_id = character(), section_evidence_status = character(), section_candidate_flag = integer())\n'
-            'candidate_counts\n'
-            'if (nrow(candidate_display)) with(candidate_display, table(region_id, gene_set, useNA = "ifany"))\n'
-            'candidate_display <- candidate_display[order(candidate_display$region_id, candidate_display$evidence_tier, candidate_display$log2_count_ratio, candidate_display$q20_difference), , drop = FALSE]\n'
-            'candidate_display[seq_len(min(30L, nrow(candidate_display))), , drop = FALSE]\n'
+            'gene_tier_counts <- data.frame(\n'
+            '  decision = c("RAW_COMPLETE_PANEL", "CONSERVATIVE_NO_SIGNAL_DETECTED", "PROVISIONAL_PRIMARY_FEATURES", "TECHNICAL_RISK_SENSITIVITY_ONLY"),\n'
+            '  genes = c(nrow(evidence_summary$genes), sum(evidence_summary$genes$conservative_evidence_status == "CONSERVATIVE_NO_SIGNAL_DETECTED"), sum(evidence_summary$genes$primary_feature_status == "PROVISIONAL_PRIMARY_FEATURES"), sum(evidence_summary$genes$technical_risk_status == "TECHNICAL_RISK_SENSITIVITY_ONLY"))\n'
+            ')\n'
+            'gene_tier_counts\n'
+            'with(evidence_summary$eos[evidence_summary$eos$retained_provisional, ], table(gene_set))\n'
         ),
         markdown("## Subset versus full-data burden\n\nThe comparison is descriptive across four technical sections. `NOT_RUN_LOCAL_SUBSET` means the full-data ranking remains an HPC checkpoint; rank correlations across only four sections are not biological evidence."),
         code(
@@ -288,7 +305,7 @@ def summary_cells(incomplete=False):
         code(
             'extended_slide_data$spatial_global\n'
             'extended_slide_data$spatial_edge_density\n'
-            'extended_slide_data$manual_review_manifest\n'
+            'evidence_summary$hotspots\n'
         ),
         markdown("## Within-mouse concordance\n\nThe verified technical pairs are 62308/62309 for Mouse 1 and 62310/62311 for Mouse 2. Thresholds are advisory. The Region 3/4 cell-area contrast is reviewed separately because it was not part of the original concordance gate."),
         code(
@@ -298,14 +315,17 @@ def summary_cells(incomplete=False):
         code(
             'extended_slide_plots <- plot_extended_slide_qc(extended_slide_data, extended_slide_summary)\n'
             'for (plot in extended_slide_plots) print(plot)\n'
+            'mask_plot_data <- evidence_summary$sections[, c("region_id", "primary_include_cells", "strict_include_cells", "hotspot_sensitivity_include_cells")]\n'
+            'mask_long <- reshape(mask_plot_data, varying = names(mask_plot_data)[-1], v.names = "cells", timevar = "mask", times = names(mask_plot_data)[-1], direction = "long")\n'
+            'print(ggplot2::ggplot(mask_long, ggplot2::aes(region_id, cells, fill = mask)) + ggplot2::geom_col(position = "dodge") + ggplot2::scale_fill_manual(values = c(primary_include_cells="#3C5488", strict_include_cells="#00A087", hotspot_sensitivity_include_cells="#E64B35")) + ggplot2::labs(title="Downstream inclusion masks", x=NULL, y="Cells", fill=NULL) + cell_style_theme())\n'
+            'print(ggplot2::ggplot(gene_tier_counts, ggplot2::aes(reorder(decision, genes), genes, fill = decision)) + ggplot2::geom_col(show.legend=FALSE) + ggplot2::coord_flip() + ggplot2::labs(title="Evidence-only gene decisions", x=NULL, y="Genes") + cell_style_theme())\n'
         ),
-        markdown("## Final QC decision and next actions\n\nRegions 1 and 2 remain `HOLD` pending 10x diagnostics. Region 3 is a conditional pass pending morphology review. Region 4 remains `HOLD` pending 10x diagnostics plus segmentation/cell-area review. Comparative gene-level analysis remains on hold until the affected-gene decision is frozen."),
+        markdown("## Final QC decision and next actions\n\nPhase 0-2 prepares immutable downstream inputs; it does not claim PCA, integration, clustering, Eos stability, or Region 4 mapping results. These checks therefore remain `PENDING_DOWNSTREAM_ANALYSIS`. Primary release stops automatically if any completed downstream gate becomes `STOP`."),
         code(
-            'qc_decision[, c("region_id", "reported_qc_status", "required_next_action")]\n'
-            'extended_slide_summary$status\n'
-            'cat("Overall slide QC status:", slide_summary$overall_status, "\\n")\n'
+            'evidence_summary$release\n'
+            'cat("Evidence-only primary release:", evidence_summary$release$gate_status[evidence_summary$release$gate_id == "overall_primary_release"], "\\n")\n'
         ),
-        markdown("## Outputs and reload checks\n\nAll tables, figures, and serialized objects are written below `${RUN_ROOT}/slide_summary/`. The notebook then reloads and validates the complete artifact contract."),
+        markdown("## Outputs and reload checks\n\nRequired outputs are `cell_downstream_masks.tsv.gz`, `section_downstream_decision.tsv`, `gene_downstream_decision.tsv`, `eos_gene_decision_summary.tsv`, `hotspot_sensitivity_decision.tsv`, and `evidence_only_qc_release.tsv`. Final raw-count bundles and `downstream_input_manifest.tsv` are written below `${RUN_ROOT}/downstream_inputs/`."),
         code(
             'slide_artifacts <- write_slide_qc_artifacts(PROJECT_ROOT, RUN_ROOT, slide_data, slide_summary, slide_plots)\n'
             'extended_slide_artifacts <- write_extended_slide_qc_artifacts(PROJECT_ROOT, RUN_ROOT, extended_slide_data, extended_slide_summary, extended_slide_plots)\n'
@@ -313,8 +333,11 @@ def summary_cells(incomplete=False):
             'stopifnot(nrow(saved_summary$data$coverage) == 4L)\n'
             'stopifnot(length(unique(saved_summary$data$cell_metadata$region_id)) == 4L)\n'
             'stopifnot(validate_extended_slide_qc_artifacts(RUN_ROOT, stop_on_error = TRUE))\n'
+            'evidence_only_artifacts <- write_evidence_only_qc_artifacts(PROJECT_ROOT, RUN_ROOT, evidence_summary)\n'
+            'stopifnot(validate_evidence_only_qc_artifacts(RUN_ROOT, stop_on_error = TRUE))\n'
             'list(core = data.frame(artifact = basename(slide_artifacts), path = slide_artifacts),\n'
-            '     extended = data.frame(artifact = basename(extended_slide_artifacts), path = extended_slide_artifacts))\n'
+            '     extended = data.frame(artifact = basename(extended_slide_artifacts), path = extended_slide_artifacts),\n'
+            '     evidence_only = data.frame(artifact = basename(evidence_only_artifacts), path = evidence_only_artifacts))\n'
         ),
     ]
     if incomplete:
@@ -343,7 +366,7 @@ def validate_notebook(path, notebook_type="section", expected_region_id=None):
                 errors.append(f"expected fixed REGION_ID {expected_region_id}")
     if notebook_type == "summary":
         required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "RUN_LABEL", "EXPECTED_SECTION_COUNT", "METADATA_PATH", "EXTENDED_QC_CONFIG_PATH", "SUBSET_REFERENCE_PATH"]
-        required_sections = ["## Setup", "## Inputs and validation", "## TL;DR and QC decision", "## Core QC distributions", "## Alarm evidence and candidate genes", "## Subset versus full-data burden", "## Spatial QC", "## Within-mouse concordance", "## Diagnostic Cell-style figures", "## Final QC decision and next actions", "## Outputs and reload checks"]
+        required_sections = ["## Setup", "## Inputs and validation", "## TL;DR and QC decision", "## Core QC distributions", "## Alarm evidence and evidence-only gene tiers", "## Subset versus full-data burden", "## Spatial QC", "## Within-mouse concordance", "## Diagnostic Cell-style figures", "## Final QC decision and next actions", "## Outputs and reload checks"]
         for value in required_parameters + required_sections:
             if value not in text: errors.append(f"missing required section/parameter: {value}")
     if errors: raise ValueError("; ".join(errors))

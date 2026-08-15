@@ -157,11 +157,20 @@ REGION_ID=SUMMARY bash "${PIPELINE_REPO}/shell/run_notebook_qc_hpc.sh"
 ### Chunk 6 - Post-run validation and output locations
 
 ```bash
-Rscript -e "source('${PIPELINE_REPO}/R/source.R'); for(r in paste0('Region_',1:4)) stopifnot(validate_extended_section_artifacts(file.path('${RUN_ROOT}','sections',r),r,'FULL_HPC',stop_on_error=TRUE)); stopifnot(validate_extended_slide_qc_artifacts('${RUN_ROOT}',stop_on_error=TRUE))"
+Rscript -e "source('${PIPELINE_REPO}/R/source.R'); for(r in paste0('Region_',1:4)) stopifnot(validate_extended_section_artifacts(file.path('${RUN_ROOT}','sections',r),r,'FULL_HPC',stop_on_error=TRUE)); stopifnot(validate_extended_slide_qc_artifacts('${RUN_ROOT}',stop_on_error=TRUE)); stopifnot(validate_evidence_only_qc_artifacts('${RUN_ROOT}',stop_on_error=TRUE))"
 find "${RUN_ROOT}/slide_summary" -maxdepth 2 -type f -print | sort
+find "${RUN_ROOT}/downstream_inputs" -maxdepth 1 -type f -print | sort
 ```
 
-Primary answers are in `${RUN_ROOT}/slide_summary/candidate_cycle_affected_genes.tsv`, `subset_full_qc_ranking.tsv`, `combined_spatial_qc.tsv`, `combined_spatial_hotspots.tsv`, `within_mouse_section_concordance.tsv`, and `figures/scwat_extended_qc_diagnostics.pdf`. Exact cycle identity still requires the separate 10x diagnostic output.
+The evidence-only downstream contract is in `${RUN_ROOT}/slide_summary/cell_downstream_masks.tsv.gz`, `section_downstream_decision.tsv`, `gene_downstream_decision.tsv`, `eos_gene_decision_summary.tsv`, `hotspot_sensitivity_decision.tsv`, and `evidence_only_qc_release.tsv`. Final region inputs are `${RUN_ROOT}/downstream_inputs/Region_1.downstream_input.rds` through `Region_4.downstream_input.rds`, indexed by `downstream_input_manifest.tsv`.
+
+## Evidence-only downstream decisions
+
+- Region 1: `PRIMARY_CONDITIONAL`; Region 2: `PRIMARY_CONDITIONAL`; Region 3: `PRIMARY`; Region 4: `SENSITIVITY_ONLY`.
+- `primary_include` excludes core-QC failures, segmentation multiplets, and high-control cells. `strict_include` excludes every review-flagged cell. `hotspot_sensitivity_include` additionally excludes Region 3 morphology-review hotspot cells without removing them from primary analysis.
+- All genes remain in `RAW_COMPLETE_PANEL`. The primary feature eligibility field is `PROVISIONAL_PRIMARY_FEATURES`; its zero-alarm subset is `CONSERVATIVE_NO_SIGNAL_DETECTED`. Genes recurring in at least two alarm-positive sections are `TECHNICAL_RISK_SENSITIVITY_ONLY` and cannot define primary clusters.
+- Region 4 never contributes to reference discovery or primary gene-level results. Its downstream bundle requires mapping to the finalized Region 1-3 reference and an `Uncertain` label for insufficient-confidence assignments.
+- Phase 0-2 produces inputs rather than PCA, clusters, Eos states, or Region 4 mapping. Therefore the overall primary release remains `PENDING_DOWNSTREAM_ANALYSIS` until the automated downstream stability gates are supplied.
 
 ## Current scientific gate
 
