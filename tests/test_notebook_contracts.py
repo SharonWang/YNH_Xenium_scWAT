@@ -43,6 +43,29 @@ class NotebookContracts(unittest.TestCase):
 
         self.assertEqual(observed, expected)
 
+    def test_summary_notebook_is_the_complete_reader_facing_report(self):
+        notebook = read_notebook(NOTEBOOKS / "02_slide_QC_summary.ipynb")
+        text = "\n".join(
+            "".join(cell.get("source", [])) for cell in notebook["cells"]
+        )
+        required_headings = [
+            "## TL;DR and QC decision",
+            "## Inputs and validation",
+            "## Core QC distributions",
+            "## Alarm evidence and candidate genes",
+            "## Subset versus full-data burden",
+            "## Spatial QC",
+            "## Within-mouse concordance",
+            "## Final QC decision and next actions",
+        ]
+        for heading in required_headings:
+            self.assertIn(heading, text)
+        self.assertIn("CANDIDATE_NOT_CONFIRMED", text)
+        self.assertIn("REQUIRES_10X_DIAGNOSTICS", text)
+        self.assertNotIn("build_report.R", text)
+        self.assertNotIn("report.html", text)
+        self.assertEqual(notebook["metadata"]["kernelspec"]["name"], "ir")
+
 
 if __name__ == "__main__":
     unittest.main()

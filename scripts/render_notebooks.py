@@ -214,9 +214,8 @@ def section_cells(incomplete=False):
 
 def summary_cells(incomplete=False):
     cells = [
-        markdown("# scWAT Xenium slide-level QC summary\n\nAggregate the four independently processed sections without treating cells as biological replicates."),
-        markdown("## Goal\n\nVerify complete Region 1-4 coverage and answer four technical-QC questions: direct alarm/candidate-gene evidence, subset-versus-full review burden, spatial clustering/morphology-review targets, and within-mouse section concordance."),
-        markdown("## Setup\n\n### Parameters"),
+        markdown("# scWAT Xenium slide-level QC summary\n\nThis notebook is the sole reader-facing QC report for the four independently processed scWAT sections. Sections are technical units; the two mice are the biological units."),
+        markdown("## Setup\n\n### Parameters\n\nInputs: four completed section bundles below `RUN_ROOT`, the verified sample manifest, and versioned QC settings. Outputs: combined tables and Cell-style figures below `${RUN_ROOT}/slide_summary/`."),
         code(
             'PROJECT_ROOT <- "/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Lab_members/Yanan_Hu/YNH_Xenium"\n'
             'PIPELINE_REPO <- file.path(PROJECT_ROOT, "adipose_analysis", "YNH_Xenium_scWAT")\n'
@@ -236,16 +235,11 @@ def summary_cells(incomplete=False):
             'stopifnot(EXPECTED_SECTION_COUNT == 4L)\n'
             'cat("Slide QC run root:", RUN_ROOT, "\\n")\n'
         ),
-        markdown("## Inputs\n\nExactly four independently completed core and extended section bundles are required. The verified manifest defines Mouse 1 (62308/62309) and Mouse 2 (62310/62311); mouse is the biological replicate and section is a technical processing unit."),
-        markdown("## Completeness Checks"),
+        markdown("## Inputs and validation\n\nExactly four independently completed core and extended section bundles are required. The verified manifest maps 62308/62309 to Mouse 1 and 62310/62311 to Mouse 2. Left/right is not an analysis factor."),
         code(
             'coverage <- validate_four_section_outputs(RUN_ROOT, paste0("Region_", seq_len(EXPECTED_SECTION_COUNT)))\n'
             'extended_coverage <- validate_four_extended_section_outputs(RUN_ROOT, coverage$region_id)\n'
             'stopifnot(identical(coverage$region_id, extended_coverage$region_id))\n'
-            'list(core = coverage, extended = extended_coverage)\n'
-        ),
-        markdown("## QC Results"),
-        code(
             'slide_data <- read_slide_qc_outputs(RUN_ROOT, coverage$region_id)\n'
             'slide_summary <- summarise_slide_qc(slide_data)\n'
             'extended_slide_data <- read_extended_slide_qc_outputs(RUN_ROOT, coverage$region_id)\n'
@@ -253,49 +247,65 @@ def summary_cells(incomplete=False):
             'extended_config <- read_extended_qc_config(EXTENDED_QC_CONFIG_PATH)\n'
             'subset_reference <- utils::read.delim(SUBSET_REFERENCE_PATH, check.names = FALSE)\n'
             'extended_slide_summary <- summarise_extended_slide_qc(extended_slide_data, slide_summary$section_summary, manifest, extended_config, subset_reference)\n'
-            'slide_summary$section_summary\n'
+            'stopifnot(length(unique(slide_data$cell_metadata$region_id)) == 4L)\n'
+            'list(core = coverage, extended = extended_coverage, cells = nrow(slide_data$cell_metadata))\n'
         ),
-        markdown("## Question 1 - Which alarms and candidate genes are affected?\n\nThe alarm table reports directly available 10x evidence. The displayed candidate list contains only section-gene comparisons crossing the prespecified depletion and/or Q20-loss thresholds. These remain `CANDIDATE_NOT_CONFIRMED`; exact cycle identity requires 10x diagnostics."),
+        markdown("## TL;DR and QC decision\n\nThe table below is the review entry point. Direct poor-cycle alarms are available for Regions 1, 2, and 4. Exact cycle/channel/codeword identity is `REQUIRES_10X_DIAGNOSTICS`. Region 3 requires morphology review; Region 4 additionally requires segmentation/cell-area review."),
+        code(
+            'qc_decision <- merge(slide_summary$section_summary, slide_summary$readiness[, c("region_id", "status")], by = "region_id", all.x = TRUE, sort = FALSE)\n'
+            'qc_decision <- qc_decision[match(coverage$region_id, qc_decision$region_id), , drop = FALSE]\n'
+            'direct_alarm_regions <- unique(extended_slide_data$cycle_alarm_evidence$region_id[extended_slide_data$cycle_alarm_evidence$evidence_status == "DIRECT_EVIDENCE"])\n'
+            'qc_decision$direct_poor_cycle_alarm <- qc_decision$region_id %in% direct_alarm_regions\n'
+            'qc_decision$reported_qc_status <- ifelse(qc_decision$region_id == "Region_3" & qc_decision$status == "PASS", "CONDITIONAL_PASS", qc_decision$status)\n'
+            'qc_decision$required_next_action <- c("Obtain 10x poor-cycle diagnostics", "Obtain 10x poor-cycle diagnostics", "Review morphology in FDR-positive hotspot bins", "Obtain 10x diagnostics and review segmentation/cell area")[match(qc_decision$region_id, paste0("Region_", 1:4))]\n'
+            'qc_decision[, c("region_id", "input_cells", "core_pass_fraction", "review_fraction", "direct_poor_cycle_alarm", "reported_qc_status", "required_next_action")]\n'
+        ),
+        markdown("## Core QC distributions\n\nThese are descriptive section-level and cell-level QC summaries. No cells are automatically deleted, and cell-level distributions do not create biological replication."),
+        code(
+            'slide_summary$section_summary\n'
+            'stopifnot(all(slide_summary$section_summary$cells_deleted == 0L))\n'
+            'slide_plots <- plot_slide_qc(slide_data, slide_summary)\n'
+            'for (plot in slide_plots) print(plot)\n'
+        ),
+        markdown("## Alarm evidence and candidate genes\n\nThe alarm table reports directly available evidence. The candidate list uses cross-section transcript depletion/quality patterns and remains `CANDIDATE_NOT_CONFIRMED`; it is not a definitive cycle-to-gene map. Exact cycle identity is `REQUIRES_10X_DIAGNOSTICS` and must come from 10x diagnostic output."),
         code(
             'extended_slide_data$cycle_alarm_evidence\n'
             'candidate_display <- extended_slide_summary$candidates[extended_slide_summary$candidates$section_candidate_flag, , drop = FALSE]\n'
             'gene_sets <- unique(extended_slide_data$gene_quality[, c("gene", "gene_set")])\n'
             'candidate_display <- merge(candidate_display, gene_sets, by = "gene", all.x = TRUE, sort = FALSE)\n'
-            'candidate_counts <- aggregate(section_candidate_flag ~ region_id + section_evidence_status, candidate_display, sum)\n'
+            'candidate_counts <- if (nrow(candidate_display)) aggregate(section_candidate_flag ~ region_id + section_evidence_status, candidate_display, sum) else data.frame(region_id = character(), section_evidence_status = character(), section_candidate_flag = integer())\n'
             'candidate_counts\n'
-            'with(candidate_display, table(region_id, gene_set, useNA = "ifany"))\n'
+            'if (nrow(candidate_display)) with(candidate_display, table(region_id, gene_set, useNA = "ifany"))\n'
             'candidate_display <- candidate_display[order(candidate_display$region_id, candidate_display$evidence_tier, candidate_display$log2_count_ratio, candidate_display$q20_difference), , drop = FALSE]\n'
             'candidate_display[seq_len(min(30L, nrow(candidate_display))), , drop = FALSE]\n'
         ),
-        markdown("## Question 2 - Does full-data QC reproduce the subset ranking?\n\nThe comparison is descriptive across four technical sections. `NOT_RUN_LOCAL_SUBSET` means this question remains pending until the full-HPC run."),
+        markdown("## Subset versus full-data burden\n\nThe comparison is descriptive across four technical sections. `NOT_RUN_LOCAL_SUBSET` means the full-data ranking remains an HPC checkpoint; rank correlations across only four sections are not biological evidence."),
         code(
             'extended_slide_summary$ranking\n'
             'extended_slide_summary$rank_agreement\n'
         ),
-        markdown("## Question 3 - Are review flags spatially clustered?\n\nGlobal kNN clustering, tissue-edge proxies, dense-aggregate proxies, and candidate hotspot bins are coordinate-based diagnostics. Hotspots are not labelled folds or tears without morphology/image review."),
+        markdown("## Spatial QC\n\nGlobal kNN clustering, tissue-edge proxies, dense-cell proxies, and candidate hotspot bins are coordinate-based diagnostics. A hotspot is only `MORPHOLOGY_REVIEW_REQUIRED`; folds, tears, tissue edges, and aggregates require image review."),
         code(
             'extended_slide_data$spatial_global\n'
             'extended_slide_data$spatial_edge_density\n'
             'extended_slide_data$manual_review_manifest\n'
         ),
-        markdown("## Question 4 - Are the two sections from each mouse technically concordant?\n\nThe two sections per mouse are compared as technical pairs. Thresholds are advisory, and these results are not biological hypothesis tests."),
+        markdown("## Within-mouse concordance\n\nThe verified technical pairs are 62308/62309 for Mouse 1 and 62310/62311 for Mouse 2. Thresholds are advisory. The Region 3/4 cell-area contrast is reviewed separately because it was not part of the original concordance gate."),
         code(
             'extended_slide_summary$concordance$summary\n'
         ),
-        markdown("## Cell-style Figures\n\nColors are fixed across sections; distributions are descriptive and do not imply cell-level biological replication."),
+        markdown("## Diagnostic Cell-style figures\n\nColors and scales are consistent across sections where scientifically appropriate. These plots support review rather than biological inference."),
         code(
-            'slide_plots <- plot_slide_qc(slide_data, slide_summary)\n'
             'extended_slide_plots <- plot_extended_slide_qc(extended_slide_data, extended_slide_summary)\n'
-            'for (plot in slide_plots) print(plot)\n'
             'for (plot in extended_slide_plots) print(plot)\n'
         ),
-        markdown("## Readiness\n\nThe original Phase 0-2 gates remain authoritative and unchanged. The worst section gate determines slide readiness; unresolved Xenium errors still block biology."),
+        markdown("## Final QC decision and next actions\n\nRegions 1 and 2 remain `HOLD` pending 10x diagnostics. Region 3 is a conditional pass pending morphology review. Region 4 remains `HOLD` pending 10x diagnostics plus segmentation/cell-area review. Comparative gene-level analysis remains on hold until the affected-gene decision is frozen."),
         code(
-            'slide_summary$readiness\n'
+            'qc_decision[, c("region_id", "reported_qc_status", "required_next_action")]\n'
             'extended_slide_summary$status\n'
             'cat("Overall slide QC status:", slide_summary$overall_status, "\\n")\n'
         ),
-        markdown("## Outputs"),
+        markdown("## Outputs and reload checks\n\nAll tables, figures, and serialized objects are written below `${RUN_ROOT}/slide_summary/`. The notebook then reloads and validates the complete artifact contract."),
         code(
             'slide_artifacts <- write_slide_qc_artifacts(PROJECT_ROOT, RUN_ROOT, slide_data, slide_summary, slide_plots)\n'
             'extended_slide_artifacts <- write_extended_slide_qc_artifacts(PROJECT_ROOT, RUN_ROOT, extended_slide_data, extended_slide_summary, extended_slide_plots)\n'
@@ -308,7 +318,7 @@ def summary_cells(incomplete=False):
         ),
     ]
     if incomplete:
-        cells = [cell for cell in cells if not (cell["cell_type"] == "markdown" and "## Readiness" in "".join(cell["source"]))]
+        cells = [cell for cell in cells if not (cell["cell_type"] == "markdown" and "## Final QC decision" in "".join(cell["source"]))]
     return cells
 
 
@@ -333,7 +343,7 @@ def validate_notebook(path, notebook_type="section", expected_region_id=None):
                 errors.append(f"expected fixed REGION_ID {expected_region_id}")
     if notebook_type == "summary":
         required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "RUN_LABEL", "EXPECTED_SECTION_COUNT", "METADATA_PATH", "EXTENDED_QC_CONFIG_PATH", "SUBSET_REFERENCE_PATH"]
-        required_sections = ["## Goal", "## Setup", "## Inputs", "## Completeness Checks", "## QC Results", "## Question 1", "## Question 2", "## Question 3", "## Question 4", "## Cell-style Figures", "## Readiness", "## Outputs"]
+        required_sections = ["## Setup", "## Inputs and validation", "## TL;DR and QC decision", "## Core QC distributions", "## Alarm evidence and candidate genes", "## Subset versus full-data burden", "## Spatial QC", "## Within-mouse concordance", "## Diagnostic Cell-style figures", "## Final QC decision and next actions", "## Outputs and reload checks"]
         for value in required_parameters + required_sections:
             if value not in text: errors.append(f"missing required section/parameter: {value}")
     if errors: raise ValueError("; ".join(errors))
