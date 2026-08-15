@@ -7,6 +7,14 @@ import re
 from pathlib import Path
 
 
+REGION_NOTEBOOKS = {
+    "Region_1": "01_section_phase0_2_QC_Region1.ipynb",
+    "Region_2": "01_section_phase0_2_QC_Region2.ipynb",
+    "Region_3": "01_section_phase0_2_QC_Region3.ipynb",
+    "Region_4": "01_section_phase0_2_QC_Region4.ipynb",
+}
+
+
 def markdown(text):
     return {"cell_type": "markdown", "metadata": {}, "source": text.splitlines(True)}
 
@@ -304,7 +312,7 @@ def summary_cells(incomplete=False):
     return cells
 
 
-def validate_notebook(path, notebook_type="section"):
+def validate_notebook(path, notebook_type="section", expected_region_id=None):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     errors = []
     if data.get("nbformat") != 4 or not isinstance(data.get("cells"), list): errors.append("invalid nbformat structure")
@@ -318,6 +326,11 @@ def validate_notebook(path, notebook_type="section"):
         required_sections = ["## Goal", "## Setup", "## Inputs", "## Phase 0", "## Phase 1", "## Phase 2", "## Extended QC preflight", "## Extended per-gene", "## Extended spatial diagnostics", "## Checks", "## Outputs"]
         for value in required_parameters + required_sections:
             if value not in text: errors.append(f"missing required section/parameter: {value}")
+        if expected_region_id is not None:
+            parameter_text = "".join(parameter_cells[0].get("source", [])) if len(parameter_cells) == 1 else ""
+            match = re.search(r'^REGION_ID\s*<-\s*"(Region_[1-4])"$', parameter_text, flags=re.MULTILINE)
+            if match is None or match.group(1) != expected_region_id:
+                errors.append(f"expected fixed REGION_ID {expected_region_id}")
     if notebook_type == "summary":
         required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "RUN_LABEL", "EXPECTED_SECTION_COUNT", "METADATA_PATH", "EXTENDED_QC_CONFIG_PATH", "SUBSET_REFERENCE_PATH"]
         required_sections = ["## Goal", "## Setup", "## Inputs", "## Completeness Checks", "## QC Results", "## Question 1", "## Question 2", "## Question 3", "## Question 4", "## Cell-style Figures", "## Readiness", "## Outputs"]
@@ -342,9 +355,21 @@ def inject_parameters(source_path, output_path, assignments):
     Path(output_path).write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def build_region_notebooks(repo):
+    source = repo / "notebooks" / "01_section_phase0_2_QC.ipynb"
+    built = []
+    for region_id, filename in REGION_NOTEBOOKS.items():
+        output = repo / "notebooks" / filename
+        inject_parameters(source, output, {"REGION_ID": region_id})
+        validate_notebook(output, "section", expected_region_id=region_id)
+        built.append(output)
+    return built
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-section", action="store_true")
+    parser.add_argument("--build-regions", action="store_true")
     parser.add_argument("--build-summary", action="store_true")
     parser.add_argument("--incomplete", action="store_true")
     parser.add_argument("--validate")
@@ -358,6 +383,9 @@ def main():
     if args.build_section:
         section_path.write_text(json.dumps(notebook(section_cells(args.incomplete)), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
         print(section_path)
+    if args.build_regions:
+        for path in build_region_notebooks(repo):
+            print(path)
     if args.build_summary:
         summary_path.write_text(json.dumps(notebook(summary_cells(args.incomplete)), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
         print(summary_path)
