@@ -397,6 +397,37 @@ stopifnot(all(file.exists(file.path(
 stopifnot(validate_evidence_only_qc_artifacts(extended_slide_root, stop_on_error = TRUE))
 stopifnot(all(evidence_release$release$gate_status %in% c("PASS", "STOP", "PENDING_DOWNSTREAM_ANALYSIS")))
 stopifnot(evidence_release$release$gate_status[evidence_release$release$gate_id == "overall_primary_release"] == "PENDING_DOWNSTREAM_ANALYSIS")
+
+# Full-HPC reconciliation compares numerical counts by value, regardless of
+# whether individual R count functions return integer or double storage.
+full_section_fixture <- data.frame(
+  region_id = paste0("Region_", 1:4),
+  section_status = c("PRIMARY_CONDITIONAL", "PRIMARY_CONDITIONAL", "PRIMARY", "SENSITIVITY_ONLY"),
+  cluster_discovery_eligible = c(TRUE, TRUE, TRUE, FALSE), stringsAsFactors = FALSE
+)
+full_mask_fixture <- data.frame(
+  primary_include = rep(TRUE, 4), strict_include = rep(TRUE, 4),
+  hotspot_sensitivity_include = rep(TRUE, 4), stringsAsFactors = FALSE
+)
+full_gene_fixture <- data.frame(
+  gene = paste0("FullGene", seq_len(479L)),
+  conservative_evidence_status = c(rep("CONSERVATIVE_NO_SIGNAL_DETECTED", 67L), rep("NOT_IN_CONSERVATIVE_ZERO_ALARM_SET", 412L)),
+  primary_feature_status = c(rep("PROVISIONAL_PRIMARY_FEATURES", 245L), rep("EXCLUDED_FROM_PRIMARY_FEATURES", 234L)),
+  technical_risk_status = c(rep("NOT_IN_TECHNICAL_RISK_SET", 245L), rep("TECHNICAL_RISK_SENSITIVITY_ONLY", 234L)),
+  stringsAsFactors = FALSE
+)
+full_eos_fixture <- data.frame(
+  gene_set = c(rep("common", 4L), rep("short_lived", 27L), rep("long_lived", 22L)),
+  retained_provisional = rep(TRUE, 53L), stringsAsFactors = FALSE
+)
+full_release_fixture <- build_evidence_only_release(
+  full_section_fixture, full_mask_fixture, full_gene_fixture,
+  full_eos_fixture, data.frame(), "full_unit_run", "FULL_HPC",
+  "full_unit_fixture", "2026-08-16 UTC"
+)
+stopifnot(full_release_fixture$gate_status[full_release_fixture$gate_id == "gene_tier_reconciliation"] == "PASS")
+stopifnot(full_release_fixture$gate_status[full_release_fixture$gate_id == "eos_gene_reconciliation"] == "PASS")
+stopifnot(full_release_fixture$gate_status[full_release_fixture$gate_id == "overall_primary_release"] == "PENDING_DOWNSTREAM_ANALYSIS")
 region4_bundle <- readRDS(file.path(extended_slide_root, "downstream_inputs", "Region_4.downstream_input.rds"))
 stopifnot(region4_bundle$section_status == "SENSITIVITY_ONLY")
 stopifnot(region4_bundle$downstream_contract == "MAP_TO_REGION_1_3_REFERENCE_WITH_UNCERTAIN")

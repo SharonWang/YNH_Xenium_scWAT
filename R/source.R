@@ -1409,7 +1409,10 @@ build_evidence_only_release <- function(section_decision, masks, gene_decision,
     eos = sum(eos_decision$retained_provisional)
   )
   full_expected <- identical(mode, "FULL_HPC")
-  gene_reconciled <- identical(unname(counts[c("raw", "conservative", "provisional", "risk")]), c(479, 67, 245, 234))
+  gene_reconciled <- identical(
+    as.integer(unname(counts[c("raw", "conservative", "provisional", "risk")])),
+    c(479L, 67L, 245L, 234L)
+  )
   eos_partition <- table(factor(eos_decision$gene_set[eos_decision$retained_provisional], levels = c("common", "short_lived", "long_lived")))
   eos_reconciled <- sum(eos_partition) == 53L && identical(as.integer(eos_partition), c(4L, 27L, 22L))
   qc_rows <- data.frame(
