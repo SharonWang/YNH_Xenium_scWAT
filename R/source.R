@@ -1090,7 +1090,7 @@ build_cell_downstream_masks <- function(cell_metadata, spatial_hotspots = data.f
   out
 }
 
-cell_style_theme <- function(base_size = 10) {
+cell_style_theme <- function(base_size = 14) {
   require_package("ggplot2")
   ggplot2::theme_classic(base_size = base_size) +
     ggplot2::theme(
@@ -1747,7 +1747,7 @@ plot_extended_slide_qc <- function(extended_slide_data, extended_slide_summary) 
       ggplot2::labs(title = "Direct poor-cycle alarm evidence", x = NULL, y = NULL, fill = NULL) + cell_style_theme() +
       ggplot2::theme(axis.text.y = ggplot2::element_blank(), axis.ticks.y = ggplot2::element_blank()),
     candidate_genes = ggplot2::ggplot(candidate_counts, ggplot2::aes(region_id, genes, fill = section_evidence_status)) +
-      ggplot2::geom_col(width = 0.7) + ggplot2::labs(title = "Section-level candidate affected genes", subtitle = "Candidates are not confirmed; exact cycle identity requires 10x diagnostics", x = NULL, y = "Candidate genes", fill = "Evidence") + cell_style_theme(),
+      ggplot2::geom_col(width = 0.7) + ggplot2::labs(title = "Section-level candidate affected genes",x = NULL, y = "Candidate genes", fill = "Evidence") + cell_style_theme(),
     ranking = ggplot2::ggplot(ranking_long, ggplot2::aes(region_id, review_fraction, colour = source, group = source)) +
       ggplot2::geom_line(linewidth = 0.7) + ggplot2::geom_point(size = 2) +
       ggplot2::scale_y_continuous(labels = function(x) paste0(round(100 * x, 1), "%")) +
@@ -1755,10 +1755,10 @@ plot_extended_slide_qc <- function(extended_slide_data, extended_slide_summary) 
     spatial = ggplot2::ggplot(global, ggplot2::aes(region_id, statistic, colour = region_id)) +
       ggplot2::geom_hline(yintercept = 0, colour = "#BDBDBD") + ggplot2::geom_point(size = 2) +
       ggplot2::scale_colour_manual(values = palette, drop = FALSE) +
-      ggplot2::labs(title = "Global spatial clustering of QC review flags", subtitle = "Coordinate statistic; morphology labels require image review", x = NULL, y = "kNN clustering statistic") + cell_style_theme() + ggplot2::theme(legend.position = "none"),
+      ggplot2::labs(title = "Global spatial clustering of QC review flags", x = NULL, y = "kNN clustering statistic") + cell_style_theme() + ggplot2::theme(legend.position = "none"),
     concordance = ggplot2::ggplot(concordance, ggplot2::aes(mouse_id, review_rate_difference, fill = concordance_status)) +
       ggplot2::geom_col(width = 0.65) + ggplot2::scale_fill_manual(values = c(CONCORDANT = "#4DAF4A", REVIEW = "#D73027", NOT_ESTIMABLE = "#BDBDBD"), drop = FALSE) +
-      ggplot2::labs(title = "Within-mouse technical concordance", subtitle = "Advisory section-pair comparison", x = NULL, y = "Absolute review-rate difference", fill = NULL) + cell_style_theme()
+      ggplot2::labs(title = "Within-mouse technical concordance", x = NULL, y = "Absolute review-rate difference", fill = NULL) + cell_style_theme()
   )
 }
 
@@ -1943,6 +1943,405 @@ plot_slide_qc <- function(slide_data, slide_summary) {
   )
 }
 
+read_downstream_reference_config <- function(path) {
+  if (!file.exists(path)) stop(sprintf("Missing downstream reference config: %s", path), call. = FALSE)
+  table <- utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
+  required_columns <- c("key", "value", "description")
+  if (length(setdiff(required_columns, names(table)))) {
+    stop("Downstream reference config must contain key, value, and description columns.", call. = FALSE)
+  }
+  if (!nrow(table) || any(!nzchar(table$key)) || anyDuplicated(table$key)) {
+    stop("Downstream reference config keys must be non-empty and unique.", call. = FALSE)
+  }
+  required_keys <- c(
+    "seed", "normalization_scale_factor", "primary_gene_count", "conservative_gene_count",
+    "technical_risk_gene_count", "raw_gene_count", "n_pcs", "knn_k", "leiden_resolution", "marker_score_margin",
+    "seurat_min_version", "harmony_min_version", "harmony_theta", "harmony_lambda",
+    "harmony_sigma", "harmony_max_iter", "harmony_reference_region", "mapping_folds",
+    "mapping_k", "mapping_confidence_quantile", "mapping_distance_quantile",
+    "mapping_min_label_cells", "major_label_fraction", "major_label_cells",
+    "section_cluster_dominance", "section_cluster_min_cells", "label_stability_min",
+    "gene_sensitivity_concordance_min", "section_predictability_permutations",
+    "section_predictability_margin", "eos_assignment_jaccard_min", "eos_score_spearman_min",
+    "eos_module_nbin", "eos_module_ctrl", "marker_detection_min",
+    "marker_average_log_expression_min", "exclusion_contradiction_max",
+    "mapping_accepted_fraction_min", "mapping_unrepresented_fraction_review",
+    "mapping_marker_coherence_min", "mapping_label_stability_min",
+    "consensus_label_stability_min", "eos_identity_min_markers",
+    "eos_identity_detection_min", "eos_state_min_genes_detected"
+  )
+  missing_keys <- setdiff(required_keys, table$key)
+  if (length(missing_keys)) {
+    stop(sprintf("Downstream reference config is missing required keys: %s", paste(missing_keys, collapse = ", ")), call. = FALSE)
+  }
+  integer_keys <- c(
+    "seed", "primary_gene_count", "conservative_gene_count", "technical_risk_gene_count",
+    "raw_gene_count", "n_pcs", "knn_k", "harmony_max_iter", "mapping_folds",
+    "mapping_k", "mapping_min_label_cells", "major_label_cells",
+    "section_cluster_min_cells", "section_predictability_permutations",
+    "eos_module_nbin", "eos_module_ctrl", "eos_identity_min_markers",
+    "eos_state_min_genes_detected"
+  )
+  numeric_keys <- c(
+    "normalization_scale_factor", "leiden_resolution", "marker_score_margin", "harmony_theta", "harmony_lambda",
+    "harmony_sigma", "mapping_confidence_quantile", "mapping_distance_quantile",
+    "major_label_fraction", "section_cluster_dominance", "label_stability_min",
+    "gene_sensitivity_concordance_min", "section_predictability_margin",
+    "eos_assignment_jaccard_min", "eos_score_spearman_min", "marker_score_margin",
+    "marker_detection_min", "marker_average_log_expression_min",
+    "exclusion_contradiction_max", "mapping_accepted_fraction_min",
+    "mapping_unrepresented_fraction_review", "mapping_marker_coherence_min",
+    "mapping_label_stability_min", "consensus_label_stability_min",
+    "eos_identity_detection_min"
+  )
+  values <- setNames(as.list(table$value), table$key)
+  for (key in intersect(integer_keys, names(values))) values[[key]] <- as.integer(values[[key]])
+  for (key in intersect(numeric_keys, names(values))) values[[key]] <- as.numeric(values[[key]])
+  invalid_integer <- integer_keys[!vapply(values[integer_keys], function(value) {
+    length(value) == 1L && !is.na(value) && is.finite(value) && value >= 1L
+  }, logical(1))]
+  if (length(invalid_integer)) {
+    stop(sprintf("Downstream reference config requires a positive integer for: %s", paste(invalid_integer, collapse = ", ")), call. = FALSE)
+  }
+  invalid_numeric <- numeric_keys[!vapply(values[numeric_keys], function(value) {
+    length(value) == 1L && !is.na(value) && is.finite(value)
+  }, logical(1))]
+  if (length(invalid_numeric)) {
+    stop(sprintf("Downstream reference config requires a finite numeric value for: %s", paste(invalid_numeric, collapse = ", ")), call. = FALSE)
+  }
+  open_unit_keys <- c("mapping_confidence_quantile", "mapping_distance_quantile")
+  invalid_open_unit <- open_unit_keys[!vapply(values[open_unit_keys], function(value) value > 0 && value < 1, logical(1))]
+  if (length(invalid_open_unit)) {
+    stop(sprintf("Downstream reference config values must be between 0 and 1 (exclusive) for: %s", paste(invalid_open_unit, collapse = ", ")), call. = FALSE)
+  }
+  closed_unit_keys <- c(
+    "major_label_fraction", "section_cluster_dominance", "label_stability_min",
+    "gene_sensitivity_concordance_min", "section_predictability_margin",
+    "eos_assignment_jaccard_min", "eos_score_spearman_min",
+    "marker_detection_min", "exclusion_contradiction_max",
+    "mapping_accepted_fraction_min", "mapping_unrepresented_fraction_review",
+    "mapping_marker_coherence_min", "mapping_label_stability_min",
+    "consensus_label_stability_min", "eos_identity_detection_min"
+  )
+  invalid_closed_unit <- closed_unit_keys[!vapply(values[closed_unit_keys], function(value) value >= 0 && value <= 1, logical(1))]
+  if (length(invalid_closed_unit)) {
+    stop(sprintf("Downstream reference config values must be between 0 and 1 for: %s", paste(invalid_closed_unit, collapse = ", ")), call. = FALSE)
+  }
+  values
+}
+
+read_canonical_marker_config <- function(path, panel_genes, gene_decision) {
+  if (!file.exists(path)) stop(sprintf("Missing canonical marker config: %s", path), call. = FALSE)
+  markers <- utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
+  required <- c("cell_type", "gene", "direction", "marker_group", "use_policy")
+  if (length(setdiff(required, names(markers)))) {
+    stop("Canonical marker config lacks required columns.", call. = FALSE)
+  }
+  if (!length(panel_genes) || anyDuplicated(panel_genes)) stop("Panel genes must be non-empty and unique.", call. = FALSE)
+  gene_required <- c("gene", "technical_risk_status")
+  if (length(setdiff(gene_required, names(gene_decision))) || anyDuplicated(gene_decision$gene)) {
+    stop("Gene decision must contain unique gene and technical_risk_status columns.", call. = FALSE)
+  }
+  markers <- markers[markers$gene %in% panel_genes, required, drop = FALSE]
+  if (!nrow(markers)) stop("No configured canonical markers are present in the panel.", call. = FALSE)
+  risk_genes <- gene_decision$gene[
+    gene_decision$technical_risk_status == "TECHNICAL_RISK_SENSITIVITY_ONLY"
+  ]
+  markers$use_policy <- ifelse(
+    markers$gene %in% risk_genes,
+    "VALIDATION_ONLY_TECHNICAL_RISK",
+    "PRIMARY_SUPPORT"
+  )
+  marker_counts <- table(markers$cell_type)
+  markers$cell_type_panel_marker_count <- as.integer(marker_counts[markers$cell_type])
+  markers$cell_type_support_status <- ifelse(
+    markers$cell_type_panel_marker_count >= 2L,
+    "SUPPORTED",
+    "INSUFFICIENT_PANEL_SUPPORT"
+  )
+  rownames(markers) <- NULL
+  markers
+}
+
+read_downstream_handoff <- function(qc_run_root, release_path = NULL) {
+  if (!dir.exists(qc_run_root)) stop(sprintf("Missing Phase 0-2 QC run root: %s", qc_run_root), call. = FALSE)
+  region_ids <- paste0("Region_", seq_len(4L))
+  bundle_paths <- file.path(qc_run_root, "downstream_inputs", paste0(region_ids, ".downstream_input.rds"))
+  slide_root <- file.path(qc_run_root, "slide_summary")
+  table_paths <- c(
+    gene_decision = file.path(slide_root, "gene_downstream_decision.tsv"),
+    eos_decision = file.path(slide_root, "eos_gene_decision_summary.tsv"),
+    section_decision = file.path(slide_root, "section_downstream_decision.tsv"),
+    masks = file.path(slide_root, "cell_downstream_masks.tsv.gz"),
+    release = release_path %||% file.path(slide_root, "evidence_only_qc_release.tsv")
+  )
+  missing <- c(bundle_paths[!file.exists(bundle_paths)], table_paths[!file.exists(table_paths)])
+  if (length(missing)) stop(sprintf("Missing downstream handoff artifacts: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  regions <- setNames(lapply(bundle_paths, readRDS), region_ids)
+  list(
+    qc_run_root = normalizePath(qc_run_root, winslash = "/", mustWork = TRUE),
+    release_path = normalizePath(table_paths[["release"]], winslash = "/", mustWork = TRUE),
+    regions = regions,
+    gene_decision = utils::read.delim(table_paths[["gene_decision"]], check.names = FALSE),
+    eos_decision = utils::read.delim(table_paths[["eos_decision"]], check.names = FALSE),
+    section_decision = utils::read.delim(table_paths[["section_decision"]], check.names = FALSE),
+    masks = utils::read.delim(gzfile(table_paths[["masks"]]), check.names = FALSE),
+    release = utils::read.delim(table_paths[["release"]], check.names = FALSE)
+  )
+}
+
+validate_downstream_handoff <- function(qc_run_root, release_path = NULL, stop_on_error = TRUE) {
+  handoff <- read_downstream_handoff(qc_run_root, release_path)
+  region_ids <- paste0("Region_", seq_len(4L))
+  expected_status <- c("PRIMARY_CONDITIONAL", "PRIMARY_CONDITIONAL", "PRIMARY", "SENSITIVITY_ONLY")
+  expected_contract <- c(rep("REFERENCE_ELIGIBILITY_FROM_CELL_MASKS", 3L), "MAP_TO_REGION_1_3_REFERENCE_WITH_UNCERTAIN")
+  checks <- list()
+  add_check <- function(check, passed, details) {
+    checks[[length(checks) + 1L]] <<- data.frame(
+      check = check, status = if (isTRUE(passed)) "PASS" else "FAIL",
+      details = as.character(details), stringsAsFactors = FALSE
+    )
+  }
+
+  add_check("four_region_bundles", identical(names(handoff$regions), region_ids), paste(names(handoff$regions), collapse = ","))
+  bundle_regions <- vapply(handoff$regions, function(bundle) as.character(bundle$region_id %||% ""), character(1))
+  bundle_status <- vapply(handoff$regions, function(bundle) as.character(bundle$section_status %||% ""), character(1))
+  bundle_contract <- vapply(handoff$regions, function(bundle) as.character(bundle$downstream_contract %||% ""), character(1))
+  add_check("bundle_region_identity", identical(unname(bundle_regions), region_ids), paste(bundle_regions, collapse = ","))
+  add_check("section_status_contract", identical(unname(bundle_status), expected_status), paste(bundle_status, collapse = ","))
+  add_check("region4_mapping_only_contract", identical(unname(bundle_contract), expected_contract), paste(bundle_contract, collapse = ","))
+
+  sparse_ok <- vapply(handoff$regions, function(bundle) inherits(bundle$counts, "sparseMatrix"), logical(1))
+  raw_ok <- vapply(handoff$regions, function(bundle) isTRUE(bundle$raw_counts_preserved), logical(1))
+  add_check("sparse_raw_counts", all(sparse_ok & raw_ok), sprintf("sparse=%d/4; preserved=%d/4", sum(sparse_ok), sum(raw_ok)))
+
+  alignment_ok <- vapply(handoff$regions, function(bundle) {
+    counts <- bundle$counts
+    cells <- bundle$cell_metadata
+    genes <- bundle$gene_sets$raw_complete_panel
+    !is.null(counts) && is.data.frame(cells) && length(genes) == nrow(counts) &&
+      identical(colnames(counts), as.character(cells$cell_id)) &&
+      setequal(rownames(counts), as.character(genes)) &&
+      !anyDuplicated(cells$cell_id) && !anyDuplicated(rownames(counts)) && !anyDuplicated(genes)
+  }, logical(1))
+  add_check("matrix_cell_gene_alignment", all(alignment_ok), paste(names(alignment_ok)[!alignment_ok], collapse = ","))
+
+  all_cells <- do.call(rbind, lapply(handoff$regions, function(bundle) bundle$cell_metadata[, c("region_id", "cell_id"), drop = FALSE]))
+  add_check("global_cell_identity", !anyDuplicated(paste(all_cells$region_id, all_cells$cell_id, sep = "|")), sprintf("cells=%d", nrow(all_cells)))
+
+  required_mask_columns <- c("region_id", "cell_id", "primary_include", "strict_include", "hotspot_sensitivity_include")
+  bundle_cell_keys <- sort(paste(all_cells$region_id, all_cells$cell_id, sep = "|"))
+  mask_cell_keys <- if (all(c("region_id", "cell_id") %in% names(handoff$masks))) {
+    sort(paste(handoff$masks$region_id, handoff$masks$cell_id, sep = "|"))
+  } else {
+    character()
+  }
+  masks_ok <- !length(setdiff(required_mask_columns, names(handoff$masks))) &&
+    !anyDuplicated(paste(handoff$masks$region_id, handoff$masks$cell_id, sep = "|")) &&
+    nrow(handoff$masks) == nrow(all_cells) &&
+    identical(mask_cell_keys, bundle_cell_keys) &&
+    all(!handoff$masks$strict_include | handoff$masks$primary_include) &&
+    all(!handoff$masks$hotspot_sensitivity_include | handoff$masks$primary_include)
+  add_check("cell_mask_contract", masks_ok, sprintf("mask_rows=%d; bundle_cells=%d", nrow(handoff$masks), nrow(all_cells)))
+
+  gene <- handoff$gene_decision
+  gene_ok <- all(c("gene", "primary_feature_status", "conservative_evidence_status", "technical_risk_status") %in% names(gene)) &&
+    nrow(gene) == 479L && !anyDuplicated(gene$gene) &&
+    sum(gene$primary_feature_status == "PROVISIONAL_PRIMARY_FEATURES") == 245L &&
+    sum(gene$conservative_evidence_status == "CONSERVATIVE_NO_SIGNAL_DETECTED") == 67L &&
+    sum(gene$technical_risk_status == "TECHNICAL_RISK_SENSITIVITY_ONLY") == 234L
+  add_check("gene_tier_contract", gene_ok, sprintf("rows=%d", nrow(gene)))
+
+  eos <- handoff$eos_decision
+  eos_ok <- all(c("gene", "retained_provisional") %in% names(eos)) &&
+    sum(as.logical(eos$retained_provisional), na.rm = TRUE) == 53L
+  add_check("eosinophil_gene_contract", eos_ok, sprintf("retained=%d", sum(as.logical(eos$retained_provisional), na.rm = TRUE)))
+
+  sections <- handoff$section_decision
+  section_ok <- all(c("region_id", "section_status") %in% names(sections)) &&
+    identical(as.character(sections$region_id), region_ids) &&
+    identical(as.character(sections$section_status), expected_status)
+  add_check("slide_section_decisions", section_ok, paste(sections$section_status, collapse = ","))
+
+  required_qc_gates <- c(
+    "fixed_section_decisions", "cell_mask_reconciliation", "gene_tier_reconciliation",
+    "eos_gene_reconciliation", "region4_excluded_from_reference_definition"
+  )
+  release <- handoff$release
+  gate_ok <- all(c("gate_id", "gate_status") %in% names(release)) &&
+    all(required_qc_gates %in% release$gate_id) &&
+    all(release$gate_status[match(required_qc_gates, release$gate_id)] == "PASS")
+  add_check("completed_qc_release_gates", gate_ok, paste(release$gate_status[match(required_qc_gates, release$gate_id)], collapse = ","))
+
+  result <- do.call(rbind, checks)
+  if (isTRUE(stop_on_error) && any(result$status == "FAIL")) {
+    failed <- result$check[result$status == "FAIL"]
+    stop(sprintf("Downstream handoff validation failed: %s", paste(failed, collapse = ", ")), call. = FALSE)
+  }
+  result
+}
+
+downstream_model_dependencies <- function() {
+  data.frame(
+    package = c("Seurat", "SeuratObject", "harmony", "leidenbase"),
+    minimum_version = c("4.3.0", "4.1.0", "1.2.0", "0.1.0"),
+    role = c("reference_clustering_and_mapping", "sparse_object_container", "eligible_consensus_integration", "leiden_clustering"),
+    stringsAsFactors = FALSE
+  )
+}
+
+primary_model_feature_policy <- function() "FIXED_245_NO_VARIABLE_FEATURE_SELECTION"
+
+downstream_model_preflight <- function(config) {
+  dependencies <- downstream_model_dependencies()
+  dependencies$minimum_version[dependencies$package == "Seurat"] <- as.character(config$seurat_min_version)
+  dependencies$minimum_version[dependencies$package == "harmony"] <- as.character(config$harmony_min_version)
+  dependencies$available <- vapply(dependencies$package, requireNamespace, logical(1), quietly = TRUE)
+  dependencies$installed_version <- vapply(seq_len(nrow(dependencies)), function(index) {
+    if (!dependencies$available[[index]]) return(NA_character_)
+    as.character(utils::packageVersion(dependencies$package[[index]]))
+  }, character(1))
+  dependencies$version_ok <- vapply(seq_len(nrow(dependencies)), function(index) {
+    dependencies$available[[index]] &&
+      utils::compareVersion(dependencies$installed_version[[index]], dependencies$minimum_version[[index]]) >= 0L
+  }, logical(1))
+  dependencies$status <- ifelse(
+    !dependencies$available,
+    "SKIP_LOCAL_MODEL_TEST_HPC_REQUIRED",
+    ifelse(dependencies$version_ok, "PASS", "FAIL_HPC_PACKAGE_VERSION")
+  )
+  dependencies
+}
+
+match_cluster_labels <- function(reference_cluster, candidate_cluster) {
+  if (is.null(names(reference_cluster)) || is.null(names(candidate_cluster))) {
+    stop("Cluster label vectors must be named by cell ID.", call. = FALSE)
+  }
+  shared <- intersect(names(reference_cluster), names(candidate_cluster))
+  if (!length(shared)) stop("No shared cells are available for cluster matching.", call. = FALSE)
+  reference <- as.character(reference_cluster[shared])
+  candidate <- as.character(candidate_cluster[shared])
+  reference_levels <- sort(unique(reference))
+  candidate_levels <- sort(unique(candidate))
+  score <- matrix(0, nrow = length(reference_levels), ncol = length(candidate_levels),
+                  dimnames = list(reference_levels, candidate_levels))
+  for (reference_id in reference_levels) {
+    reference_cells <- shared[reference == reference_id]
+    for (candidate_id in candidate_levels) {
+      candidate_cells <- shared[candidate == candidate_id]
+      score[reference_id, candidate_id] <- length(intersect(reference_cells, candidate_cells)) /
+        length(union(reference_cells, candidate_cells))
+    }
+  }
+  size <- max(nrow(score), ncol(score))
+  padded <- matrix(0, nrow = size, ncol = size)
+  padded[seq_len(nrow(score)), seq_len(ncol(score))] <- score
+  assignment <- clue::solve_LSAP(padded, maximum = TRUE)
+  rows <- seq_len(nrow(score))
+  columns <- as.integer(assignment[rows])
+  keep <- columns <= ncol(score)
+  rows <- rows[keep]
+  columns <- columns[keep]
+  data.frame(
+    reference_cluster = rownames(score)[rows],
+    candidate_cluster = colnames(score)[columns],
+    jaccard = score[cbind(rows, columns)],
+    shared_cells = vapply(seq_along(rows), function(index) {
+      sum(reference == rownames(score)[rows[[index]]] & candidate == colnames(score)[columns[[index]]])
+    }, integer(1)),
+    stringsAsFactors = FALSE
+  )
+}
+
+
+assert_downstream_model_environment <- function(config) {
+  preflight <- downstream_model_preflight(config)
+  if (any(preflight$status != "PASS")) {
+    failed <- paste(preflight$package[preflight$status != "PASS"], preflight$status[preflight$status != "PASS"], sep = "=")
+    stop(sprintf("Seurat/Harmony HPC model environment is not ready: %s", paste(failed, collapse = ", ")), call. = FALSE)
+  }
+  invisible(preflight)
+}
+
+join_seurat_layers_if_needed <- function(object, assay = "RNA") {
+  if (utils::packageVersion("SeuratObject") >= "5.0.0" && exists("JoinLayers", envir = asNamespace("SeuratObject"), inherits = FALSE)) {
+    object <- SeuratObject::JoinLayers(object, assay = assay)
+  }
+  object
+}
+
+build_seurat_reference <- function(counts, cells, genes, config, role, seed = config$seed) {
+  assert_downstream_model_environment(config)
+  if (!inherits(counts, "sparseMatrix")) stop("Reference counts must be a sparse Matrix.", call. = FALSE)
+  if (!is.data.frame(cells) || !"cell_id" %in% names(cells) || anyDuplicated(cells$cell_id)) {
+    stop("Reference cells must contain unique cell_id values.", call. = FALSE)
+  }
+  if (!length(genes) || anyDuplicated(genes) || length(setdiff(genes, rownames(counts)))) {
+    stop("Reference genes must be unique and present in the count matrix.", call. = FALSE)
+  }
+  cell_ids <- as.character(cells$cell_id)
+  if (length(setdiff(cell_ids, colnames(counts)))) stop("Reference cell IDs are absent from the count matrix.", call. = FALSE)
+  if (length(cell_ids) < 3L || length(genes) < 3L) stop("Reference fitting requires at least three cells and genes.", call. = FALSE)
+  model_counts <- counts[, cell_ids, drop = FALSE]
+  metadata <- cells[match(cell_ids, cells$cell_id), , drop = FALSE]
+  rownames(metadata) <- cell_ids
+  set.seed(as.integer(seed))
+  object <- Seurat::CreateSeuratObject(counts = model_counts, meta.data = metadata, project = role, min.cells = 0L, min.features = 0L)
+  object <- Seurat::NormalizeData(
+    object, normalization.method = "LogNormalize",
+    scale.factor = as.numeric(config$normalization_scale_factor), verbose = FALSE
+  )
+  object <- Seurat::ScaleData(object, features = genes, verbose = FALSE)
+  npcs <- min(as.integer(config$n_pcs), length(genes) - 1L, ncol(object) - 1L)
+  object <- Seurat::RunPCA(object, features = genes, npcs = npcs, seed.use = as.integer(seed), verbose = FALSE)
+  dims <- seq_len(npcs)
+  object <- Seurat::FindNeighbors(object, reduction = "pca", dims = dims, k.param = min(as.integer(config$knn_k), ncol(object) - 1L), verbose = FALSE)
+  object <- Seurat::FindClusters(
+    object, resolution = as.numeric(config$leiden_resolution), algorithm = 4L,
+    random.seed = as.integer(seed), verbose = FALSE
+  )
+  object <- Seurat::RunUMAP(
+    object, reduction = "pca", dims = dims, seed.use = as.integer(seed),
+    return.model = TRUE, reduction.name = "umap_pca", verbose = FALSE
+  )
+  object@misc$downstream_reference_contract <- list(
+    role = role, feature_policy = primary_model_feature_policy(), feature_names = genes,
+    raw_feature_names = rownames(model_counts), raw_gene_count = nrow(model_counts),
+    n_pcs = npcs, seed = as.integer(seed), normalization_method = "LogNormalize",
+    normalization_scale_factor = as.numeric(config$normalization_scale_factor),
+    package_versions = setNames(
+      vapply(c("Seurat", "SeuratObject"), function(package) as.character(utils::packageVersion(package)), character(1)),
+      c("Seurat", "SeuratObject")
+    )
+  )
+  object
+}
+
+find_primary_markers <- function(object, genes, config) {
+  assert_downstream_model_environment(config)
+  if (!inherits(object, "Seurat")) stop("Primary marker input must be a Seurat object.", call. = FALSE)
+  genes <- intersect(as.character(genes), rownames(object))
+  if (!length(genes)) stop("No primary marker genes are present in the Seurat object.", call. = FALSE)
+  object <- join_seurat_layers_if_needed(object, "RNA")
+  Seurat::Idents(object) <- "seurat_clusters"
+  markers <- Seurat::FindAllMarkers(
+    object, assay = "RNA", features = genes, only.pos = TRUE,
+    min.pct = 0.05, logfc.threshold = 0.1, verbose = FALSE
+  )
+  if (nrow(markers) && any(!markers$gene %in% genes)) stop("Primary marker result escaped the frozen feature set.", call. = FALSE)
+  markers
+}
+
+
+get_seurat_normalized_data <- function(object, assay = "RNA") {
+  if (utils::packageVersion("SeuratObject") >= "5.0.0" && exists("LayerData", envir = asNamespace("SeuratObject"), inherits = FALSE)) {
+    return(SeuratObject::LayerData(object, assay = assay, layer = "data"))
+  }
+  Seurat::GetAssayData(object, assay = assay, slot = "data")
+}
+
+
+
 write_slide_qc_artifacts <- function(project_root, run_root, slide_data, slide_summary, slide_plots) {
   assert_path_within(project_root, run_root)
   output_dir <- file.path(run_root, "slide_summary")
@@ -1972,4 +2371,8007 @@ write_slide_qc_artifacts <- function(project_root, run_root, slide_data, slide_s
   all_paths <- c(unname(paths), rds_path, pdf_path, unname(png_paths), session_path, status_path)
   if (!all(file.exists(all_paths))) stop("Slide QC artifact validation failed.", call. = FALSE)
   all_paths
+}
+
+# -----------------------------------------------------------------------------
+# Scientifically revised downstream reference workflow (2026-08-16)
+# Single canonical implementation; superseded checkpoint definitions were removed.
+# -----------------------------------------------------------------------------
+
+parse_downstream_cli <- function(args = commandArgs(trailingOnly = TRUE)) {
+  values <- list()
+  for (argument in args) {
+    if (!startsWith(argument, "--") || !grepl("=", argument, fixed = TRUE)) next
+    parts <- strsplit(sub("^--", "", argument), "=", fixed = TRUE)[[1]]
+    values[[parts[[1]]]] <- paste(parts[-1], collapse = "=")
+  }
+  values
+}
+
+require_downstream_argument <- function(arguments, name) {
+  value <- arguments[[name]] %||% ""
+  if (length(value) != 1L || is.na(value) || !nzchar(value)) {
+    stop(sprintf("Missing required --%s= argument.", name), call. = FALSE)
+  }
+  value
+}
+
+validate_stage_files <- function(root, required, rds = character(), stop_on_error = TRUE) {
+  paths <- file.path(root, required)
+  missing <- paths[!file.exists(paths)]
+  valid_rds <- vapply(file.path(root, rds), function(path) {
+    file.exists(path) && !inherits(tryCatch(readRDS(path), error = identity), "error")
+  }, logical(1))
+  passed <- !length(missing) && all(valid_rds)
+  result <- data.frame(
+    check = c("required_files", "reloadable_rds"),
+    status = c(if (!length(missing)) "PASS" else "FAIL", if (all(valid_rds)) "PASS" else "FAIL"),
+    details = c(
+      if (!length(missing)) paste("files=", length(required), sep = "") else paste(basename(missing), collapse = ";"),
+      if (all(valid_rds)) paste("rds=", length(rds), sep = "") else paste(basename(file.path(root, rds)[!valid_rds]), collapse = ";")
+    ), stringsAsFactors = FALSE
+  )
+  if (isTRUE(stop_on_error) && !passed) stop(sprintf("Stage artifact validation failed under %s.", root), call. = FALSE)
+  result
+}
+
+region3_anchor_branch_definitions <- function() {
+  data.frame(
+    branch_id = c("primary_245", "strict_245", "hotspot_245", "conservative_67", "complete_479"),
+    mask_name = c(
+      "primary_include", "strict_include", "hotspot_sensitivity_include",
+      "primary_include", "primary_include"
+    ),
+    gene_set_name = c(
+      "provisional_primary_features", "provisional_primary_features",
+      "provisional_primary_features", "conservative_no_signal_detected",
+      "raw_complete_panel"
+    ),
+    scientific_role = c(
+      "PRIMARY", "CELL_QC_SENSITIVITY", "SPATIAL_HOTSPOT_SENSITIVITY",
+      "CONSERVATIVE_LOW_INFORMATION_STRESS_TEST", "CLEAN_SECTION_COMPLETE_PANEL_SENSITIVITY"
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+cluster_marker_evidence <- function(object, marker_config, config) {
+  required <- c("cell_type", "gene", "use_policy")
+  if (!inherits(object, "Seurat")) stop("Cluster marker evidence requires a Seurat object.", call. = FALSE)
+  if (!is.data.frame(marker_config) || length(setdiff(required, names(marker_config)))) {
+    stop("Canonical marker configuration is incomplete.", call. = FALSE)
+  }
+  cluster_id <- as.character(object$seurat_clusters)
+  data <- get_seurat_normalized_data(object, "RNA")
+  markers <- marker_config[marker_config$gene %in% rownames(data), , drop = FALSE]
+  clusters <- sort(unique(cluster_id))
+  types <- sort(unique(markers$cell_type))
+  marker_genes <- unique(markers$gene)
+  mean_matrix <- vapply(clusters, function(cluster) {
+    Matrix::rowMeans(data[marker_genes, cluster_id == cluster, drop = FALSE])
+  }, numeric(length(marker_genes)))
+  detection_matrix <- vapply(clusters, function(cluster) {
+    Matrix::rowMeans(data[marker_genes, cluster_id == cluster, drop = FALSE] > 0)
+  }, numeric(length(marker_genes)))
+  if (is.null(dim(mean_matrix))) mean_matrix <- matrix(mean_matrix, ncol = 1L)
+  if (is.null(dim(detection_matrix))) detection_matrix <- matrix(detection_matrix, ncol = 1L)
+  rownames(mean_matrix) <- rownames(detection_matrix) <- marker_genes
+  colnames(mean_matrix) <- colnames(detection_matrix) <- clusters
+  relative_matrix <- matrix(
+    0, nrow = length(marker_genes), ncol = length(clusters),
+    dimnames = list(marker_genes, clusters)
+  )
+  for (gene in marker_genes) {
+    values <- mean_matrix[gene, ]
+    deviation <- stats::sd(values)
+    if (!is.na(deviation) && deviation > 0) relative_matrix[gene, ] <- (values - mean(values)) / deviation
+  }
+  rows <- list()
+  for (cluster in clusters) {
+    cluster_mean <- mean_matrix[, cluster]
+    cluster_detection <- detection_matrix[, cluster]
+    for (cell_type in types) {
+      primary <- markers$gene[
+        markers$cell_type == cell_type & markers$use_policy == "PRIMARY_SUPPORT"
+      ]
+      risk <- markers$gene[
+        markers$cell_type == cell_type & markers$use_policy == "VALIDATION_ONLY_TECHNICAL_RISK"
+      ]
+      primary_detected <- primary[
+        cluster_detection[primary] >= as.numeric(config$marker_detection_min) &
+          cluster_mean[primary] >= as.numeric(config$marker_average_log_expression_min)
+      ]
+      rows[[length(rows) + 1L]] <- data.frame(
+        cluster = cluster, reference_label = cell_type,
+        primary_marker_count = length(primary),
+        supported_primary_marker_count = length(primary_detected),
+        marker_detection_fraction = if (length(primary)) length(primary_detected) / length(primary) else 0,
+        primary_score = if (length(primary_detected)) mean(relative_matrix[primary_detected, cluster]) else NA_real_,
+        risk_marker_count = length(risk),
+        risk_validation_score = if (length(risk)) mean(cluster_mean[risk]) else NA_real_,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  do.call(rbind, rows)
+}
+
+annotate_seurat_clusters <- function(object, marker_config, config) {
+  assert_downstream_model_environment(config)
+  scores <- cluster_marker_evidence(object, marker_config, config)
+  clusters <- sort(unique(scores$cluster))
+  support <- do.call(rbind, lapply(clusters, function(cluster) {
+    candidate <- scores[
+      scores$cluster == cluster & scores$supported_primary_marker_count >= 2L &
+        is.finite(scores$primary_score), , drop = FALSE
+    ]
+    if (!nrow(candidate)) {
+      return(data.frame(
+        cluster = cluster, reference_label = paste0("Unresolved_", cluster),
+        support_status = "INSUFFICIENT_ABSOLUTE_MARKER_EVIDENCE",
+        primary_marker_count = 0L, marker_detection_fraction = 0,
+        score_margin = NA_real_, exclusion_contradiction = NA_real_,
+        risk_only_support = any(scores$risk_marker_count[scores$cluster == cluster] >= 2L),
+        stringsAsFactors = FALSE
+      ))
+    }
+    candidate <- candidate[order(candidate$primary_score, decreasing = TRUE), , drop = FALSE]
+    best <- candidate[1, , drop = FALSE]
+    second_score <- if (nrow(candidate) > 1L) candidate$primary_score[[2]] else 0
+    margin <- best$primary_score[[1]] - second_score
+    competing <- scores[
+      scores$cluster == cluster & scores$reference_label != best$reference_label[[1]] &
+        scores$supported_primary_marker_count >= 2L & is.finite(scores$primary_score), , drop = FALSE
+    ]
+    competing_score <- if (nrow(competing)) max(competing$primary_score) else 0
+    contradiction <- if (best$primary_score[[1]] > 0) {
+      max(0, competing_score) / best$primary_score[[1]]
+    } else {
+      Inf
+    }
+    supported <- margin >= as.numeric(config$marker_score_margin) &&
+      contradiction <= as.numeric(config$exclusion_contradiction_max)
+    data.frame(
+      cluster = cluster,
+      reference_label = if (supported) best$reference_label[[1]] else paste0("Unresolved_", cluster),
+      support_status = if (supported) "SUPPORTED" else "AMBIGUOUS_OR_CONTRADICTORY_MARKER_EVIDENCE",
+      primary_marker_count = best$supported_primary_marker_count[[1]],
+      marker_detection_fraction = best$marker_detection_fraction[[1]],
+      score_margin = margin, exclusion_contradiction = contradiction,
+      risk_only_support = FALSE, stringsAsFactors = FALSE
+    )
+  }))
+  label_map <- setNames(support$reference_label, support$cluster)
+  object$reference_label <- unname(label_map[as.character(object$seurat_clusters)])
+  list(object = object, marker_support = support, marker_scores = scores)
+}
+
+label_agreement_on_major <- function(primary_labels, branch_labels, major_labels) {
+  joined <- merge(
+    primary_labels[, c("cell_id", "reference_label")],
+    branch_labels[, c("cell_id", "reference_label")], by = "cell_id",
+    suffixes = c("_primary", "_branch"), sort = FALSE
+  )
+  joined <- joined[joined$reference_label_primary %in% major_labels, , drop = FALSE]
+  if (!nrow(joined)) return(NA_real_)
+  mean(joined$reference_label_primary == joined$reference_label_branch)
+}
+
+validate_anchor_branches <- function(primary, strict, hotspot, conservative, complete,
+                                     markers, config) {
+  branches <- list(primary = primary, strict = strict, hotspot = hotspot,
+                   conservative = conservative, complete = complete)
+  for (name in names(branches)) {
+    labels <- branches[[name]]$cell_labels
+    if (!is.data.frame(labels) || anyDuplicated(labels$cell_id) ||
+        length(setdiff(c("cell_id", "reference_label"), names(labels)))) {
+      stop(sprintf("Anchor branch %s has an invalid label table.", name), call. = FALSE)
+    }
+  }
+  primary_labels <- primary$cell_labels
+  counts <- table(primary_labels$reference_label)
+  major <- names(counts)[
+    counts >= as.integer(config$major_label_cells) |
+      counts / nrow(primary_labels) >= as.numeric(config$major_label_fraction)
+  ]
+  primary_support <- primary$marker_support
+  primary_supported <- major[major %in% primary_support$reference_label[
+    primary_support$support_status == "SUPPORTED" & !primary_support$risk_only_support
+  ]]
+  marker_ok <- length(primary_supported) == length(major) && length(major) > 0L
+  strict_agreement <- label_agreement_on_major(primary_labels, strict$cell_labels, major)
+  hotspot_agreement <- label_agreement_on_major(primary_labels, hotspot$cell_labels, major)
+  complete_agreement <- label_agreement_on_major(primary_labels, complete$cell_labels, major)
+  conservative_supported <- unique(conservative$marker_support$reference_label[
+    conservative$marker_support$support_status == "SUPPORTED"
+  ])
+  conservative_estimable <- length(major) > 0L && all(major %in% conservative_supported)
+  conservative_agreement <- if (conservative_estimable) {
+    label_agreement_on_major(primary_labels, conservative$cell_labels, major)
+  } else {
+    NA_real_
+  }
+  gates <- data.frame(
+    gate_id = c(
+      "major_label_marker_support", "primary_strict_stability", "hotspot_stability",
+      "complete479_vs_primary245_stability", "gene245_vs_gene67_stability"
+    ),
+    observed = c(if (marker_ok) 1 else 0, strict_agreement, hotspot_agreement,
+                 complete_agreement, conservative_agreement),
+    threshold = c(1, config$label_stability_min, config$label_stability_min,
+                  config$label_stability_min, config$gene_sensitivity_concordance_min),
+    gate_status = NA_character_, stringsAsFactors = FALSE
+  )
+  gates$gate_status[1:4] <- ifelse(
+    !is.na(gates$observed[1:4]) & gates$observed[1:4] >= gates$threshold[1:4], "PASS", "STOP"
+  )
+  gates$gate_status[5] <- if (!conservative_estimable) {
+    "NOT_ESTIMABLE_GENE67"
+  } else if (conservative_agreement >= config$gene_sensitivity_concordance_min) {
+    "PASS"
+  } else {
+    "REVIEW_GENE67"
+  }
+  decision <- if (any(gates$gate_status == "STOP")) {
+    "STOP_ANCHOR"
+  } else if (any(grepl("REVIEW|NOT_ESTIMABLE", gates$gate_status))) {
+    "REVIEW_ANCHOR"
+  } else {
+    "PASS_ANCHOR"
+  }
+  list(
+    decision = decision, gate_table = gates, major_labels = major,
+    major_label_counts = as.data.frame(counts, stringsAsFactors = FALSE),
+    scientific_interpretation = "Region_3 is a technical anchor, not biological ground truth"
+  )
+}
+
+fit_region3_anchor_branches <- function(bundle, marker_config, config) {
+  if (!identical(bundle$region_id, "Region_3") || !identical(bundle$section_status, "PRIMARY")) {
+    stop("Region 3 PRIMARY bundle is required for anchor fitting.", call. = FALSE)
+  }
+  definitions <- region3_anchor_branch_definitions()
+  branches <- setNames(vector("list", nrow(definitions)), definitions$branch_id)
+  for (index in seq_len(nrow(definitions))) {
+    definition <- definitions[index, , drop = FALSE]
+    mask <- definition$mask_name[[1]]
+    gene_set <- definition$gene_set_name[[1]]
+    cells <- bundle$cell_metadata[bundle$cell_metadata[[mask]], , drop = FALSE]
+    genes <- bundle$gene_sets[[gene_set]]
+    model <- build_seurat_reference(
+      bundle$counts, cells, genes, config,
+      role = paste0("REGION3_", toupper(definition$branch_id[[1]])), seed = config$seed
+    )
+    markers <- find_primary_markers(model, genes, config)
+    annotation <- annotate_seurat_clusters(model, marker_config, config)
+    labels <- data.frame(
+      cell_id = colnames(annotation$object),
+      cluster = as.character(annotation$object$seurat_clusters),
+      reference_label = as.character(annotation$object$reference_label),
+      stringsAsFactors = FALSE
+    )
+    branches[[definition$branch_id[[1]]]] <- list(
+      object = annotation$object, cell_labels = labels, primary_markers = markers,
+      marker_support = annotation$marker_support, marker_scores = annotation$marker_scores,
+      mask_name = mask, gene_set_name = gene_set, feature_names = genes,
+      scientific_role = definition$scientific_role[[1]]
+    )
+  }
+  validation <- validate_anchor_branches(
+    branches$primary_245, branches$strict_245, branches$hotspot_245,
+    branches$conservative_67, branches$complete_479, marker_config, config
+  )
+  list(branch_definitions = definitions, branches = branches, validation = validation)
+}
+
+write_region3_anchor_artifacts <- function(project_root, output_root, anchor) {
+  assert_path_within(project_root, output_root)
+  dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
+  paths <- c(
+    write_tsv(anchor$branch_definitions, file.path(output_root, "region3_anchor_branches.tsv"), project_root),
+    write_tsv(anchor$validation$gate_table, file.path(output_root, "region3_anchor_gates.tsv"), project_root),
+    write_tsv(anchor$validation$major_label_counts, file.path(output_root, "region3_major_label_counts.tsv"), project_root)
+  )
+  for (branch in names(anchor$branches)) {
+    branch_root <- file.path(output_root, branch)
+    dir.create(branch_root, recursive = TRUE, showWarnings = FALSE)
+    saveRDS(anchor$branches[[branch]]$object, file.path(branch_root, "reference_object.rds"), compress = FALSE)
+    paths <- c(
+      paths,
+      write_tsv(anchor$branches[[branch]]$cell_labels, file.path(branch_root, "cell_labels.tsv"), project_root),
+      write_tsv(anchor$branches[[branch]]$marker_support, file.path(branch_root, "marker_support.tsv"), project_root),
+      write_tsv(anchor$branches[[branch]]$marker_scores, file.path(branch_root, "marker_scores.tsv"), project_root)
+    )
+  }
+  summary <- list(
+    schema_version = "region3_anchor_v2", validation = anchor$validation,
+    branch_definitions = anchor$branch_definitions,
+    primary_object_path = file.path(output_root, "primary_245", "reference_object.rds"),
+    generated_utc = format(Sys.time(), tz = "UTC", usetz = TRUE)
+  )
+  saveRDS(anchor$validation, file.path(output_root, "region3_anchor_validation.rds"))
+  saveRDS(summary, file.path(output_root, "region3_anchor_summary.rds"))
+  validate_stage_files(
+    output_root,
+    c("region3_anchor_branches.tsv", "region3_anchor_gates.tsv", "region3_major_label_counts.tsv",
+      "region3_anchor_validation.rds", "region3_anchor_summary.rds",
+      file.path("primary_245", "reference_object.rds"),
+      file.path("complete_479", "reference_object.rds")),
+    c("region3_anchor_validation.rds", "region3_anchor_summary.rds",
+      file.path("primary_245", "reference_object.rds"),
+      file.path("complete_479", "reference_object.rds")), TRUE
+  )
+  invisible(paths)
+}
+
+read_region3_anchor_artifacts <- function(output_root) {
+  definitions <- utils::read.delim(file.path(output_root, "region3_anchor_branches.tsv"), check.names = FALSE)
+  validation <- readRDS(file.path(output_root, "region3_anchor_validation.rds"))
+  branches <- setNames(lapply(definitions$branch_id, function(branch) {
+    root <- file.path(output_root, branch)
+    object <- readRDS(file.path(root, "reference_object.rds"))
+    list(
+      object = object,
+      cell_labels = utils::read.delim(file.path(root, "cell_labels.tsv"), check.names = FALSE),
+      marker_support = utils::read.delim(file.path(root, "marker_support.tsv"), check.names = FALSE),
+      marker_scores = utils::read.delim(file.path(root, "marker_scores.tsv"), check.names = FALSE),
+      feature_names = object@misc$downstream_reference_contract$feature_names,
+      mask_name = definitions$mask_name[definitions$branch_id == branch],
+      gene_set_name = definitions$gene_set_name[definitions$branch_id == branch],
+      scientific_role = definitions$scientific_role[definitions$branch_id == branch]
+    )
+  }), definitions$branch_id)
+  list(branch_definitions = definitions, branches = branches, validation = validation)
+}
+
+assess_region3_morphology_review <- function(hotspot_decision, review_path = NULL) {
+  required_hotspots <- hotspot_decision[
+    hotspot_decision$region_id == "Region_3" &
+      hotspot_decision$hotspot_status == "MORPHOLOGY_REVIEW_REQUIRED", , drop = FALSE
+  ]
+  if (!nrow(required_hotspots)) {
+    return(data.frame(
+      gate_id = "region3_morphology_review", reviewed = 0L, required = 0L,
+      gate_status = "PASS_NO_HOTSPOTS", details = "No FDR-positive Region 3 hotspots",
+      stringsAsFactors = FALSE
+    ))
+  }
+  if (is.null(review_path) || !nzchar(review_path) || !file.exists(review_path)) {
+    return(data.frame(
+      gate_id = "region3_morphology_review", reviewed = 0L, required = nrow(required_hotspots),
+      gate_status = "REVIEW_MORPHOLOGY_PENDING",
+      details = "DAPI/morphology/cell-boundary review is required before final exploratory release",
+      stringsAsFactors = FALSE
+    ))
+  }
+  review <- utils::read.delim(review_path, check.names = FALSE, stringsAsFactors = FALSE)
+  required <- c("grid_id", "review_decision", "reviewer", "reviewed_utc")
+  if (length(setdiff(required, names(review))) || anyDuplicated(review$grid_id)) {
+    stop("Morphology review requires unique grid_id, review_decision, reviewer, and reviewed_utc columns.", call. = FALSE)
+  }
+  allowed <- c("VALID_ANATOMY", "ARTIFACT_EXCLUDE_IN_SENSITIVITY", "UNCERTAIN_RETAIN_PRIMARY")
+  if (any(!review$review_decision %in% allowed)) stop("Morphology review contains an unsupported decision.", call. = FALSE)
+  matched <- match(required_hotspots$grid_id, review$grid_id)
+  complete <- !anyNA(matched)
+  data.frame(
+    gate_id = "region3_morphology_review", reviewed = sum(!is.na(matched)), required = nrow(required_hotspots),
+    gate_status = if (complete) "PASS_REVIEW_COMPLETE" else "REVIEW_MORPHOLOGY_PENDING",
+    details = if (complete) "All Region 3 hotspots reviewed; primary retention and sensitivity exclusions remain explicit" else "Some required hotspots lack review",
+    stringsAsFactors = FALSE
+  )
+}
+
+assign_spatial_mapping_folds <- function(cells, folds, seed) {
+  if (!is.data.frame(cells) || !"cell_id" %in% names(cells)) stop("Calibration cells require cell_id.", call. = FALSE)
+  folds <- as.integer(folds)
+  if (all(c("x_centroid", "y_centroid") %in% names(cells))) {
+    x_rank <- rank(cells$x_centroid, ties.method = "first")
+    y_rank <- rank(cells$y_centroid, ties.method = "first")
+    x_bin <- pmin(folds - 1L, floor((x_rank - 1L) / nrow(cells) * folds))
+    y_bin <- pmin(folds - 1L, floor((y_rank - 1L) / nrow(cells) * folds))
+    fold <- (x_bin + 2L * y_bin) %% folds + 1L
+    method <- "SPATIALLY_BLOCKED_INTERNAL_CALIBRATION"
+  } else {
+    set.seed(as.integer(seed))
+    fold <- sample(rep(seq_len(folds), length.out = nrow(cells)))
+    method <- "STRATIFIED_RANDOM_FALLBACK_NO_COORDINATES"
+  }
+  data.frame(
+    cell_id = as.character(cells$cell_id), calibration_fold = as.integer(fold),
+    calibration_method = method,
+    interpretation = "INTERNAL_REPRODUCIBILITY_NOT_BIOLOGICAL_ACCURACY",
+    stringsAsFactors = FALSE
+  )
+}
+
+prepare_seurat_query <- function(bundle, mask_name, genes, config, role) {
+  assert_downstream_model_environment(config)
+  cells <- bundle$cell_metadata[bundle$cell_metadata[[mask_name]], , drop = FALSE]
+  ids <- as.character(cells$cell_id)
+  metadata <- cells[match(ids, cells$cell_id), , drop = FALSE]
+  rownames(metadata) <- ids
+  object <- Seurat::CreateSeuratObject(
+    counts = bundle$counts[, ids, drop = FALSE], meta.data = metadata,
+    project = role, min.cells = 0L, min.features = 0L
+  )
+  object <- Seurat::NormalizeData(
+    object, normalization.method = "LogNormalize",
+    scale.factor = config$normalization_scale_factor, verbose = FALSE
+  )
+  object <- Seurat::ScaleData(object, features = genes, verbose = FALSE)
+  object
+}
+
+prediction_score_columns <- function(predictions) {
+  setdiff(grep("^prediction.score\\.", names(predictions), value = TRUE), "prediction.score.max")
+}
+
+reference_label_centroids <- function(reference, label_column = "reference_label") {
+  embedding <- Seurat::Embeddings(reference, reduction = "pca")
+  labels <- as.character(reference[[label_column, drop = TRUE]])
+  split_rows <- split(seq_len(nrow(embedding)), labels)
+  do.call(rbind, lapply(names(split_rows), function(label) {
+    values <- matrix(colMeans(embedding[split_rows[[label]], , drop = FALSE]), nrow = 1L)
+    rownames(values) <- label
+    values
+  }))
+}
+
+map_query_to_frozen_reference <- function(reference, query, features, config,
+                                          thresholds = NULL) {
+  assert_downstream_model_environment(config)
+  if (!inherits(reference, "Seurat") || !inherits(query, "Seurat")) stop("Mapping requires Seurat reference and query objects.", call. = FALSE)
+  features <- intersect(features, intersect(rownames(reference), rownames(query)))
+  dims <- seq_len(min(config$n_pcs, ncol(Seurat::Embeddings(reference, "pca"))))
+  anchors <- Seurat::FindTransferAnchors(
+    reference = reference, query = query, normalization.method = "LogNormalize",
+    reference.reduction = "pca", reduction = "pcaproject", features = features,
+    dims = dims, k.score = as.integer(config$mapping_k), verbose = FALSE
+  )
+  predictions <- Seurat::TransferData(
+    anchorset = anchors, refdata = as.character(reference$reference_label),
+    dims = dims, k.weight = min(as.integer(config$mapping_k), ncol(reference) - 1L), verbose = FALSE
+  )
+  score_columns <- prediction_score_columns(predictions)
+  score_matrix <- as.matrix(predictions[, score_columns, drop = FALSE])
+  ordered <- t(apply(score_matrix, 1L, sort, decreasing = TRUE))
+  margin <- if (ncol(ordered) >= 2L) ordered[, 1] - ordered[, 2] else ordered[, 1]
+  second_best <- if (ncol(score_matrix) >= 2L) {
+    sub("^prediction.score\\.", "", apply(score_matrix, 1L, function(values) names(sort(values, decreasing = TRUE))[[2]]))
+  } else {
+    rep(NA_character_, nrow(score_matrix))
+  }
+  mapped_query <- Seurat::MapQuery(
+    anchorset = anchors, query = query, reference = reference,
+    refdata = list(reference_label = "reference_label"),
+    new.reduction.name = "ref.pca", reference.reduction = "pca", reduction.model = "umap_pca",
+    transferdata.args = list(k.weight = min(as.integer(config$mapping_k), ncol(reference) - 1L)),
+    verbose = FALSE
+  )
+  query_embedding <- Seurat::Embeddings(mapped_query, reduction = "ref.pca")
+  query_embedding <- query_embedding[rownames(predictions), , drop = FALSE]
+  centroids <- reference_label_centroids(reference)
+  predicted <- as.character(predictions$predicted.id)
+  distance <- vapply(seq_len(nrow(query_embedding)), function(index) {
+    label <- predicted[[index]]
+    if (!label %in% rownames(centroids)) return(Inf)
+    sqrt(sum((query_embedding[index, ] - centroids[label, ])^2))
+  }, numeric(1))
+  out <- data.frame(
+    cell_id = rownames(predictions), predicted_label = predicted,
+    prediction_confidence = as.numeric(predictions$prediction.score.max),
+    confidence_margin = as.numeric(margin), second_best_label = second_best,
+    reference_distance = distance, stringsAsFactors = FALSE
+  )
+  if (!is.null(thresholds)) out <- classify_mapping_uncertainty(out, thresholds)
+  attr(out, "anchors") <- anchors
+  attr(out, "mapped_query") <- mapped_query
+  out
+}
+
+calibrate_mapping_thresholds <- function(mapping, config) {
+  required <- c("predicted_label", "prediction_confidence", "confidence_margin", "reference_distance")
+  if (length(setdiff(required, names(mapping)))) stop("Calibration mapping table is incomplete.", call. = FALSE)
+  labels <- c("__GLOBAL__", sort(unique(mapping$predicted_label)))
+  rows <- lapply(labels, function(label) {
+    x <- if (label == "__GLOBAL__") mapping else mapping[mapping$predicted_label == label, , drop = FALSE]
+    enough <- label == "__GLOBAL__" || nrow(x) >= as.integer(config$mapping_min_label_cells)
+    if (!enough) return(NULL)
+    data.frame(
+      reference_label = label, cells = nrow(x),
+      confidence_min = as.numeric(stats::quantile(x$prediction_confidence, config$mapping_confidence_quantile, na.rm = TRUE)),
+      margin_min = as.numeric(stats::quantile(x$confidence_margin, config$mapping_confidence_quantile, na.rm = TRUE)),
+      distance_max = as.numeric(stats::quantile(x$reference_distance, config$mapping_distance_quantile, na.rm = TRUE)),
+      calibration_scope = "INTERNAL_REPRODUCIBILITY_NOT_BIOLOGICAL_ACCURACY",
+      stringsAsFactors = FALSE
+    )
+  })
+  do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
+}
+
+classify_mapping_uncertainty <- function(mapping, thresholds) {
+  global <- thresholds[thresholds$reference_label == "__GLOBAL__", , drop = FALSE]
+  if (nrow(global) != 1L) stop("Mapping thresholds require exactly one global row.", call. = FALSE)
+  matched <- match(mapping$predicted_label, thresholds$reference_label)
+  confidence_min <- ifelse(is.na(matched), global$confidence_min, thresholds$confidence_min[matched])
+  margin_min <- ifelse(is.na(matched), global$margin_min, thresholds$margin_min[matched])
+  distance_max <- ifelse(is.na(matched), global$distance_max, thresholds$distance_max[matched])
+  confidence_fail <- mapping$prediction_confidence < confidence_min
+  margin_fail <- mapping$confidence_margin < margin_min
+  distance_fail <- mapping$reference_distance > distance_max
+  mapping$mapping_status <- ifelse(
+    distance_fail & confidence_fail, "Potentially_unrepresented",
+    ifelse(confidence_fail | margin_fail | distance_fail, "Uncertain", "Mapped")
+  )
+  mapping$final_label <- ifelse(mapping$mapping_status == "Mapped", mapping$predicted_label, mapping$mapping_status)
+  mapping$confidence_threshold <- confidence_min
+  mapping$margin_threshold <- margin_min
+  mapping$distance_threshold <- distance_max
+  mapping
+}
+
+calibrate_region3_mapping <- function(bundle, anchor, config) {
+  primary <- anchor$branches$primary_245
+  cells <- bundle$cell_metadata[bundle$cell_metadata$primary_include, , drop = FALSE]
+  folds <- assign_spatial_mapping_folds(cells, config$mapping_folds, config$seed)
+  truth <- primary$cell_labels[, c("cell_id", "reference_label"), drop = FALSE]
+  mappings <- list()
+  for (fold in seq_len(as.integer(config$mapping_folds))) {
+    test_ids <- folds$cell_id[folds$calibration_fold == fold]
+    train_ids <- setdiff(primary$cell_labels$cell_id, test_ids)
+    training_cells <- bundle$cell_metadata[match(train_ids, bundle$cell_metadata$cell_id), , drop = FALSE]
+    reference <- build_seurat_reference(
+      bundle$counts, training_cells, primary$feature_names, config,
+      role = paste0("REGION3_CALIBRATION_FOLD_", fold), seed = config$seed + fold
+    )
+    reference$reference_label <- truth$reference_label[match(colnames(reference), truth$cell_id)]
+    test_bundle <- bundle
+    test_bundle$cell_metadata$calibration_test <- test_bundle$cell_metadata$cell_id %in% test_ids
+    query <- prepare_seurat_query(test_bundle, "calibration_test", primary$feature_names, config, paste0("REGION3_QUERY_FOLD_", fold))
+    mapped <- map_query_to_frozen_reference(reference, query, primary$feature_names, config)
+    mapped$calibration_fold <- fold
+    mapped$anchor_label <- truth$reference_label[match(mapped$cell_id, truth$cell_id)]
+    mapped$label_reproducible <- mapped$predicted_label == mapped$anchor_label
+    mappings[[fold]] <- mapped
+  }
+  mapping <- do.call(rbind, mappings)
+  thresholds <- calibrate_mapping_thresholds(mapping, config)
+  mapping <- classify_mapping_uncertainty(mapping, thresholds)
+  list(
+    folds = folds, mapping = mapping, thresholds = thresholds,
+    summary = data.frame(
+      cells = nrow(mapping), label_reproducibility = mean(mapping$label_reproducible),
+      mapped_fraction = mean(mapping$mapping_status == "Mapped"),
+      interpretation = "INTERNAL_REPRODUCIBILITY_NOT_BIOLOGICAL_ACCURACY",
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+write_mapping_calibration_artifacts <- function(project_root, output_root, calibration) {
+  assert_path_within(project_root, output_root); dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
+  write_tsv(calibration$folds, file.path(output_root, "region3_mapping_folds.tsv"), project_root)
+  write_tsv(calibration$mapping, file.path(output_root, "region3_mapping_calibration.tsv"), project_root)
+  write_tsv(calibration$thresholds, file.path(output_root, "mapping_thresholds.tsv"), project_root)
+  write_tsv(calibration$summary, file.path(output_root, "mapping_calibration_summary.tsv"), project_root)
+  saveRDS(calibration, file.path(output_root, "mapping_calibration.rds"), compress = FALSE)
+  validate_stage_files(
+    output_root,
+    c("region3_mapping_folds.tsv", "region3_mapping_calibration.tsv", "mapping_thresholds.tsv",
+      "mapping_calibration_summary.tsv", "mapping_calibration.rds"),
+    "mapping_calibration.rds", TRUE
+  )
+}
+
+assess_mapped_marker_coherence <- function(query, mapping, marker_config, config) {
+  data <- get_seurat_normalized_data(query, "RNA")
+  mapped <- mapping[mapping$mapping_status == "Mapped", , drop = FALSE]
+  if (!nrow(mapped)) return(data.frame(label = character(), cells = integer(), coherent = logical()))
+  rows <- lapply(sort(unique(mapped$predicted_label)), function(label) {
+    ids <- mapped$cell_id[mapped$predicted_label == label]
+    genes <- marker_config$gene[
+      marker_config$cell_type == label & marker_config$use_policy == "PRIMARY_SUPPORT"
+    ]
+    genes <- intersect(genes, rownames(data))
+    detected <- if (length(genes)) Matrix::rowMeans(data[genes, ids, drop = FALSE] > 0) else numeric()
+    supported <- sum(detected >= config$marker_detection_min)
+    data.frame(
+      label = label, cells = length(ids), available_markers = length(genes),
+      supported_markers = supported, coherent = supported >= 2L,
+      stringsAsFactors = FALSE
+    )
+  })
+  do.call(rbind, rows)
+}
+
+evaluate_section_admission <- function(region_id, primary_mapping, strict_mapping,
+                                       conservative_mapping, marker_coherence, config) {
+  shared_strict <- merge(
+    primary_mapping[, c("cell_id", "predicted_label")],
+    strict_mapping[, c("cell_id", "predicted_label")], by = "cell_id", suffixes = c("_primary", "_strict")
+  )
+  shared_conservative <- merge(
+    primary_mapping[, c("cell_id", "predicted_label")],
+    conservative_mapping[, c("cell_id", "predicted_label")], by = "cell_id", suffixes = c("_245", "_67")
+  )
+  accepted <- mean(primary_mapping$mapping_status == "Mapped")
+  unrepresented <- mean(primary_mapping$mapping_status == "Potentially_unrepresented")
+  strict_agreement <- if (nrow(shared_strict)) mean(shared_strict$predicted_label_primary == shared_strict$predicted_label_strict) else NA_real_
+  conservative_agreement <- if (nrow(shared_conservative)) mean(shared_conservative$predicted_label_245 == shared_conservative$predicted_label_67) else NA_real_
+  marker_fraction <- if (nrow(marker_coherence)) {
+    sum(marker_coherence$cells * marker_coherence$coherent) / sum(marker_coherence$cells)
+  } else 0
+  gates <- data.frame(
+    gate_id = c("mapping_coverage", "canonical_marker_coherence", "primary_strict_mapping_stability", "gene245_vs_gene67_mapping"),
+    observed = c(accepted, marker_fraction, strict_agreement, conservative_agreement),
+    threshold = c(config$mapping_accepted_fraction_min, config$mapping_marker_coherence_min,
+                  config$mapping_label_stability_min, config$gene_sensitivity_concordance_min),
+    stringsAsFactors = FALSE
+  )
+  gates$gate_status <- ifelse(!is.na(gates$observed) & gates$observed >= gates$threshold, "PASS", "STOP")
+  review_novel <- unrepresented >= config$mapping_unrepresented_fraction_review
+  decision <- if (any(gates$gate_status == "STOP")) {
+    "SENSITIVITY_ONLY"
+  } else if (review_novel) {
+    "REVIEW_POTENTIALLY_UNREPRESENTED"
+  } else {
+    "ADMITTED_TO_CONSENSUS"
+  }
+  list(
+    region_id = region_id, decision = decision, gates = gates,
+    summary = data.frame(
+      region_id = region_id, decision = decision, mapped_fraction = accepted,
+      potentially_unrepresented_fraction = unrepresented,
+      marker_coherence_fraction = marker_fraction,
+      strict_label_agreement = strict_agreement,
+      conservative_label_agreement = conservative_agreement,
+      interpretation = "Poor mapping may be technical or biologically unrepresented; review coherent out-of-reference cells",
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+map_and_evaluate_conditional_region <- function(bundle, anchor, calibration,
+                                                marker_config, config) {
+  if (!bundle$region_id %in% c("Region_1", "Region_2")) stop("Only Region 1 or 2 can enter conditional admission.", call. = FALSE)
+  primary_reference <- anchor$branches$primary_245$object
+  conservative_reference <- anchor$branches$conservative_67$object
+  primary_query <- prepare_seurat_query(bundle, "primary_include", anchor$branches$primary_245$feature_names, config, paste0(bundle$region_id, "_PRIMARY_QUERY"))
+  strict_query <- prepare_seurat_query(bundle, "strict_include", anchor$branches$primary_245$feature_names, config, paste0(bundle$region_id, "_STRICT_QUERY"))
+  conservative_query <- prepare_seurat_query(bundle, "primary_include", anchor$branches$conservative_67$feature_names, config, paste0(bundle$region_id, "_CONSERVATIVE_QUERY"))
+  primary_mapping <- map_query_to_frozen_reference(primary_reference, primary_query, anchor$branches$primary_245$feature_names, config, calibration$thresholds)
+  strict_mapping <- map_query_to_frozen_reference(primary_reference, strict_query, anchor$branches$primary_245$feature_names, config, calibration$thresholds)
+  conservative_mapping <- map_query_to_frozen_reference(conservative_reference, conservative_query, anchor$branches$conservative_67$feature_names, config)
+  coherence <- assess_mapped_marker_coherence(primary_query, primary_mapping, marker_config, config)
+  admission <- evaluate_section_admission(bundle$region_id, primary_mapping, strict_mapping, conservative_mapping, coherence, config)
+  list(
+    region_id = bundle$region_id, primary_query = primary_query,
+    primary_mapping = primary_mapping, strict_mapping = strict_mapping,
+    conservative_mapping = conservative_mapping, marker_coherence = coherence,
+    admission = admission
+  )
+}
+
+write_region_admission_artifacts <- function(project_root, output_root, result) {
+  assert_path_within(project_root, output_root); dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
+  write_tsv(result$primary_mapping, file.path(output_root, "primary_mapping.tsv"), project_root)
+  write_tsv(result$strict_mapping, file.path(output_root, "strict_mapping.tsv"), project_root)
+  write_tsv(result$conservative_mapping, file.path(output_root, "conservative_mapping.tsv"), project_root)
+  write_tsv(result$marker_coherence, file.path(output_root, "marker_coherence.tsv"), project_root)
+  write_tsv(result$admission$gates, file.path(output_root, "admission_gates.tsv"), project_root)
+  write_tsv(result$admission$summary, file.path(output_root, "admission_summary.tsv"), project_root)
+  lightweight <- result
+  lightweight$primary_query <- NULL
+  for (name in c("primary_mapping", "strict_mapping", "conservative_mapping")) {
+    attr(lightweight[[name]], "anchors") <- NULL
+    attr(lightweight[[name]], "mapped_query") <- NULL
+  }
+  saveRDS(lightweight, file.path(output_root, "admission_result.rds"), compress = FALSE)
+  validate_stage_files(
+    output_root,
+    c("primary_mapping.tsv", "strict_mapping.tsv", "conservative_mapping.tsv",
+      "marker_coherence.tsv", "admission_gates.tsv", "admission_summary.tsv", "admission_result.rds"),
+    "admission_result.rds", TRUE
+  )
+}
+
+apply_manual_admission_review <- function(admissions, review_path = NULL) {
+  if (is.null(review_path) || !nzchar(review_path)) return(admissions)
+  if (!file.exists(review_path)) stop(sprintf("Missing manual admission review: %s", review_path), call. = FALSE)
+  review <- utils::read.delim(review_path, check.names = FALSE, stringsAsFactors = FALSE)
+  required <- c("region_id", "review_decision", "reviewer", "reviewed_utc", "rationale")
+  if (length(setdiff(required, names(review))) || anyDuplicated(review$region_id)) {
+    stop("Manual admission review requires unique region_id, review_decision, reviewer, reviewed_utc, and rationale.", call. = FALSE)
+  }
+  allowed <- c("ADMIT_AFTER_MARKER_MORPHOLOGY_REVIEW", "KEEP_SENSITIVITY_ONLY")
+  if (any(!review$review_decision %in% allowed)) stop("Manual admission review contains an unsupported decision.", call. = FALSE)
+  if (any(!nzchar(review$reviewer)) || any(!nzchar(review$reviewed_utc)) || any(!nzchar(review$rationale))) {
+    stop("Manual admission review requires non-empty reviewer, reviewed_utc, and rationale.", call. = FALSE)
+  }
+  for (region in intersect(names(admissions), review$region_id)) {
+    row <- review[review$region_id == region, , drop = FALSE]
+    original <- admissions[[region]]$admission$decision
+    if (row$review_decision == "ADMIT_AFTER_MARKER_MORPHOLOGY_REVIEW") {
+      if (!identical(original, "REVIEW_POTENTIALLY_UNREPRESENTED")) {
+        stop(sprintf("%s cannot be manually admitted from status %s.", region, original), call. = FALSE)
+      }
+      admissions[[region]]$admission$decision <- "ADMITTED_TO_CONSENSUS"
+      admissions[[region]]$admission$summary$decision <- "ADMITTED_TO_CONSENSUS"
+      admissions[[region]]$admission$summary$manual_review <- paste(row$reviewer, row$reviewed_utc, row$rationale, sep = "|")
+    }
+  }
+  attr(admissions, "manual_review") <- review
+  admissions
+}
+
+build_eligible_consensus <- function(handoff, anchor, admissions, marker_config, config) {
+  admitted <- names(admissions)[vapply(admissions, function(x) identical(x$admission$decision, "ADMITTED_TO_CONSENSUS"), logical(1))]
+  eligible <- c("Region_3", admitted)
+  primary_genes <- handoff$regions$Region_3$gene_sets$provisional_primary_features
+  region_parts <- lapply(eligible, function(region) {
+    bundle <- handoff$regions[[region]]
+    cells <- bundle$cell_metadata[bundle$cell_metadata$primary_include, , drop = FALSE]
+    list(counts = bundle$counts[, cells$cell_id, drop = FALSE], cells = cells)
+  })
+  counts <- do.call(cbind, lapply(region_parts, `[[`, "counts"))
+  cells <- do.call(rbind, lapply(region_parts, `[[`, "cells"))
+  consensus <- build_seurat_reference(counts, cells, primary_genes, config, "ELIGIBLE_UNCORRECTED_CONSENSUS", config$seed)
+  annotation <- annotate_seurat_clusters(consensus, marker_config, config)
+  consensus <- annotation$object
+  consensus@misc$primary_reduction_policy <- "UNCORRECTED_PCA_PRIMARY"
+  harmony_status <- "NOT_RUN_REGION3_ONLY"
+  if (length(eligible) > 1L) {
+    dims <- seq_len(min(config$n_pcs, ncol(Seurat::Embeddings(consensus, "pca"))))
+    consensus <- harmony::RunHarmony(
+      consensus, group.by.vars = "region_id", reduction.use = "pca", dims.use = dims,
+      theta = config$harmony_theta, lambda = config$harmony_lambda, sigma = config$harmony_sigma,
+      max.iter.harmony = config$harmony_max_iter, reference_values = config$harmony_reference_region,
+      reduction.save = "harmony_sensitivity", verbose = FALSE
+    )
+    consensus@misc$harmony_policy <- "HARMONY_SENSITIVITY_ONLY"
+    harmony_status <- "HARMONY_SENSITIVITY_ONLY"
+  }
+  expected_labels <- anchor$branches$primary_245$cell_labels
+  observed <- data.frame(cell_id = colnames(consensus), consensus_label = as.character(consensus$reference_label))
+  anchor_compare <- merge(expected_labels[, c("cell_id", "reference_label")], observed, by = "cell_id")
+  anchor_agreement <- mean(anchor_compare$reference_label == anchor_compare$consensus_label)
+  cluster_region <- table(consensus$seurat_clusters, consensus$region_id)
+  dominant_fraction <- apply(cluster_region, 1L, function(x) max(x) / sum(x))
+  cluster_size <- rowSums(cluster_region)
+  dominant_review <- dominant_fraction >= config$section_cluster_dominance & cluster_size >= config$section_cluster_min_cells
+  gates <- data.frame(
+    gate_id = c("region3_label_preservation", "section_dominant_cluster_review"),
+    observed = c(anchor_agreement, sum(dominant_review)),
+    threshold = c(config$consensus_label_stability_min, 0),
+    gate_status = c(
+      if (anchor_agreement >= config$consensus_label_stability_min) "PASS" else "STOP",
+      if (any(dominant_review)) "REVIEW_MORPHOLOGY_AND_MARKERS" else "PASS"
+    ), stringsAsFactors = FALSE
+  )
+  hard_stop <- any(gates$gate_status == "STOP")
+  final_reference <- if (hard_stop) anchor$branches$primary_245$object else consensus
+  decision <- if (hard_stop) "FALLBACK_TO_REGION3" else if (any(grepl("REVIEW", gates$gate_status))) "CONSENSUS_REVIEW" else "CONSENSUS_PASS"
+  list(
+    eligible_regions = eligible, admitted_regions = admitted,
+    consensus_object = consensus, final_reference = final_reference,
+    decision = decision, gates = gates, marker_support = annotation$marker_support,
+    harmony_status = harmony_status,
+    interpretation = "Section dominance is reviewed, not assumed technical; Harmony is sensitivity-only"
+  )
+}
+
+write_consensus_artifacts <- function(project_root, output_root, consensus) {
+  assert_path_within(project_root, output_root); dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
+  saveRDS(consensus$consensus_object, file.path(output_root, "eligible_consensus_object.rds"), compress = FALSE)
+  saveRDS(consensus$final_reference, file.path(output_root, "final_frozen_reference.rds"), compress = FALSE)
+  write_tsv(consensus$gates, file.path(output_root, "consensus_gates.tsv"), project_root)
+  write_tsv(consensus$marker_support, file.path(output_root, "consensus_marker_support.tsv"), project_root)
+  write_tsv(data.frame(
+    decision = consensus$decision, eligible_regions = paste(consensus$eligible_regions, collapse = ";"),
+    admitted_regions = paste(consensus$admitted_regions, collapse = ";"),
+    primary_reduction = "UNCORRECTED_PCA_PRIMARY", harmony = consensus$harmony_status,
+    interpretation = consensus$interpretation, stringsAsFactors = FALSE
+  ), file.path(output_root, "consensus_summary.tsv"), project_root)
+  validate_stage_files(
+    output_root,
+    c("eligible_consensus_object.rds", "final_frozen_reference.rds", "consensus_gates.tsv",
+      "consensus_marker_support.tsv", "consensus_summary.tsv"),
+    c("eligible_consensus_object.rds", "final_frozen_reference.rds"), TRUE
+  )
+}
+
+map_region4_sensitivity <- function(bundle, frozen_reference, features, thresholds,
+                                    marker_config, config) {
+  if (!identical(bundle$region_id, "Region_4") ||
+      !identical(bundle$downstream_contract, "MAP_TO_REGION_1_3_REFERENCE_WITH_UNCERTAIN")) {
+    stop("Region 4 mapping-only bundle is required.", call. = FALSE)
+  }
+  query <- prepare_seurat_query(bundle, "primary_include", features, config, "REGION4_MAPPING_ONLY_QUERY")
+  mapping <- map_query_to_frozen_reference(frozen_reference, query, features, config, thresholds)
+  coherence <- assess_mapped_marker_coherence(query, mapping, marker_config, config)
+  mapped_fraction <- mean(mapping$mapping_status == "Mapped")
+  gate <- data.frame(
+    gate_id = "region4_mapping_quality", observed = mapped_fraction,
+    threshold = config$mapping_accepted_fraction_min,
+    gate_status = if (mapped_fraction >= config$mapping_accepted_fraction_min) "PASS_SENSITIVITY" else "STOP_SENSITIVITY",
+    interpretation = "Region 4 never trained or altered the frozen reference",
+    stringsAsFactors = FALSE
+  )
+  list(query = query, mapping = mapping, marker_coherence = coherence, gate = gate)
+}
+
+score_standardized_gene_set <- function(data, genes, minimum_detected) {
+  genes <- intersect(genes, rownames(data))
+  if (!length(genes)) return(rep(NA_real_, ncol(data)))
+  values <- as.matrix(data[genes, , drop = FALSE])
+  standardized <- t(scale(t(values)))
+  standardized[!is.finite(standardized)] <- 0
+  detected <- colSums(values > 0)
+  score <- colMeans(standardized)
+  score[detected < as.integer(minimum_detected)] <- NA_real_
+  score
+}
+
+identify_eosinophils_independently <- function(reference, marker_config, config) {
+  data <- get_seurat_normalized_data(reference, "RNA")
+  eos_genes <- marker_config$gene[
+    marker_config$cell_type == "Eosinophil" & marker_config$use_policy == "PRIMARY_SUPPORT"
+  ]
+  eos_genes <- intersect(unique(eos_genes), rownames(data))
+  exclusion_types <- c("Macrophage", "Neutrophil", "Mast_cell")
+  exclusion <- marker_config$gene[
+    marker_config$cell_type %in% exclusion_types & marker_config$use_policy == "PRIMARY_SUPPORT"
+  ]
+  exclusion <- intersect(unique(exclusion), rownames(data))
+  if (!length(eos_genes)) stop("No eosinophil identity markers are available in the frozen panel.", call. = FALSE)
+  eos_count <- Matrix::colSums(data[eos_genes, , drop = FALSE] > 0)
+  exclusion_count <- if (length(exclusion)) Matrix::colSums(data[exclusion, , drop = FALSE] > 0) else rep(0, ncol(data))
+  eos_fraction <- as.numeric(eos_count) / length(eos_genes)
+  exclusion_fraction <- if (length(exclusion)) as.numeric(exclusion_count) / length(exclusion) else rep(0, ncol(data))
+  label <- as.character(reference$reference_label)
+  validated <- label == "Eosinophil" &
+    eos_count >= as.integer(config$eos_identity_min_markers) &
+    eos_fraction >= as.numeric(config$eos_identity_detection_min) &
+    exclusion_fraction < eos_fraction
+  data.frame(
+    cell_id = colnames(reference), reference_label = label,
+    eos_identity_marker_count = as.integer(eos_count),
+    eos_identity_marker_fraction = eos_fraction,
+    exclusion_marker_count = as.integer(exclusion_count),
+    exclusion_marker_fraction = exclusion_fraction,
+    validated_eosinophil = validated,
+    eos_identity_rule = paste0(
+      "Reference-label confirmation using canonical eosinophil identity markers; requires >=",
+      as.integer(config$eos_identity_min_markers), " detected markers, eosinophil marker fraction >=",
+      as.numeric(config$eos_identity_detection_min),
+      ", and eosinophil marker fraction greater than pooled macrophage/neutrophil/mast exclusion fraction; state genes not used for selection"
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+run_eosinophil_robustness <- function(reference, eos_decision, marker_config, config) {
+  identity <- identify_eosinophils_independently(reference, marker_config, config)
+  eos_ids <- identity$cell_id[identity$validated_eosinophil]
+  if (length(eos_ids) < 10L) {
+    return(list(
+      identity = identity, scores = data.frame(), stability = data.frame(
+        gate_id = "eos_cell_count", observed = length(eos_ids), threshold = 10L,
+        gate_status = "STOP_EOS", interpretation = "Too few independently validated Eosinophils", stringsAsFactors = FALSE
+      ), gene_coherence = data.frame(), leave_one_gene_out = data.frame(),
+      mask_stability = data.frame(), sensitivity_method_status = data.frame(),
+      complexity_diagnostics = data.frame()
+    ))
+  }
+  data <- get_seurat_normalized_data(reference, "RNA")[, eos_ids, drop = FALSE]
+  set_for <- function(set, retained = NULL) {
+    rows <- eos_decision$gene_set == set
+    if (!is.null(retained)) rows <- rows & eos_decision[[retained]]
+    as.character(eos_decision$gene[rows])
+  }
+  short53 <- set_for("short_lived", "retained_provisional")
+  long53 <- set_for("long_lived", "retained_provisional")
+  short100 <- set_for("short_lived")
+  long100 <- set_for("long_lived")
+  short_nonrib <- short100[!grepl("^Rp[sl]", short100)]
+  scores <- data.frame(
+    cell_id = eos_ids,
+    short_primary_53 = score_standardized_gene_set(data, short53, config$eos_state_min_genes_detected),
+    long_primary_53 = score_standardized_gene_set(data, long53, config$eos_state_min_genes_detected),
+    short_complete_100 = score_standardized_gene_set(data, short100, config$eos_state_min_genes_detected),
+    long_complete_100 = score_standardized_gene_set(data, long100, config$eos_state_min_genes_detected),
+    short_nonribosomal = score_standardized_gene_set(data, short_nonrib, config$eos_state_min_genes_detected),
+    stringsAsFactors = FALSE
+  )
+  scores$state_primary <- ifelse(
+    is.na(scores$short_primary_53) | is.na(scores$long_primary_53), "Unresolved",
+    ifelse(scores$short_primary_53 > scores$long_primary_53, "AT_short_like", "AT_long_like")
+  )
+  eos_metadata <- reference@meta.data[match(eos_ids, rownames(reference@meta.data)), , drop = FALSE]
+  for (column in intersect(c("region_id", "mouse_id", "strict_include", "hotspot_sensitivity_include", "nCount_RNA", "nFeature_RNA"), names(eos_metadata))) {
+    scores[[column]] <- eos_metadata[[column]]
+  }
+  gene_coherence_for <- function(genes, composite, state_name) {
+    genes <- intersect(genes, rownames(data))
+    if (!length(genes)) return(data.frame())
+    data.frame(
+      state = state_name, gene = genes,
+      detected_fraction = Matrix::rowMeans(data[genes, , drop = FALSE] > 0),
+      spearman_with_composite = vapply(genes, function(gene) {
+        suppressWarnings(stats::cor(as.numeric(data[gene, ]), composite, method = "spearman", use = "pairwise.complete.obs"))
+      }, numeric(1)), stringsAsFactors = FALSE
+    )
+  }
+  gene_coherence <- rbind(
+    gene_coherence_for(short53, scores$short_primary_53, "short_primary_53"),
+    gene_coherence_for(long53, scores$long_primary_53, "long_primary_53")
+  )
+  leave_one_out_for <- function(genes, full_score, state_name) {
+    genes <- intersect(genes, rownames(data))
+    if (length(genes) < 2L) return(data.frame())
+    do.call(rbind, lapply(genes, function(omitted) {
+      loo <- score_standardized_gene_set(data, setdiff(genes, omitted), max(1L, config$eos_state_min_genes_detected - 1L))
+      data.frame(
+        state = state_name, omitted_gene = omitted,
+        spearman_with_full = suppressWarnings(stats::cor(loo, full_score, method = "spearman", use = "pairwise.complete.obs")),
+        stringsAsFactors = FALSE
+      )
+    }))
+  }
+  leave_one_gene_out <- rbind(
+    leave_one_out_for(short53, scores$short_primary_53, "short_primary_53"),
+    leave_one_out_for(long53, scores$long_primary_53, "long_primary_53")
+  )
+  identity_set <- identity$cell_id[identity$validated_eosinophil]
+  jaccard_subset <- function(mask_name) {
+    if (!mask_name %in% names(reference@meta.data)) return(NA_real_)
+    kept <- rownames(reference@meta.data)[as.logical(reference@meta.data[[mask_name]])]
+    length(intersect(identity_set, kept)) / length(union(identity_set, intersect(identity_set, kept)))
+  }
+  mask_stability <- data.frame(
+    comparison = c("primary_vs_strict_eos_assignment", "primary_vs_hotspot_sensitivity_eos_assignment"),
+    jaccard = c(jaccard_subset("strict_include"), jaccard_subset("hotspot_sensitivity_include")),
+    threshold = config$eos_assignment_jaccard_min, stringsAsFactors = FALSE
+  )
+  mask_stability$gate_status <- ifelse(
+    is.na(mask_stability$jaccard), "NOT_ESTIMABLE",
+    ifelse(mask_stability$jaccard >= mask_stability$threshold, "PASS_EOS", "STOP_EOS")
+  )
+  sensitivity_method_status <- data.frame(
+    method = c("GENEWISE_STANDARDIZED_MEAN", "ADDMODULESCORE_TARGETED_PANEL", "UCELL_TARGETED_PANEL"),
+    scientific_role = c("PRIMARY", "SENSITIVITY_ONLY", "SENSITIVITY_ONLY"),
+    status = c("COMPUTED", "NOT_COMPUTED", "NOT_COMPUTED"), stringsAsFactors = FALSE
+  )
+  module_object <- reference[, eos_ids]
+  module_result <- tryCatch({
+    x <- Seurat::AddModuleScore(
+      module_object, features = list(intersect(short53, rownames(module_object))),
+      nbin = as.integer(config$eos_module_nbin), ctrl = as.integer(config$eos_module_ctrl),
+      name = "short_targeted_module", seed = as.integer(config$seed)
+    )
+    x <- Seurat::AddModuleScore(
+      x, features = list(intersect(long53, rownames(x))),
+      nbin = as.integer(config$eos_module_nbin), ctrl = as.integer(config$eos_module_ctrl),
+      name = "long_targeted_module", seed = as.integer(config$seed)
+    )
+    x
+  }, error = identity)
+  if (!inherits(module_result, "error")) {
+    module_object <- module_result
+    scores$short_addmodule_sensitivity <- module_object$short_targeted_module1[match(scores$cell_id, colnames(module_object))]
+    scores$long_addmodule_sensitivity <- module_object$long_targeted_module1[match(scores$cell_id, colnames(module_object))]
+    sensitivity_method_status$status[sensitivity_method_status$method == "ADDMODULESCORE_TARGETED_PANEL"] <- "COMPUTED_SENSITIVITY_ONLY"
+  } else {
+    scores$short_addmodule_sensitivity <- NA_real_
+    scores$long_addmodule_sensitivity <- NA_real_
+    sensitivity_method_status$status[sensitivity_method_status$method == "ADDMODULESCORE_TARGETED_PANEL"] <- "FAILED_NONBLOCKING_TARGETED_CONTROLS"
+  }
+  if (requireNamespace("UCell", quietly = TRUE)) {
+    ucell_result <- tryCatch(
+      UCell::AddModuleScore_UCell(
+        reference[, eos_ids], features = list(short_ucell = short53, long_ucell = long53),
+        assay = "RNA", name = NULL
+      ), error = identity
+    )
+    if (!inherits(ucell_result, "error")) {
+      short_column <- grep("^short_ucell.*UCell$", names(ucell_result@meta.data), value = TRUE)[1]
+      long_column <- grep("^long_ucell.*UCell$", names(ucell_result@meta.data), value = TRUE)[1]
+      if (!is.na(short_column) && !is.na(long_column)) {
+        scores$short_ucell_sensitivity <- ucell_result@meta.data[[short_column]][match(scores$cell_id, rownames(ucell_result@meta.data))]
+        scores$long_ucell_sensitivity <- ucell_result@meta.data[[long_column]][match(scores$cell_id, rownames(ucell_result@meta.data))]
+        sensitivity_method_status$status[sensitivity_method_status$method == "UCELL_TARGETED_PANEL"] <- "COMPUTED_SENSITIVITY_ONLY"
+      } else {
+        scores$short_ucell_sensitivity <- NA_real_
+        scores$long_ucell_sensitivity <- NA_real_
+        sensitivity_method_status$status[sensitivity_method_status$method == "UCELL_TARGETED_PANEL"] <- "FAILED_NONBLOCKING_OUTPUT_SCHEMA"
+      }
+    } else {
+      scores$short_ucell_sensitivity <- NA_real_
+      scores$long_ucell_sensitivity <- NA_real_
+      sensitivity_method_status$status[sensitivity_method_status$method == "UCELL_TARGETED_PANEL"] <- "FAILED_NONBLOCKING"
+    }
+  } else {
+    scores$short_ucell_sensitivity <- NA_real_
+    scores$long_ucell_sensitivity <- NA_real_
+    sensitivity_method_status$status[sensitivity_method_status$method == "UCELL_TARGETED_PANEL"] <- "PACKAGE_UNAVAILABLE_NONBLOCKING"
+  }
+  complexity_diagnostics <- data.frame()
+  if (all(c("nCount_RNA", "nFeature_RNA") %in% names(scores))) {
+    complexity_diagnostics <- data.frame(
+      score = c("short_primary_53", "long_primary_53"),
+      spearman_nCount = c(
+        suppressWarnings(stats::cor(scores$short_primary_53, scores$nCount_RNA, method = "spearman", use = "pairwise.complete.obs")),
+        suppressWarnings(stats::cor(scores$long_primary_53, scores$nCount_RNA, method = "spearman", use = "pairwise.complete.obs"))
+      ),
+      spearman_nFeature = c(
+        suppressWarnings(stats::cor(scores$short_primary_53, scores$nFeature_RNA, method = "spearman", use = "pairwise.complete.obs")),
+        suppressWarnings(stats::cor(scores$long_primary_53, scores$nFeature_RNA, method = "spearman", use = "pairwise.complete.obs"))
+      ),
+      interpretation = "Diagnostic only; region and mouse are not regressed from biological scores",
+      stringsAsFactors = FALSE
+    )
+  }
+  correlation <- function(x, y) suppressWarnings(stats::cor(x, y, method = "spearman", use = "pairwise.complete.obs"))
+  stability <- data.frame(
+    gate_id = c("short53_vs_short100", "long53_vs_long100", "short100_vs_nonribosomal"),
+    observed = c(
+      correlation(scores$short_primary_53, scores$short_complete_100),
+      correlation(scores$long_primary_53, scores$long_complete_100),
+      correlation(scores$short_complete_100, scores$short_nonribosomal)
+    ),
+    threshold = config$eos_score_spearman_min, stringsAsFactors = FALSE
+  )
+  stability$gate_status <- ifelse(
+    !is.na(stability$observed) & stability$observed >= stability$threshold, "PASS_EOS", "STOP_EOS"
+  )
+  stability$interpretation <- "Gene-wise standardized mean is primary; targeted-panel module scores are sensitivity only"
+  stability <- rbind(
+    stability,
+    data.frame(
+      gate_id = paste0("mask_", mask_stability$comparison),
+      observed = mask_stability$jaccard, threshold = mask_stability$threshold,
+      gate_status = mask_stability$gate_status,
+      interpretation = "Eosinophil identity must remain stable across QC masks",
+      stringsAsFactors = FALSE
+    )
+  )
+  list(
+    identity = identity, scores = scores, stability = stability,
+    gene_coherence = gene_coherence, leave_one_gene_out = leave_one_gene_out,
+    mask_stability = mask_stability, sensitivity_method_status = sensitivity_method_status,
+    complexity_diagnostics = complexity_diagnostics
+  )
+}
+
+finalize_downstream_release <- function(anchor_validation, consensus, eos_result,
+                                        region4_result, admissions, morphology_gate = NULL) {
+  primary_hard_pass <- anchor_validation$decision != "STOP_ANCHOR" &&
+    consensus$decision != "FALLBACK_TO_REGION3"
+  primary_status <- if (primary_hard_pass) {
+    if (anchor_validation$decision == "REVIEW_ANCHOR" || consensus$decision == "CONSENSUS_REVIEW") "REVIEW" else "PASS"
+  } else if (anchor_validation$decision != "STOP_ANCHOR" && consensus$decision == "FALLBACK_TO_REGION3") {
+    "PASS_REGION3_FALLBACK"
+  } else {
+    "STOP"
+  }
+  if (!is.null(morphology_gate) && any(grepl("PENDING", morphology_gate$gate_status)) &&
+      primary_status != "STOP") primary_status <- "REVIEW"
+  eos_status <- if (nrow(eos_result$stability) && all(eos_result$stability$gate_status == "PASS_EOS")) "PASS" else "STOP"
+  region4_status <- if (all(region4_result$gate$gate_status == "PASS_SENSITIVITY")) "PASS" else "STOP"
+  data.frame(
+    release_domain = c(
+      "PRIMARY_EXPLORATORY_REFERENCE_RELEASE",
+      "EOS_DESCRIPTIVE_ANALYSIS_RELEASE",
+      "REGION4_SENSITIVITY_RELEASE"
+    ),
+    release_status = c(primary_status, eos_status, region4_status),
+    evidence = c(
+      paste("anchor=", anchor_validation$decision, ";consensus=", consensus$decision, sep = ""),
+      paste(eos_result$stability$gate_id, eos_result$stability$gate_status, collapse = ";"),
+      paste(region4_result$gate$gate_id, region4_result$gate$gate_status, collapse = ";")
+    ),
+    inference_scope = c(
+      "Exploratory broad-cell reference; one clean anchor section and two biological mice",
+      "Descriptive Eosinophil identity/state only; no population-level inference",
+      "Sensitivity-only mapped labels; Region 4 never contributes to reference fitting"
+    ),
+    generated_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
+    stringsAsFactors = FALSE
+  )
+}
+
+region_bundle_to_spatial_seurat <- function(
+    region_data,
+    xenium_dir = NULL,
+    mask = NULL,
+    genes = NULL,
+    project = NULL,
+    assay = "Xenium",
+    fov = "fov",
+    include_cell_segmentation = TRUE,
+    include_nucleus_segmentation = TRUE
+) {
+
+  # ============================================================
+  # 1. Validate downstream bundle
+  # ============================================================
+
+  required <- c(
+    "counts",
+    "cell_metadata",
+    "region_id",
+    "gene_sets"
+  )
+
+  missing <- setdiff(
+    required,
+    names(region_data)
+  )
+
+  if (length(missing)) {
+    stop(
+      "region_data missing required elements: ",
+      paste(missing, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  counts <- region_data$counts
+  metadata <- region_data$cell_metadata
+
+  if (!inherits(counts, "sparseMatrix")) {
+    stop(
+      "region_data$counts must be a sparse Matrix.",
+      call. = FALSE
+    )
+  }
+
+  if (
+    is.null(rownames(counts)) ||
+    is.null(colnames(counts))
+  ) {
+    stop(
+      "region_data$counts must have gene rownames and cell colnames.",
+      call. = FALSE
+    )
+  }
+
+  if (anyDuplicated(rownames(counts))) {
+    stop(
+      "Count matrix contains duplicated gene names.",
+      call. = FALSE
+    )
+  }
+
+  if (anyDuplicated(colnames(counts))) {
+    stop(
+      "Count matrix contains duplicated cell IDs.",
+      call. = FALSE
+    )
+  }
+
+
+  # ------------------------------------------------------------
+  # Required spatial metadata
+  # ------------------------------------------------------------
+
+  required_meta <- c(
+    "cell_id",
+    "x_centroid",
+    "y_centroid"
+  )
+
+  missing_meta <- setdiff(
+    required_meta,
+    names(metadata)
+  )
+
+  if (length(missing_meta)) {
+    stop(
+      "Spatial metadata missing required columns: ",
+      paste(missing_meta, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  if (anyDuplicated(metadata$cell_id)) {
+    stop(
+      "region_data$cell_metadata contains duplicated cell_id values.",
+      call. = FALSE
+    )
+  }
+
+  if (
+    any(!is.finite(metadata$x_centroid)) ||
+    any(!is.finite(metadata$y_centroid))
+  ) {
+    stop(
+      "Spatial centroid coordinates contain non-finite values.",
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 2. Cell selection
+  # ============================================================
+
+  if (!is.null(mask)) {
+
+    if (
+      length(mask) != 1L ||
+      !mask %in% names(metadata)
+    ) {
+      stop(
+        "Unknown or invalid cell mask: ",
+        paste(mask, collapse = ", "),
+        call. = FALSE
+      )
+    }
+
+    keep <- as.logical(
+      metadata[[mask]]
+    )
+
+    if (anyNA(keep)) {
+      stop(
+        "Cell mask contains NA values: ",
+        mask,
+        call. = FALSE
+      )
+    }
+
+    metadata <- metadata[
+      keep,
+      ,
+      drop = FALSE
+    ]
+  }
+
+
+  # ------------------------------------------------------------
+  # Cell IDs
+  # ------------------------------------------------------------
+
+  cell_ids <- as.character(
+    metadata$cell_id
+  )
+
+  if (!length(cell_ids)) {
+    stop(
+      "No cells remain after cell selection.",
+      call. = FALSE
+    )
+  }
+
+  missing_cells <- setdiff(
+    cell_ids,
+    colnames(counts)
+  )
+
+  if (length(missing_cells)) {
+    stop(
+      length(missing_cells),
+      " selected cells are absent from the count matrix.",
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 3. Gene selection
+  # ============================================================
+
+  if (is.null(genes)) {
+
+    genes <- rownames(counts)
+
+  } else if (
+    length(genes) == 1L &&
+    genes %in% names(region_data$gene_sets)
+  ) {
+
+    genes <- region_data$gene_sets[[genes]]
+
+  }
+
+
+  genes <- unique(
+    as.character(genes)
+  )
+
+  genes <- genes[
+    !is.na(genes) &
+      nzchar(genes)
+  ]
+
+  if (!length(genes)) {
+    stop(
+      "No genes remain after gene selection.",
+      call. = FALSE
+    )
+  }
+
+  missing_genes <- setdiff(
+    genes,
+    rownames(counts)
+  )
+
+  if (length(missing_genes)) {
+    stop(
+      length(missing_genes),
+      " requested genes are absent from the downstream count matrix. ",
+      "Examples: ",
+      paste(
+        head(missing_genes, 10),
+        collapse = ", "
+      ),
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 4. Subset raw counts
+  # ============================================================
+
+  counts <- counts[
+    genes,
+    cell_ids,
+    drop = FALSE
+  ]
+
+
+  # ============================================================
+  # 5. Align metadata exactly to count matrix
+  # ============================================================
+
+  metadata <- metadata[
+    match(
+      colnames(counts),
+      metadata$cell_id
+    ),
+    ,
+    drop = FALSE
+  ]
+
+  rownames(metadata) <- as.character(
+    metadata$cell_id
+  )
+
+
+  # ------------------------------------------------------------
+  # Alignment validation
+  # ------------------------------------------------------------
+
+  if (!identical(
+    colnames(counts),
+    rownames(metadata)
+  )) {
+    stop(
+      "Count matrix and metadata alignment failed.",
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 6. Create Seurat object
+  # ============================================================
+
+  if (is.null(project)) {
+    project <- as.character(
+      region_data$region_id
+    )
+  }
+
+  object <- Seurat::CreateSeuratObject(
+    counts = counts,
+    meta.data = metadata,
+    assay = assay,
+    project = project,
+    min.cells = 0L,
+    min.features = 0L
+  )
+
+
+  # ============================================================
+  # 7. Create spatial centroid object
+  # ============================================================
+
+  centroids <- data.frame(
+    x = as.numeric(metadata$x_centroid),
+    y = as.numeric(metadata$y_centroid),
+    row.names = metadata$cell_id,
+    check.names = FALSE
+  )
+
+  spatial_centroids <-
+    SeuratObject::CreateCentroids(
+      coords = centroids
+    )
+
+
+  # ============================================================
+  # 8. Create initial FOV from centroids
+  # ============================================================
+
+  spatial_fov <-
+    SeuratObject::CreateFOV(
+      coords = spatial_centroids,
+      type = "centroids",
+      molecules = NULL,
+      assay = assay,
+      key = paste0(fov, "_")
+    )
+
+  object[[fov]] <- spatial_fov
+
+
+  # ============================================================
+  # 9. Optional native Xenium segmentation
+  # ============================================================
+
+  segmentation_loaded <- character()
+
+
+  # ------------------------------------------------------------
+  # Boundary reader helper
+  # ------------------------------------------------------------
+
+  read_xenium_boundary <- function(
+      path,
+      selected_cells
+  ) {
+
+    if (!file.exists(path)) {
+      return(NULL)
+    }
+
+    boundary <- arrow::read_parquet(
+      path,
+      as_data_frame = TRUE
+    )
+
+
+    # ----------------------------------------------------------
+    # Required cell ID
+    # ----------------------------------------------------------
+
+    if (!"cell_id" %in% names(boundary)) {
+      stop(
+        "Boundary table does not contain cell_id: ",
+        path,
+        call. = FALSE
+      )
+    }
+
+
+    # ----------------------------------------------------------
+    # Resolve x/y coordinate columns
+    # ----------------------------------------------------------
+
+    x_candidates <- c(
+      "vertex_x",
+      "x",
+      "x_location",
+      "x_centroid"
+    )
+
+    y_candidates <- c(
+      "vertex_y",
+      "y",
+      "y_location",
+      "y_centroid"
+    )
+
+    x_col <- intersect(
+      x_candidates,
+      names(boundary)
+    )
+
+    y_col <- intersect(
+      y_candidates,
+      names(boundary)
+    )
+
+    if (
+      !length(x_col) ||
+      !length(y_col)
+    ) {
+      stop(
+        "Cannot identify polygon x/y columns in ",
+        basename(path),
+        ". Columns found: ",
+        paste(
+          names(boundary),
+          collapse = ", "
+        ),
+        call. = FALSE
+      )
+    }
+
+    x_col <- x_col[[1]]
+    y_col <- y_col[[1]]
+
+
+    # ----------------------------------------------------------
+    # Restrict polygons to cells retained in object
+    # ----------------------------------------------------------
+
+    boundary <- boundary[
+      as.character(boundary$cell_id) %in%
+        selected_cells,
+      ,
+      drop = FALSE
+    ]
+
+    if (!nrow(boundary)) {
+      stop(
+        "No selected cells were found in ",
+        basename(path),
+        call. = FALSE
+      )
+    }
+
+
+    # ----------------------------------------------------------
+    # Convert to Seurat segmentation coordinate format
+    # ----------------------------------------------------------
+
+    polygon <- data.frame(
+      x = as.numeric(
+        boundary[[x_col]]
+      ),
+      y = as.numeric(
+        boundary[[y_col]]
+      ),
+      cell = as.character(
+        boundary$cell_id
+      ),
+      stringsAsFactors = FALSE
+    )
+
+
+    # ----------------------------------------------------------
+    # Remove malformed vertices
+    # ----------------------------------------------------------
+
+    polygon <- polygon[
+      is.finite(polygon$x) &
+        is.finite(polygon$y) &
+        !is.na(polygon$cell) &
+        nzchar(polygon$cell),
+      ,
+      drop = FALSE
+    ]
+
+    if (!nrow(polygon)) {
+      stop(
+        "No valid polygon vertices remain in ",
+        basename(path),
+        call. = FALSE
+      )
+    }
+
+
+    # ----------------------------------------------------------
+    # Keep vertices grouped by cell
+    # ----------------------------------------------------------
+
+    polygon <- polygon[
+      order(polygon$cell),
+      ,
+      drop = FALSE
+    ]
+
+    rownames(polygon) <- NULL
+
+
+    # ----------------------------------------------------------
+    # Ensure only selected cells remain
+    # ----------------------------------------------------------
+
+    unexpected_cells <- setdiff(
+      unique(polygon$cell),
+      selected_cells
+    )
+
+    if (length(unexpected_cells)) {
+      stop(
+        "Boundary reader retained unexpected cells.",
+        call. = FALSE
+      )
+    }
+
+
+    polygon
+  }
+
+
+  # ============================================================
+  # 9A. Import native geometry
+  # ============================================================
+
+  if (!is.null(xenium_dir)) {
+
+    if (!dir.exists(xenium_dir)) {
+      stop(
+        "xenium_dir does not exist: ",
+        xenium_dir,
+        call. = FALSE
+      )
+    }
+
+    if (
+      !requireNamespace(
+        "arrow",
+        quietly = TRUE
+      )
+    ) {
+      stop(
+        "Package 'arrow' is required to import Xenium polygons.",
+        call. = FALSE
+      )
+    }
+
+
+    # ==========================================================
+    # 9A-1. Cell segmentation
+    # ==========================================================
+
+    if (isTRUE(
+      include_cell_segmentation
+    )) {
+
+      cell_boundary_path <- file.path(
+        xenium_dir,
+        "cell_boundaries.parquet"
+      )
+
+
+      if (file.exists(
+        cell_boundary_path
+      )) {
+
+        cell_polygon <-
+          read_xenium_boundary(
+            path = cell_boundary_path,
+            selected_cells = cell_ids
+          )
+
+
+        message(
+          "Creating compact cell segmentation from ",
+          format(
+            nrow(cell_polygon),
+            big.mark = ","
+          ),
+          " vertices across ",
+          format(
+            length(
+              unique(
+                cell_polygon$cell
+              )
+            ),
+            big.mark = ","
+          ),
+          " cells."
+        )
+
+
+        cell_segmentation <-
+          SeuratObject::CreateSegmentation(
+            coords = cell_polygon,
+            compact = TRUE
+          )
+
+
+        object[[fov]][[
+          "segmentation"
+        ]] <- cell_segmentation
+
+
+        segmentation_loaded <- c(
+          segmentation_loaded,
+          "segmentation"
+        )
+
+
+        rm(
+          cell_polygon,
+          cell_segmentation
+        )
+
+        invisible(gc())
+      } else {
+
+        warning(
+          "Cell segmentation requested but ",
+          "cell_boundaries.parquet was not found.",
+          call. = FALSE
+        )
+      }
+    }
+
+
+    # ==========================================================
+    # 9A-2. Nucleus segmentation
+    # ==========================================================
+
+    if (isTRUE(
+      include_nucleus_segmentation
+    )) {
+
+      nucleus_boundary_path <- file.path(
+        xenium_dir,
+        "nucleus_boundaries.parquet"
+      )
+
+
+      if (file.exists(
+        nucleus_boundary_path
+      )) {
+
+        nucleus_polygon <-
+          read_xenium_boundary(
+            path = nucleus_boundary_path,
+            selected_cells = cell_ids
+          )
+
+
+        message(
+          "Creating compact nucleus segmentation from ",
+          format(
+            nrow(nucleus_polygon),
+            big.mark = ","
+          ),
+          " vertices across ",
+          format(
+            length(
+              unique(
+                nucleus_polygon$cell
+              )
+            ),
+            big.mark = ","
+          ),
+          " cells."
+        )
+
+
+        nucleus_segmentation <-
+          SeuratObject::CreateSegmentation(
+            coords = nucleus_polygon,
+            compact = TRUE
+          )
+
+
+        object[[fov]][[
+          "nucleus_segmentation"
+        ]] <- nucleus_segmentation
+
+
+        segmentation_loaded <- c(
+          segmentation_loaded,
+          "nucleus_segmentation"
+        )
+
+
+        rm(
+          nucleus_polygon,
+          nucleus_segmentation
+        )
+
+        invisible(gc())
+      } else {
+
+        warning(
+          "Nucleus segmentation requested but ",
+          "nucleus_boundaries.parquet was not found.",
+          call. = FALSE
+        )
+      }
+    }
+
+  }
+
+
+  # ============================================================
+  # 10. Set default FOV
+  # ============================================================
+
+  SeuratObject::DefaultFOV(
+    object
+  ) <- fov
+
+
+  # ============================================================
+  # 11. Determine available boundaries
+  # ============================================================
+
+  available_boundaries <-
+    SeuratObject::Boundaries(
+      object[[fov]]
+    )
+
+
+  # ------------------------------------------------------------
+  # Keep centroids as default for whole-section visualization
+  # ------------------------------------------------------------
+
+  if (
+    "centroids" %in%
+      available_boundaries
+  ) {
+
+    SeuratObject::DefaultBoundary(
+      object[[fov]]
+    ) <- "centroids"
+  }
+
+
+  # ============================================================
+  # 12. Provenance
+  # ============================================================
+
+  object@misc$downstream_bundle <- list(
+
+    region_id =
+      as.character(
+        region_data$region_id
+      ),
+
+    section_status =
+      region_data$section_status,
+
+    cell_mask =
+      if (is.null(mask)) {
+        "ALL_CELLS"
+      } else {
+        mask
+      },
+
+    gene_count =
+      length(genes),
+
+    genes =
+      genes,
+
+    raw_counts_preserved =
+      isTRUE(
+        region_data$raw_counts_preserved
+      ),
+
+    spatial_source =
+      if (is.null(xenium_dir)) {
+
+        "DOWNSTREAM_CELL_METADATA_CENTROIDS"
+
+      } else {
+
+        "DOWNSTREAM_COUNTS_PLUS_NATIVE_XENIUM_GEOMETRY"
+
+      },
+
+    xenium_dir =
+      if (is.null(xenium_dir)) {
+
+        NA_character_
+
+      } else {
+
+        normalizePath(
+          xenium_dir,
+          winslash = "/",
+          mustWork = TRUE
+        )
+
+      },
+
+    spatial_boundaries =
+      available_boundaries,
+
+    segmentation_loaded =
+      segmentation_loaded,
+
+    expression_source =
+      "QC_APPROVED_DOWNSTREAM_INPUT_RDS",
+
+    segmentation_source =
+      if (length(
+        segmentation_loaded
+      )) {
+        "NATIVE_XENIUM_BOUNDARY_PARQUET"
+      } else {
+        "NOT_LOADED"
+      }
+  )
+
+
+  # ============================================================
+  # 13. Final integrity checks
+  # ============================================================
+
+  # ------------------------------------------------------------
+  # Expression / metadata alignment
+  # ------------------------------------------------------------
+
+  if (!identical(
+    colnames(object),
+    rownames(object@meta.data)
+  )) {
+
+    stop(
+      "Final Seurat cell/metadata alignment failed.",
+      call. = FALSE
+    )
+  }
+
+
+  # ------------------------------------------------------------
+  # FOV cell coverage
+  # ------------------------------------------------------------
+
+  spatial_cells <- Cells(
+    object[[fov]]
+  )
+
+  missing_spatial <- setdiff(
+    colnames(object),
+    spatial_cells
+  )
+
+  if (length(missing_spatial)) {
+
+    stop(
+      length(missing_spatial),
+      " Seurat cells are missing from the FOV.",
+      call. = FALSE
+    )
+  }
+
+
+  # ------------------------------------------------------------
+  # Verify segmentation contains only object cells
+  # ------------------------------------------------------------
+
+  if ("segmentation" %in% available_boundaries) {
+
+    segmentation_cells <- Cells(
+      object[[fov]][[
+        "segmentation"
+      ]]
+    )
+
+    unexpected <- setdiff(
+      segmentation_cells,
+      colnames(object)
+    )
+
+    if (length(unexpected)) {
+      stop(
+        "Cell segmentation contains cells absent from the Seurat object.",
+        call. = FALSE
+      )
+    }
+  }
+
+
+  if (
+    "nucleus_segmentation" %in%
+      available_boundaries
+  ) {
+
+    nucleus_cells <- Cells(
+      object[[fov]][[
+        "nucleus_segmentation"
+      ]]
+    )
+
+    unexpected <- setdiff(
+      nucleus_cells,
+      colnames(object)
+    )
+
+    if (length(unexpected)) {
+      stop(
+        "Nucleus segmentation contains cells absent from the Seurat object.",
+        call. = FALSE
+      )
+    }
+  }
+
+
+  # ============================================================
+  # 14. Report result
+  # ============================================================
+
+  message(
+    "Created spatial Seurat object: ",
+    project
+  )
+
+  message(
+    "  Cells: ",
+    format(
+      ncol(object),
+      big.mark = ","
+    )
+  )
+
+  message(
+    "  Genes: ",
+    format(
+      nrow(object),
+      big.mark = ","
+    )
+  )
+
+  message(
+    "  FOV: ",
+    fov
+  )
+
+  message(
+    "  Boundaries: ",
+    paste(
+      available_boundaries,
+      collapse = ", "
+    )
+  )
+
+  if (length(
+    segmentation_loaded
+  )) {
+
+    message(
+      "  Native Xenium segmentations loaded: ",
+      paste(
+        segmentation_loaded,
+        collapse = ", "
+      )
+    )
+  }
+
+
+  # ============================================================
+  # 15. Return
+  # ============================================================
+
+  object
+}
+
+plot_spatial_discrete_overlay <- function(
+    object,
+    group.by,
+    fov = NULL,
+    highlight = NULL,
+    background_col = "#D9D9D9",
+    highlight_cols = NULL,
+    base_size = 0.25,
+    highlight_size = 0.9,
+    base_alpha = 0.7,
+    highlight_alpha = 1,
+    flip_xy = FALSE,
+    dark.background = FALSE,
+    axes = FALSE,
+    title = NULL,
+    subtitle = NULL
+) {
+
+  # ============================================================
+  # 1. Validate object and metadata
+  # ============================================================
+
+  if (!inherits(object, "Seurat")) {
+    stop("object must be a Seurat object.", call. = FALSE)
+  }
+
+  if (!group.by %in% colnames(object@meta.data)) {
+    stop(
+      "Metadata variable not found: ",
+      group.by,
+      call. = FALSE
+    )
+  }
+
+  if (is.null(fov)) {
+    fov <- SeuratObject::DefaultFOV(object)
+  }
+
+  if (!fov %in% Seurat::Images(object)) {
+    stop(
+      "FOV not found: ",
+      fov,
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 2. Prepare metadata
+  # ============================================================
+
+  meta <- object@meta.data
+  meta$cell <- rownames(meta)
+
+  values <- meta[[group.by]]
+
+  if (is.logical(values)) {
+    values <- factor(
+      values,
+      levels = c(TRUE, FALSE)
+    )
+  } else {
+    values <- factor(values)
+  }
+
+  meta[[group.by]] <- values
+  levels_use <- levels(values)
+
+
+  # ============================================================
+  # 3. Validate highlight groups
+  # ============================================================
+
+  if (is.null(highlight)) {
+    highlight <- character()
+  }
+
+  highlight <- as.character(highlight)
+
+  unknown_highlight <- setdiff(
+    highlight,
+    levels_use
+  )
+
+  if (length(unknown_highlight)) {
+    stop(
+      "Highlight values not present in ",
+      group.by,
+      ": ",
+      paste(unknown_highlight, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 4. Base ImageDimPlot colors
+  #
+  # Draw every category grey first. Selected categories are
+  # redrawn later as separate layers.
+  # ============================================================
+
+  base_cols <- stats::setNames(
+    rep(
+      background_col,
+      length(levels_use)
+    ),
+    levels_use
+  )
+
+
+  # ============================================================
+  # 5. Highlight colors
+  # ============================================================
+
+  if (length(highlight)) {
+
+    if (is.null(highlight_cols)) {
+
+      default_cols <- c(
+        "#D73027",
+        "#0072B2",
+        "#009E73",
+        "#CC79A7",
+        "#E69F00",
+        "#56B4E9"
+      )
+
+      highlight_cols <- stats::setNames(
+        rep(
+          default_cols,
+          length.out = length(highlight)
+        ),
+        highlight
+      )
+
+    } else if (is.null(names(highlight_cols))) {
+
+      if (length(highlight_cols) != length(highlight)) {
+        stop(
+          "Unnamed highlight_cols must match highlight length.",
+          call. = FALSE
+        )
+      }
+
+      highlight_cols <- stats::setNames(
+        highlight_cols,
+        highlight
+      )
+
+    } else {
+
+      missing_cols <- setdiff(
+        highlight,
+        names(highlight_cols)
+      )
+
+      if (length(missing_cols)) {
+        stop(
+          "Missing highlight colors for: ",
+          paste(missing_cols, collapse = ", "),
+          call. = FALSE
+        )
+      }
+
+      highlight_cols <- highlight_cols[
+        highlight
+      ]
+    }
+  }
+
+
+  # ============================================================
+  # 6. Base ImageDimPlot
+  # ============================================================
+
+  p <- Seurat::ImageDimPlot(
+    object,
+    fov = fov,
+    group.by = group.by,
+    cols = unname(base_cols),
+    size = base_size,
+    alpha = base_alpha,
+    flip_xy = flip_xy,
+    dark.background = dark.background,
+    axes = axes
+  )
+
+
+  # ============================================================
+  # 7. Get centroid coordinates from the FOV
+  # ============================================================
+
+  coords <- SeuratObject::GetTissueCoordinates(
+    object[[fov]],
+    which = "centroids"
+  )
+
+  if (!"cell" %in% names(coords)) {
+    coords$cell <- rownames(coords)
+  }
+
+  if (!all(c("x", "y") %in% names(coords))) {
+    stop(
+      "Centroid coordinates do not contain x/y columns.",
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 8. Align metadata without merge reordering
+  # ============================================================
+
+  coords[[group.by]] <- meta[
+    match(coords$cell, meta$cell),
+    group.by
+  ]
+
+
+  # ============================================================
+  # 9. Convert tissue coordinates to ImageDimPlot plot coordinates
+  #
+  # Important:
+  # Seurat's SingleImagePlot internally maps:
+  #
+  #       plot x <- tissue y
+  #       plot y <- tissue x
+  #
+  # and then flip_xy controls whether coord_flip() is applied.
+  #
+  # Therefore:
+  #
+  # flip_xy = TRUE:
+  #     ggplot layer coordinates = (y, x)
+  #
+  # flip_xy = FALSE:
+  #     coord_flip() effectively displays them as (x, y)
+  #
+  # For added ggplot layers we need to supply coordinates in the
+  # coordinate system expected BEFORE coord_flip().
+  # ============================================================
+
+  if (isTRUE(flip_xy)) {
+
+    coords$plot_x <- coords$y
+    coords$plot_y <- coords$x
+
+  } else {
+
+    # ImageDimPlot will apply coord_flip(), so the custom layer
+    # must also enter as x=y, y=x.
+    coords$plot_x <- coords$y
+    coords$plot_y <- coords$x
+  }
+
+
+  # ============================================================
+  # 10. Overlay highlighted groups
+  # ============================================================
+
+  if (length(highlight)) {
+
+    for (group_value in highlight) {
+
+      tmp <- coords[
+        !is.na(coords[[group.by]]) &
+          as.character(coords[[group.by]]) == group_value,
+        ,
+        drop = FALSE
+      ]
+
+      if (!nrow(tmp)) {
+        next
+      }
+
+      p <- p +
+        ggplot2::geom_point(
+          data = tmp,
+          ggplot2::aes(
+            x = plot_x,
+            y = plot_y
+          ),
+          inherit.aes = FALSE,
+          colour = unname(
+            highlight_cols[group_value]
+          ),
+          size = highlight_size,
+          alpha = highlight_alpha
+        )
+    }
+  }
+
+
+  # ============================================================
+  # 11. Labels
+  # ============================================================
+
+  p <- p +
+    ggplot2::labs(
+      title = title,
+      subtitle = subtitle
+    )
+
+
+  # ============================================================
+  # 12. Return
+  # ============================================================
+
+  p
+}
+
+plot_annotation_overlap_heatmap <- function(
+    object,
+    row_var,
+    col_var,
+    normalize = c("row", "column", "none"),
+    min_label = 5,
+    cluster_rows = FALSE,
+    cluster_columns = FALSE,
+    row_order = NULL,
+    col_order = NULL,
+    legend_title = "Cells (%)",
+    row_title = "Current annotation",
+    column_title = "Reference annotation",
+    show_values = TRUE,
+    digits = 0
+) {
+
+  requireNamespace("ComplexHeatmap")
+  requireNamespace("circlize")
+  requireNamespace("grid")
+
+  normalize <- match.arg(normalize)
+
+  ## ----------------------------
+  ## 1. Extract metadata
+  ## ----------------------------
+  meta <- object[[]]
+
+  if (!row_var %in% colnames(meta)) {
+    stop("row_var not found in object metadata: ", row_var)
+  }
+
+  if (!col_var %in% colnames(meta)) {
+    stop("col_var not found in object metadata: ", col_var)
+  }
+
+  df <- meta[, c(row_var, col_var), drop = FALSE]
+
+  # Remove NA annotations
+  df <- df[
+    !is.na(df[[row_var]]) &
+      !is.na(df[[col_var]]),
+    ,
+    drop = FALSE
+  ]
+
+  ## ----------------------------
+  ## 2. Build contingency table
+  ## ----------------------------
+  count_mat <- table(
+    df[[row_var]],
+    df[[col_var]]
+  )
+
+  ## ----------------------------
+  ## 3. Convert to percentages
+  ## ----------------------------
+  if (normalize == "row") {
+
+    prop_mat <- prop.table(
+      count_mat,
+      margin = 1
+    ) * 100
+
+  } else if (normalize == "column") {
+
+    prop_mat <- prop.table(
+      count_mat,
+      margin = 2
+    ) * 100
+
+  } else {
+
+    prop_mat <- count_mat / sum(count_mat) * 100
+  }
+
+  prop_mat <- as.matrix(prop_mat)
+
+  # Remove empty rows/columns
+  prop_mat <- prop_mat[
+    rowSums(prop_mat) > 0,
+    colSums(prop_mat) > 0,
+    drop = FALSE
+  ]
+
+  ## ----------------------------
+  ## 4. Optional manual ordering
+  ## ----------------------------
+  if (!is.null(row_order)) {
+
+    row_order <- intersect(
+      row_order,
+      rownames(prop_mat)
+    )
+
+    remaining_rows <- setdiff(
+      rownames(prop_mat),
+      row_order
+    )
+
+    prop_mat <- prop_mat[
+      c(row_order, remaining_rows),
+      ,
+      drop = FALSE
+    ]
+  }
+
+  if (!is.null(col_order)) {
+
+    col_order <- intersect(
+      col_order,
+      colnames(prop_mat)
+    )
+
+    remaining_cols <- setdiff(
+      colnames(prop_mat),
+      col_order
+    )
+
+    prop_mat <- prop_mat[
+      ,
+      c(col_order, remaining_cols),
+      drop = FALSE
+    ]
+  }
+
+  ## ----------------------------
+  ## 5. Cell-style color scale
+  ## ----------------------------
+  col_fun <- circlize::colorRamp2(
+    c(0, 25, 50, 75, 100),
+    c(
+      "#FFFFFF",
+      "#FDE0DD",
+      "#FCAE91",
+      "#FB6A4A",
+      "#CB181D"
+    )
+  )
+
+  ## ----------------------------
+  ## 6. Heatmap
+  ## ----------------------------
+  ht <- ComplexHeatmap::Heatmap(
+    prop_mat,
+
+    name = "cell_percentage",
+    col = col_fun,
+
+    cluster_rows = cluster_rows,
+    cluster_columns = cluster_columns,
+
+    row_title = row_title,
+    column_title = column_title,
+
+    row_names_side = "left",
+
+    row_names_gp = grid::gpar(
+      fontsize = 10
+    ),
+
+    column_names_gp = grid::gpar(
+      fontsize = 10
+    ),
+
+    column_names_rot = 45,
+
+    rect_gp = grid::gpar(
+      col = "white",
+      lwd = 1
+    ),
+
+    border = TRUE,
+
+    cell_fun = if (show_values) {
+
+      function(j, i, x, y, width, height, fill) {
+
+        val <- prop_mat[i, j]
+
+        if (!is.na(val) && val >= min_label) {
+
+          grid::grid.text(
+            sprintf(
+              paste0("%.", digits, "f"),
+              val
+            ),
+            x,
+            y,
+            gp = grid::gpar(
+              fontsize = 8,
+              fontface = ifelse(
+                val >= 50,
+                "bold",
+                "plain"
+              ),
+              col = ifelse(
+                val >= 60,
+                "white",
+                "black"
+              )
+            )
+          )
+        }
+      }
+
+    } else {
+      NULL
+    },
+
+    heatmap_legend_param = list(
+      title = legend_title,
+      at = c(0, 25, 50, 75, 100),
+      labels = c("0", "25", "50", "75", "100"),
+      legend_height = grid::unit(3.5, "cm"),
+      title_gp = grid::gpar(
+        fontsize = 10,
+        fontface = "bold"
+      ),
+      labels_gp = grid::gpar(
+        fontsize = 9
+      )
+    )
+  )
+
+  ## ----------------------------
+  ## 7. Draw
+  ## ----------------------------
+  ComplexHeatmap::draw(
+    ht,
+    heatmap_legend_side = "right"
+  )
+
+  invisible(
+    list(
+      heatmap = ht,
+      percentage_matrix = prop_mat,
+      count_matrix = count_mat
+    )
+  )
+}
+
+calculate_marker_scores <- function(
+  object,
+  marker_df,
+  group_col,
+  assay = "Xenium",
+  layer = "data",
+  prefix = "Score",
+  z_cap = 3
+) {
+
+  stopifnot(
+    all(c("Gene_Symbol", group_col) %in% colnames(marker_df))
+  )
+
+  marker_df2 <- marker_df %>%
+    filter(
+      Gene_Symbol %in% rownames(object),
+      !is.na(.data[[group_col]])
+    ) %>%
+    distinct(
+      Gene_Symbol,
+      .data[[group_col]]
+    )
+
+  genes <- unique(marker_df2$Gene_Symbol)
+
+  # genes x cells
+  mat <- LayerData(
+    object = object,
+    assay = assay,
+    layer = layer
+  )[genes, , drop = FALSE]
+
+  # gene-wise mean / SD
+  gene_mean <- Matrix::rowMeans(mat)
+
+  gene_sq_mean <- Matrix::rowMeans(mat^2)
+
+  gene_sd <- sqrt(
+    pmax(
+      gene_sq_mean - gene_mean^2,
+      0
+    )
+  )
+
+  # Drop genes with no variation
+  keep <- is.finite(gene_sd) & gene_sd > 0
+
+  mat <- mat[keep, , drop = FALSE]
+  gene_mean <- gene_mean[keep]
+  gene_sd <- gene_sd[keep]
+
+  marker_df2 <- marker_df2 %>%
+    filter(Gene_Symbol %in% rownames(mat))
+
+  # Dense only for the small marker matrix, not the whole Xenium matrix
+  z <- as.matrix(mat)
+
+  z <- sweep(
+    z,
+    1,
+    gene_mean,
+    "-"
+  )
+
+  z <- sweep(
+    z,
+    1,
+    gene_sd,
+    "/"
+  )
+
+  # Prevent one extreme gene from dominating
+  z[z >  z_cap] <-  z_cap
+  z[z < -z_cap] <- -z_cap
+
+  groups <- unique(marker_df2[[group_col]])
+
+  score_df <- matrix(
+    NA_real_,
+    nrow = ncol(z),
+    ncol = length(groups),
+    dimnames = list(
+      colnames(z),
+      paste0(prefix, "_", make.names(groups))
+    )
+  )
+
+  detection_df <- score_df
+
+  for (grp in groups) {
+
+    genes_grp <- marker_df2 %>%
+      filter(.data[[group_col]] == grp) %>%
+      pull(Gene_Symbol) %>%
+      unique()
+
+    genes_grp <- intersect(
+      genes_grp,
+      rownames(z)
+    )
+
+    # Number of groups each gene contributes to
+    n_memberships <- marker_df2 %>%
+      filter(Gene_Symbol %in% genes_grp) %>%
+      count(Gene_Symbol, name = "n_group")
+
+    weights <- 1 / n_memberships$n_group
+    names(weights) <- n_memberships$Gene_Symbol
+
+    weights <- weights[genes_grp]
+    weights <- weights / sum(weights)
+
+    score_df[
+      ,
+      paste0(prefix, "_", make.names(grp))
+    ] <- as.numeric(
+      crossprod(
+        weights,
+        z[genes_grp, , drop = FALSE]
+      )
+    )
+
+    # Fraction of marker genes detected in each cell
+    raw_grp <- mat[
+      genes_grp,
+      ,
+      drop = FALSE
+    ]
+
+    detection_df[
+      ,
+      paste0(prefix, "_", make.names(grp))
+    ] <- Matrix::colMeans(raw_grp > 0)
+  }
+
+  list(
+    score = as.data.frame(score_df),
+    detection = as.data.frame(detection_df)
+  )
+}
+
+score_marker_groups_by_cluster <- function(
+  object,
+  marker_df,
+  group_col,
+  cluster_col = "cluster_res_1_2",
+  assay = "Xenium",
+  layer = "data",
+  score_prefix = "MainScore",
+  detect_prefix = "MainDetect",
+  label_prefix = "Main",
+  z_cap = 3
+) {
+
+  stopifnot(
+    group_col %in% colnames(marker_df),
+    cluster_col %in% colnames(object@meta.data)
+  )
+
+  # ------------------------------------------------------------
+  # 1. Calculate cell-level marker scores
+  # ------------------------------------------------------------
+
+  scores <- calculate_marker_scores(
+    object = object,
+    marker_df = marker_df,
+    group_col = group_col,
+    assay = assay,
+    layer = layer,
+    prefix = score_prefix,
+    z_cap = z_cap
+  )
+
+  # ------------------------------------------------------------
+  # 2. Add score metadata
+  # ------------------------------------------------------------
+
+  object <- Seurat::AddMetaData(
+    object = object,
+    metadata = scores$score
+  )
+
+  # ------------------------------------------------------------
+  # 3. Add marker-detection metadata
+  # ------------------------------------------------------------
+
+  detect_df <- scores$detection
+
+  colnames(detect_df) <- sub(
+    paste0("^", score_prefix, "_"),
+    paste0(detect_prefix, "_"),
+    colnames(detect_df)
+  )
+
+  object <- Seurat::AddMetaData(
+    object = object,
+    metadata = detect_df
+  )
+
+  # ------------------------------------------------------------
+  # 4. Find score columns
+  # ------------------------------------------------------------
+
+  score_cols <- grep(
+    paste0("^", score_prefix, "_"),
+    colnames(object@meta.data),
+    value = TRUE
+  )
+
+  if (length(score_cols) < 2) {
+    stop(
+      "Fewer than two score groups were found for ",
+      group_col,
+      "."
+    )
+  }
+
+  # ------------------------------------------------------------
+  # 5. Summarise scores by cluster
+  # ------------------------------------------------------------
+
+  cluster_scores <- object@meta.data %>%
+    dplyr::group_by(
+      .data[[cluster_col]]
+    ) %>%
+    dplyr::summarise(
+      n_cells = dplyr::n(),
+
+      dplyr::across(
+        dplyr::all_of(score_cols),
+        list(
+          mean = ~ mean(.x, na.rm = TRUE),
+          median = ~ median(.x, na.rm = TRUE)
+        )
+      ),
+
+      .groups = "drop"
+    )
+
+  # ------------------------------------------------------------
+  # 6. Extract mean scores for ranking
+  # ------------------------------------------------------------
+
+  mean_cols <- grep(
+    paste0(
+      "^",
+      score_prefix,
+      "_.*_mean$"
+    ),
+    colnames(cluster_scores),
+    value = TRUE
+  )
+
+  if (length(mean_cols) < 2) {
+    stop(
+      "Could not identify at least two mean score columns."
+    )
+  }
+
+  score_mat <- as.matrix(
+    cluster_scores[
+      ,
+      mean_cols,
+      drop = FALSE
+    ]
+  )
+
+  rownames(score_mat) <- as.character(
+    cluster_scores[[cluster_col]]
+  )
+
+  # ------------------------------------------------------------
+  # 7. Recover biological group names
+  # ------------------------------------------------------------
+
+  labels <- sub(
+    "_mean$",
+    "",
+    sub(
+      paste0("^", score_prefix, "_"),
+      "",
+      mean_cols
+    )
+  )
+
+  # ------------------------------------------------------------
+  # 8. Identify best and second-best groups
+  # ------------------------------------------------------------
+
+  annotation <- lapply(
+    seq_len(nrow(score_mat)),
+    function(i) {
+
+      x <- score_mat[i, ]
+
+      # Deal safely with NA/NaN
+      x[
+        !is.finite(x)
+      ] <- NA_real_
+
+      valid <- which(
+        !is.na(x)
+      )
+
+      if (length(valid) == 0) {
+
+        return(
+          tibble::tibble(
+            cluster = rownames(score_mat)[i],
+            Best_label = NA_character_,
+            Best_score = NA_real_,
+            Second_label = NA_character_,
+            Second_score = NA_real_,
+            Score_margin = NA_real_
+          )
+        )
+      }
+
+      ord <- valid[
+        order(
+          x[valid],
+          decreasing = TRUE
+        )
+      ]
+
+      best_idx <- ord[1]
+
+      if (length(ord) >= 2) {
+
+        second_idx <- ord[2]
+
+        second_label <- labels[second_idx]
+        second_score <- x[second_idx]
+
+        margin <-
+          x[best_idx] -
+          x[second_idx]
+
+      } else {
+
+        second_label <- NA_character_
+        second_score <- NA_real_
+        margin <- NA_real_
+      }
+
+      tibble::tibble(
+        cluster =
+          rownames(score_mat)[i],
+
+        Best_label =
+          labels[best_idx],
+
+        Best_score =
+          x[best_idx],
+
+        Second_label =
+          second_label,
+
+        Second_score =
+          second_score,
+
+        Score_margin =
+          margin
+      )
+    }
+  ) %>%
+    dplyr::bind_rows()
+
+  # ------------------------------------------------------------
+  # 9. Rename output columns appropriately
+  # ------------------------------------------------------------
+
+  colnames(annotation)[
+    colnames(annotation) == "cluster"
+  ] <- cluster_col
+
+  colnames(annotation)[
+    colnames(annotation) == "Best_label"
+  ] <- paste0(
+    label_prefix,
+    "_label"
+  )
+
+  colnames(annotation)[
+    colnames(annotation) == "Best_score"
+  ] <- paste0(
+    label_prefix,
+    "_score"
+  )
+
+  colnames(annotation)[
+    colnames(annotation) == "Second_label"
+  ] <- paste0(
+    label_prefix,
+    "_second"
+  )
+
+  colnames(annotation)[
+    colnames(annotation) == "Second_score"
+  ] <- paste0(
+    label_prefix,
+    "_second_score"
+  )
+
+  colnames(annotation)[
+    colnames(annotation) == "Score_margin"
+  ] <- paste0(
+    label_prefix,
+    "_margin"
+  )
+
+  # ------------------------------------------------------------
+  # 10. Sort clusters numerically where possible
+  # ------------------------------------------------------------
+
+  annotation <- annotation %>%
+    dplyr::mutate(
+      .cluster_numeric =
+        suppressWarnings(
+          as.numeric(
+            as.character(
+              .data[[cluster_col]]
+            )
+          )
+        )
+    ) %>%
+    dplyr::arrange(
+      .cluster_numeric,
+      .data[[cluster_col]]
+    ) %>%
+    dplyr::select(
+      -.cluster_numeric
+    )
+
+  # ------------------------------------------------------------
+  # 11. Return everything
+  # ------------------------------------------------------------
+
+  return(
+    list(
+      object = object,
+
+      cell_scores =
+        scores$score,
+
+      cell_detection =
+        detect_df,
+
+      cluster_scores =
+        cluster_scores,
+
+      score_matrix =
+        score_mat,
+
+      annotation =
+        annotation
+    )
+  )
+}
+
+refine_xenium_celltypes <- function(
+  object,
+  reduction = "pca",
+  dims = 1:12,
+  k = 15,
+  self_weight = 0.70,
+  wang_prefix = "RefAll",
+  cluster_main_col = "Xenium_cluster_main",
+  cluster_subtype_col = "Xenium_cluster_subtype",
+
+  # Wang does not contain Schwann / lymphatic EC.
+  # Only rescue these when the Wang neighborhood is not predominantly immune.
+  ontology_gap_max_immune_prob = 0.50,
+
+  # Optional empirical review thresholds.
+  # Leave NULL initially; inspect distributions before choosing thresholds.
+  wang_main_review_score = NULL,
+  wang_main_review_margin = NULL,
+  wang_subtype_review_margin = NULL,
+  xenium_subtype_review_margin = NULL,
+
+  verbose = TRUE
+) {
+
+  # ============================================================
+  # 0. REQUIREMENTS
+  # ============================================================
+
+  if (!requireNamespace("FNN", quietly = TRUE)) {
+    stop(
+      "Package 'FNN' is required. Install with install.packages('FNN')."
+    )
+  }
+
+  if (!requireNamespace("Matrix", quietly = TRUE)) {
+    stop("Package 'Matrix' is required.")
+  }
+
+  stopifnot(
+    inherits(object, "Seurat"),
+    reduction %in% Reductions(object),
+    cluster_main_col %in% colnames(object@meta.data),
+    cluster_subtype_col %in% colnames(object@meta.data),
+    self_weight >= 0,
+    self_weight <= 1,
+    k >= 2
+  )
+
+  cells <- colnames(object)
+
+  # Ensure metadata and embedding are aligned to exactly the same cell order.
+  md <- object@meta.data[
+    cells,
+    ,
+    drop = FALSE
+  ]
+
+  embedding <- Embeddings(
+    object,
+    reduction = reduction
+  )
+
+  if (!all(cells %in% rownames(embedding))) {
+    stop("Not all Seurat cells are present in the requested reduction.")
+  }
+
+  if (max(dims) > ncol(embedding)) {
+    stop(
+      "Requested dims exceed the dimensions available in reduction '",
+      reduction,
+      "'."
+    )
+  }
+
+  embedding <- embedding[
+    cells,
+    dims,
+    drop = FALSE
+  ]
+
+
+  # ============================================================
+  # 1. INTERNAL HELPER FUNCTIONS
+  # ============================================================
+
+  # ------------------------------------------------------------
+  # Extract a matrix of metadata columns sharing a prefix.
+  #
+  # Example:
+  # RefAll_main_prediction.score.Macrophage
+  # becomes column name:
+  # Macrophage
+  # ------------------------------------------------------------
+
+  extract_metadata_matrix <- function(
+    metadata,
+    prefix,
+    exclude = character()
+  ) {
+
+    cols <- grep(
+      paste0("^", prefix),
+      colnames(metadata),
+      value = TRUE
+    )
+
+    cols <- setdiff(
+      cols,
+      exclude
+    )
+
+    if (!length(cols)) {
+      stop(
+        "No metadata columns found with prefix: ",
+        prefix
+      )
+    }
+
+    x <- as.matrix(
+      metadata[
+        ,
+        cols,
+        drop = FALSE
+      ]
+    )
+
+    storage.mode(x) <- "double"
+
+    colnames(x) <- sub(
+      paste0("^", prefix),
+      "",
+      colnames(x)
+    )
+
+    x
+  }
+
+
+  # ------------------------------------------------------------
+  # Calculate top / second-best class and margin.
+  #
+  # Works for:
+  #   Wang probabilities
+  #   Xenium marker scores
+  # ------------------------------------------------------------
+
+  get_top_prediction <- function(x) {
+
+    x2 <- x
+
+    x2[
+      !is.finite(x2)
+    ] <- -Inf
+
+    n <- nrow(x2)
+
+    best_idx <- max.col(
+      x2,
+      ties.method = "first"
+    )
+
+    best_score <- x2[
+      cbind(
+        seq_len(n),
+        best_idx
+      )
+    ]
+
+    best_label <- colnames(x2)[
+      best_idx
+    ]
+
+    if (ncol(x2) >= 2) {
+
+      x_second <- x2
+
+      x_second[
+        cbind(
+          seq_len(n),
+          best_idx
+        )
+      ] <- -Inf
+
+      second_idx <- max.col(
+        x_second,
+        ties.method = "first"
+      )
+
+      second_score <- x_second[
+        cbind(
+          seq_len(n),
+          second_idx
+        )
+      ]
+
+      second_label <- colnames(x2)[
+        second_idx
+      ]
+
+      margin <- best_score -
+        second_score
+
+    } else {
+
+      second_score <- rep(
+        NA_real_,
+        n
+      )
+
+      second_label <- rep(
+        NA_character_,
+        n
+      )
+
+      margin <- rep(
+        NA_real_,
+        n
+      )
+    }
+
+    list(
+      label = best_label,
+      score = best_score,
+      second = second_label,
+      second_score = second_score,
+      margin = margin
+    )
+  }
+
+
+  # ------------------------------------------------------------
+  # Restrict subtype classification to the selected broad lineage.
+  #
+  # Example:
+  # if broad lineage = Macrophage,
+  # only compare:
+  #
+  #   LYVE1_resident_Mac
+  #   TREM2_LAM
+  #   Inflammatory_Mac
+  #
+  # rather than allowing cDC2 / B / T etc. to compete.
+  #
+  # This hierarchical restriction is scientifically important.
+  # ------------------------------------------------------------
+
+  restricted_top_prediction <- function(
+    score_matrix,
+    broad_labels,
+    subtype_to_main
+  ) {
+
+    n <- nrow(score_matrix)
+
+    out <- list(
+      label = rep(NA_character_, n),
+      score = rep(NA_real_, n),
+      second = rep(NA_character_, n),
+      second_score = rep(NA_real_, n),
+      margin = rep(NA_real_, n)
+    )
+
+    for (main_type in unique(
+      broad_labels[
+        !is.na(broad_labels)
+      ]
+    )) {
+
+      candidate_subtypes <- names(
+        subtype_to_main
+      )[
+        subtype_to_main == main_type
+      ]
+
+      candidate_subtypes <- intersect(
+        candidate_subtypes,
+        colnames(score_matrix)
+      )
+
+      idx <- which(
+        broad_labels == main_type
+      )
+
+      if (
+        !length(idx) ||
+        !length(candidate_subtypes)
+      ) {
+        next
+      }
+
+      tmp <- get_top_prediction(
+        score_matrix[
+          idx,
+          candidate_subtypes,
+          drop = FALSE
+        ]
+      )
+
+      out$label[idx] <- tmp$label
+      out$score[idx] <- tmp$score
+      out$second[idx] <- tmp$second
+      out$second_score[idx] <- tmp$second_score
+      out$margin[idx] <- tmp$margin
+    }
+
+    out
+  }
+
+
+  # ------------------------------------------------------------
+  # Human-readable label formatting.
+  # ------------------------------------------------------------
+
+  display_main <- function(x) {
+
+    dplyr::recode(
+      x,
+      "T.cell" = "T cell",
+      "B.cell" = "B cell",
+      "Mast.cell" = "Mast cell",
+      .default = x
+    )
+  }
+
+
+  display_subtype <- function(x) {
+
+    dplyr::recode(
+      x,
+      "γδ.T" = "γδ T",
+      "T.cell" = "T cell",
+      "Mast.cell" = "Mast cell",
+      "MC" = "Mast cell",
+      .default = x
+    )
+  }
+
+
+  # ============================================================
+  # 2. BUILD TRANSCRIPTOMIC kNN
+  # ============================================================
+  #
+  # IMPORTANT:
+  # These are transcriptomic PCA neighbors, NOT spatial neighbors.
+  #
+  # Spatial proximity tells us which cells live next to one another.
+  # Transcriptomic proximity is more appropriate for cell identity.
+  # ============================================================
+
+  if (verbose) {
+    message(
+      "Building transcriptomic kNN: k = ",
+      k,
+      ", reduction = ",
+      reduction,
+      ", dims = ",
+      paste(range(dims), collapse = ":")
+    )
+  }
+
+  knn <- FNN::get.knn(
+    embedding,
+    k = k
+  )
+
+
+  # ============================================================
+  # 3. DISTANCE-WEIGHT THE kNN
+  # ============================================================
+  #
+  # Close neighbors contribute more than distant neighbors.
+  #
+  # A Gaussian kernel is calculated independently for each cell,
+  # with the median neighbor distance used as the local bandwidth.
+  # ============================================================
+
+  d <- knn$nn.dist
+
+  sigma <- apply(
+    d,
+    1,
+    median
+  )
+
+  sigma[
+    !is.finite(sigma) |
+      sigma <= 0
+  ] <- 1
+
+  weights <- exp(
+    -(d^2) /
+      (2 * sigma^2)
+  )
+
+  weights <- weights /
+    rowSums(weights)
+
+
+  # ------------------------------------------------------------
+  # Construct sparse cell x cell kNN weight matrix.
+  #
+  # This is much faster than looping over ~70,000 cells.
+  # ------------------------------------------------------------
+
+  n_cells <- nrow(embedding)
+
+  W <- Matrix::sparseMatrix(
+    i = rep(
+      seq_len(n_cells),
+      each = k
+    ),
+    j = as.vector(
+      t(knn$nn.index)
+    ),
+    x = as.vector(
+      t(weights)
+    ),
+    dims = c(
+      n_cells,
+      n_cells
+    )
+  )
+
+
+  # ------------------------------------------------------------
+  # Smooth continuous evidence:
+  #
+  # final evidence =
+  #     self_weight * own evidence
+  #   + (1-self_weight) * neighborhood evidence
+  #
+  # This is deliberately NOT pure kNN majority voting.
+  #
+  # Retaining substantial self-weight protects rare populations
+  # from being erased by abundant neighboring cell types.
+  # ------------------------------------------------------------
+
+  smooth_knn_matrix <- function(x) {
+
+    neighbour_signal <- as.matrix(
+      W %*% x
+    )
+
+    out <-
+      self_weight * x +
+      (1 - self_weight) *
+      neighbour_signal
+
+    rownames(out) <- cells
+
+    out
+  }
+
+
+  # ============================================================
+  # 4. WANG RefAll — BROAD CELL-TYPE PROBABILITIES
+  # ============================================================
+
+  wang_main_prefix <- paste0(
+    wang_prefix,
+    "_main_prediction.score."
+  )
+
+  wang_main_max_col <- paste0(
+    wang_prefix,
+    "_main_prediction.score.max"
+  )
+
+  wang_main_prob <- extract_metadata_matrix(
+    metadata = md,
+    prefix = wang_main_prefix,
+    exclude = wang_main_max_col
+  )
+
+  rownames(wang_main_prob) <- cells
+
+  wang_main_knn_prob <- smooth_knn_matrix(
+    wang_main_prob
+  )
+
+  wang_main_top <- get_top_prediction(
+    wang_main_knn_prob
+  )
+
+
+  # ============================================================
+  # 5. WANG IMMUNE PROBABILITY
+  # ============================================================
+  #
+  # Instead of:
+  #
+  #   Ptprc > 0 = immune
+  #
+  # sum all Wang probability mass assigned to immune lineages.
+  #
+  # Ptprc / Itgam remain independent validation variables.
+  # ============================================================
+
+  immune_main_raw <- c(
+    "Macrophage",
+    "Monocyte",
+    "Neutrophil",
+    "Mast.cell",
+    "Eosinophil",
+    "T.cell",
+    "NK",
+    "DC",
+    "B.cell",
+    "Plasma",
+    "ILC"
+  )
+
+  immune_prob_cols <- intersect(
+    immune_main_raw,
+    colnames(wang_main_knn_prob)
+  )
+
+  wang_immune_probability <- rowSums(
+    wang_main_knn_prob[
+      ,
+      immune_prob_cols,
+      drop = FALSE
+    ]
+  )
+
+
+  # ============================================================
+  # 6. WANG RefAll — SUBTYPE PROBABILITIES
+  # ============================================================
+
+  wang_subtype_prefix <- paste0(
+    wang_prefix,
+    "_subtype_prediction.score."
+  )
+
+  wang_subtype_max_col <- paste0(
+    wang_prefix,
+    "_subtype_prediction.score.max"
+  )
+
+  wang_subtype_prob <- extract_metadata_matrix(
+    metadata = md,
+    prefix = wang_subtype_prefix,
+    exclude = wang_subtype_max_col
+  )
+
+  rownames(wang_subtype_prob) <- cells
+
+  wang_subtype_knn_prob <- smooth_knn_matrix(
+    wang_subtype_prob
+  )
+
+  wang_subtype_top <- get_top_prediction(
+    wang_subtype_knn_prob
+  )
+
+
+  # ============================================================
+  # 7. XENIUM BROAD MARKER-SCORE VECTORS
+  # ============================================================
+
+  xenium_main_score <- extract_metadata_matrix(
+    metadata = md,
+    prefix = "MainScore_"
+  )
+
+  rownames(xenium_main_score) <- cells
+
+  xenium_main_knn_score <- smooth_knn_matrix(
+    xenium_main_score
+  )
+
+  xenium_main_top <- get_top_prediction(
+    xenium_main_knn_score
+  )
+
+
+  # ============================================================
+  # 8. XENIUM SUBTYPE MARKER-SCORE VECTORS
+  # ============================================================
+
+  xenium_subtype_score <- extract_metadata_matrix(
+    metadata = md,
+    prefix = "SubtypeScore_"
+  )
+
+  rownames(xenium_subtype_score) <- cells
+
+  xenium_subtype_knn_score <- smooth_knn_matrix(
+    xenium_subtype_score
+  )
+
+  xenium_subtype_top <- get_top_prediction(
+    xenium_subtype_knn_score
+  )
+
+
+  # ============================================================
+  # 9. DEFINE HIERARCHIES
+  # ============================================================
+  #
+  # Wang subtype -> Wang broad lineage
+  #
+  # These machine-safe names correspond to the columns generated
+  # by TransferData().
+  # ============================================================
+
+  wang_subtype_to_main <- c(
+
+    # Stromal
+    "ASC" = "Stromal_Fibroblast",
+    "APC" = "Stromal_Fibroblast",
+
+    # Vascular / structural
+    "Mural" = "Mural",
+    "Endothelial" = "Endothelial",
+    "Adipocyte" = "Adipocyte",
+    "Mesothelial" = "Mesothelial",
+    "Epithelial" = "Epithelial",
+
+    # Lymphoid
+    "T" = "T.cell",
+    "γδ.T" = "T.cell",
+    "NK" = "NK",
+    "ILC2" = "ILC",
+    "B" = "B.cell",
+    "Plasma" = "Plasma",
+
+    # Monocyte
+    "CCR2_inflammatory_Monocyte" = "Monocyte",
+    "CX3CR1_Monocyte" = "Monocyte",
+
+    # Macrophage
+    "Inflammatory_Mac" = "Macrophage",
+    "LYVE1_resident_Mac" = "Macrophage",
+    "TREM2_LAM" = "Macrophage",
+
+    # DC
+    "cDC1" = "DC",
+    "cDC2" = "DC",
+    "CCR7_migratory_DC" = "DC",
+
+    # Other immune
+    "Neutrophil" = "Neutrophil",
+    "Eosinophil" = "Eosinophil",
+    "Mast.cell" = "Mast.cell"
+  )
+
+
+  # ------------------------------------------------------------
+  # Xenium subtype -> Xenium broad lineage
+  # ------------------------------------------------------------
+
+  xenium_subtype_to_main <- c(
+
+    # EC
+    "Capillary_EC" = "Endothelial",
+    "Arterial_EC" = "Endothelial",
+    "Venous_EC" = "Endothelial",
+    "Lymphatic_EC" = "Endothelial",
+
+    # Adipocyte
+    "Adipocyte" = "Adipocyte",
+
+    # Stromal
+    "ASC" = "Stromal_Fibroblast",
+    "Fibroblast" = "Stromal_Fibroblast",
+
+    # Mural
+    "VSMC" = "Mural",
+    "Pericyte" = "Mural",
+
+    # Neural
+    "Schwann" = "Neural",
+
+    # Myeloid / immune
+    "LYVE_macrophage" = "Macrophage",
+    "Scavenging_macrophage" = "Macrophage",
+    "Monocyte" = "Monocyte",
+    "Neutrophil" = "Neutrophil",
+    "MC" = "Mast.cell",
+    "Eosinophil" = "Eosinophil",
+
+    # Lymphoid
+    "T.cell" = "T.cell",
+    "NK" = "NK",
+
+    # DC
+    "DC" = "DC",
+    "cDC" = "DC",
+
+    # Mesothelial
+    "Mesothelial" = "Mesothelial"
+  )
+
+
+  # ============================================================
+  # 10. INITIAL BROAD LINEAGE = WANG RefAll
+  # ============================================================
+  #
+  # Wang provides the cell-level scaffold.
+  #
+  # This is NOT yet the final subtype.
+  # ============================================================
+
+  final_main_raw <- wang_main_top$label
+
+  final_main_score <- wang_main_top$score
+  final_main_margin <- wang_main_top$margin
+
+  final_source <- rep(
+    "Wang_RefAll_broad",
+    n_cells
+  )
+
+  final_reason <- rep(
+    paste0(
+      "Broad lineage assigned from pooled Wang Science 2025 ",
+      "reference after conservative transcriptomic-kNN smoothing."
+    ),
+    n_cells
+  )
+
+
+  # ============================================================
+  # 11. ONTOLOGY-GAP RESCUE
+  # ============================================================
+  #
+  # Wang does NOT contain some biologically relevant populations.
+  #
+  # We should not interpret its nearest available class as evidence
+  # against a class that was absent from the reference.
+  #
+  # Require concordance between:
+  #
+  #   1. Xenium cluster-level marker annotation
+  #   2. cell/kNN Xenium broad score
+  #   3. cell/kNN Xenium subtype score
+  #
+  # This makes the override intentionally conservative.
+  # ============================================================
+
+  cluster_subtype <- as.character(
+    md[[cluster_subtype_col]]
+  )
+
+
+  # -----------------------------
+  # Schwann
+  # -----------------------------
+
+  schwann_support <-
+    cluster_subtype == "Schwann" &
+    xenium_main_top$label == "Neural" &
+    xenium_subtype_top$label == "Schwann" &
+    wang_immune_probability <
+      ontology_gap_max_immune_prob
+
+  final_main_raw[
+    schwann_support
+  ] <- "Neural"
+
+  final_main_score[
+    schwann_support
+  ] <- xenium_main_top$score[
+    schwann_support
+  ]
+
+  final_main_margin[
+    schwann_support
+  ] <- xenium_main_top$margin[
+    schwann_support
+  ]
+
+  final_source[
+    schwann_support
+  ] <- "Xenium_ontology_gap_Schwann"
+
+  final_reason[
+    schwann_support
+  ] <- paste0(
+    "Schwann is absent from the Wang ontology; ",
+    "Xenium cluster, broad-score neighborhood and subtype-score ",
+    "neighborhood independently support Schwann identity."
+  )
+
+
+  # -----------------------------
+  # Lymphatic endothelial cells
+  # -----------------------------
+  #
+  # Wang contains arterial/capillary-derived Endothelial but not
+  # an explicit lymphatic EC population. Lymphatic EC may therefore
+  # map to Endothelial, Mesothelial or stromal-like reference cells.
+  # -----------------------------
+
+  lymphatic_support <-
+    cluster_subtype == "Lymphatic_EC" &
+    xenium_main_top$label == "Endothelial" &
+    xenium_subtype_top$label == "Lymphatic_EC" &
+    wang_immune_probability <
+      ontology_gap_max_immune_prob
+
+  final_main_raw[
+    lymphatic_support
+  ] <- "Endothelial"
+
+  final_main_score[
+    lymphatic_support
+  ] <- xenium_main_top$score[
+    lymphatic_support
+  ]
+
+  final_main_margin[
+    lymphatic_support
+  ] <- xenium_main_top$margin[
+    lymphatic_support
+  ]
+
+  final_source[
+    lymphatic_support
+  ] <- "Xenium_ontology_gap_Lymphatic_EC"
+
+  final_reason[
+    lymphatic_support
+  ] <- paste0(
+    "Lymphatic EC is absent as an explicit Wang subtype; ",
+    "concordant Xenium cluster and neighborhood marker evidence ",
+    "supports endothelial/lymphatic identity."
+  )
+
+
+  # ============================================================
+  # 12. WANG SUBTYPE — RESTRICTED TO FINAL BROAD LINEAGE
+  # ============================================================
+  #
+  # Prevent biologically impossible combinations such as:
+  #
+  #   Main = Macrophage
+  #   Subtype = cDC2
+  #
+  # Only subtypes belonging to the selected broad lineage compete.
+  # ============================================================
+
+  wang_subtype_restricted <-
+    restricted_top_prediction(
+      score_matrix = wang_subtype_knn_prob,
+      broad_labels = final_main_raw,
+      subtype_to_main = wang_subtype_to_main
+    )
+
+
+  # ============================================================
+  # 13. XENIUM SUBTYPE — RESTRICTED TO FINAL BROAD LINEAGE
+  # ============================================================
+
+  xenium_subtype_restricted <-
+    restricted_top_prediction(
+      score_matrix = xenium_subtype_knn_score,
+      broad_labels = final_main_raw,
+      subtype_to_main = xenium_subtype_to_main
+    )
+
+
+  # ============================================================
+  # 14. FINAL SUBTYPE ARBITRATION
+  # ============================================================
+
+  final_subtype_raw <- rep(
+    NA_character_,
+    n_cells
+  )
+
+  final_subtype_score <- rep(
+    NA_real_,
+    n_cells
+  )
+
+  final_subtype_margin <- rep(
+    NA_real_,
+    n_cells
+  )
+
+
+  # ------------------------------------------------------------
+  # A. IMMUNE
+  #
+  # Wang is primary because it contains a substantially richer
+  # immune taxonomy than the targeted Xenium marker panel.
+  # ------------------------------------------------------------
+
+  immune_idx <- final_main_raw %in%
+    immune_main_raw
+
+  final_subtype_raw[
+    immune_idx
+  ] <- wang_subtype_restricted$label[
+    immune_idx
+  ]
+
+  final_subtype_score[
+    immune_idx
+  ] <- wang_subtype_restricted$score[
+    immune_idx
+  ]
+
+  final_subtype_margin[
+    immune_idx
+  ] <- wang_subtype_restricted$margin[
+    immune_idx
+  ]
+
+  final_source[
+    immune_idx
+  ] <- "Wang_RefAll_immune"
+
+  final_reason[
+    immune_idx
+  ] <- paste0(
+    "Immune broad lineage and subtype are reference-driven; ",
+    "Xenium marker scores and neighborhood evidence are retained ",
+    "as orthogonal validation rather than competing equally."
+  )
+
+
+  # ------------------------------------------------------------
+  # B. ENDOTHELIAL
+  #
+  # Wang establishes broad endothelial identity.
+  # Xenium resolves:
+  #
+  #   Capillary
+  #   Arterial (if present)
+  #   Venous
+  #   Lymphatic
+  # ------------------------------------------------------------
+
+  endothelial_idx <-
+    final_main_raw == "Endothelial"
+
+  final_subtype_raw[
+    endothelial_idx
+  ] <- xenium_subtype_restricted$label[
+    endothelial_idx
+  ]
+
+  final_subtype_score[
+    endothelial_idx
+  ] <- xenium_subtype_restricted$score[
+    endothelial_idx
+  ]
+
+  final_subtype_margin[
+    endothelial_idx
+  ] <- xenium_subtype_restricted$margin[
+    endothelial_idx
+  ]
+
+  # Do not overwrite explicit lymphatic ontology-gap provenance.
+  regular_endothelial <-
+    endothelial_idx &
+    !lymphatic_support
+
+  final_source[
+    regular_endothelial
+  ] <- "Wang_broad_Xenium_EC_subtype"
+
+  final_reason[
+    regular_endothelial
+  ] <- paste0(
+    "Wang determines broad endothelial identity; ",
+    "Xenium lineage-restricted marker scores resolve EC subtype."
+  )
+
+
+  # ------------------------------------------------------------
+  # C. MURAL
+  #
+  # Wang establishes Mural.
+  # Xenium compares only:
+  #
+  #   Pericyte
+  #   VSMC
+  #
+  # This is particularly important for mixed vascular clusters.
+  # ------------------------------------------------------------
+
+  mural_idx <-
+    final_main_raw == "Mural"
+
+  final_subtype_raw[
+    mural_idx
+  ] <- xenium_subtype_restricted$label[
+    mural_idx
+  ]
+
+  final_subtype_score[
+    mural_idx
+  ] <- xenium_subtype_restricted$score[
+    mural_idx
+  ]
+
+  final_subtype_margin[
+    mural_idx
+  ] <- xenium_subtype_restricted$margin[
+    mural_idx
+  ]
+
+  final_source[
+    mural_idx
+  ] <- "Wang_broad_Xenium_mural_subtype"
+
+  final_reason[
+    mural_idx
+  ] <- paste0(
+    "Wang determines broad mural identity; ",
+    "Xenium lineage-restricted scores resolve Pericyte versus VSMC."
+  )
+
+
+    # ============================================================
+    # D. STROMAL / FIBROBLAST
+    #
+    # Wang provides ASC vs APC.
+    # Xenium independently provides ASC vs Fibroblast.
+    #
+    # APC is retained as its own biological/reference subtype and
+    # is NOT automatically treated as synonymous with Fibroblast.
+    # ============================================================
+    
+    stromal_idx <-
+      final_main_raw == "Stromal_Fibroblast"
+    
+    
+    # Wang stromal subtype restricted to ASC/APC
+    wang_stromal <- wang_subtype_restricted$label
+    
+    
+    # Xenium stromal subtype restricted to ASC/Fibroblast
+    xenium_stromal <- xenium_subtype_restricted$label
+    
+    
+    # Start unresolved
+    final_subtype_raw[
+      stromal_idx
+    ] <- NA_character_
+    
+    
+    # ------------------------------------------------------------
+    # 1. ASC concordance
+    # ------------------------------------------------------------
+    
+    stromal_ASC <-
+      stromal_idx &
+      wang_stromal == "ASC" &
+      xenium_stromal == "ASC"
+    
+    final_subtype_raw[
+      stromal_ASC
+    ] <- "ASC"
+    
+    final_subtype_score[
+      stromal_ASC
+    ] <- wang_subtype_restricted$score[
+      stromal_ASC
+    ]
+    
+    final_subtype_margin[
+      stromal_ASC
+    ] <- wang_subtype_restricted$margin[
+      stromal_ASC
+    ]
+    
+    final_source[
+      stromal_ASC
+    ] <- "Wang_Xenium_stromal_consensus"
+    
+    final_reason[
+      stromal_ASC
+    ] <- paste0(
+      "Wang and Xenium independently support ASC identity."
+    )
+    
+    
+    # ------------------------------------------------------------
+    # 2. Wang APC + Xenium Fibroblast-like program
+    #
+    # This is biologically compatible, but APC is retained as the
+    # final subtype because Wang explicitly contains that category.
+    # Fibroblast-like Xenium expression is used as supporting evidence.
+    # ------------------------------------------------------------
+    
+    stromal_APC <-
+      stromal_idx &
+      wang_stromal == "APC" &
+      xenium_stromal == "Fibroblast"
+    
+    final_subtype_raw[
+      stromal_APC
+    ] <- "APC"
+    
+    final_subtype_score[
+      stromal_APC
+    ] <- wang_subtype_restricted$score[
+      stromal_APC
+    ]
+    
+    final_subtype_margin[
+      stromal_APC
+    ] <- wang_subtype_restricted$margin[
+      stromal_APC
+    ]
+    
+    final_source[
+      stromal_APC
+    ] <- "Wang_APC_Xenium_fibroblast_supported"
+    
+    final_reason[
+      stromal_APC
+    ] <- paste0(
+      "Wang supports APC while Xenium shows a fibroblast-like stromal ",
+      "program; APC is retained rather than equated with Fibroblast."
+    )
+    
+    
+    # ------------------------------------------------------------
+    # 3. Discordant stromal cells
+    #
+    # Wang APC vs Xenium ASC
+    # or
+    # Wang ASC vs Xenium Fibroblast
+    #
+    # Keep Wang subtype provisionally but flag for review.
+    # ------------------------------------------------------------
+    
+    stromal_discordant <-
+      stromal_idx &
+      !stromal_ASC &
+      !stromal_APC
+    
+    final_subtype_raw[
+      stromal_discordant
+    ] <- wang_stromal[
+      stromal_discordant
+    ]
+    
+    final_subtype_score[
+      stromal_discordant
+    ] <- wang_subtype_restricted$score[
+      stromal_discordant
+    ]
+    
+    final_subtype_margin[
+      stromal_discordant
+    ] <- wang_subtype_restricted$margin[
+      stromal_discordant
+    ]
+    
+    final_source[
+      stromal_discordant
+    ] <- "Stromal_Wang_Xenium_discordant"
+    
+    final_reason[
+      stromal_discordant
+    ] <- paste0(
+      "Wang ASC/APC prediction and Xenium ASC/Fibroblast marker ",
+      "program disagree; subtype retained provisionally and flagged ",
+      "for review."
+    )
+
+
+  # ------------------------------------------------------------
+  # E. ADIPOCYTE
+  # ------------------------------------------------------------
+
+  adipocyte_idx <-
+    final_main_raw == "Adipocyte"
+
+  final_subtype_raw[
+    adipocyte_idx
+  ] <- "Adipocyte"
+
+  final_source[
+    adipocyte_idx
+  ] <- "Wang_Xenium_Adipocyte"
+
+
+  # ------------------------------------------------------------
+  # F. NEURAL / SCHWANN
+  # ------------------------------------------------------------
+
+  neural_idx <-
+    final_main_raw == "Neural"
+
+  final_subtype_raw[
+    neural_idx
+  ] <- "Schwann"
+
+  final_subtype_score[
+    neural_idx
+  ] <- xenium_subtype_restricted$score[
+    neural_idx
+  ]
+
+  final_subtype_margin[
+    neural_idx
+  ] <- xenium_subtype_restricted$margin[
+    neural_idx
+  ]
+
+
+  # ------------------------------------------------------------
+  # G. MESOTHELIAL
+  # ------------------------------------------------------------
+
+  mesothelial_idx <-
+    final_main_raw == "Mesothelial"
+
+  final_subtype_raw[
+    mesothelial_idx
+  ] <- "Mesothelial"
+
+  final_source[
+    mesothelial_idx
+  ] <- "Wang_Xenium_Mesothelial"
+
+
+  # ------------------------------------------------------------
+  # H. EPITHELIAL
+  #
+  # No dedicated Xenium epithelial subtype scoring currently.
+  # Keep the Wang class.
+  # ------------------------------------------------------------
+
+  epithelial_idx <-
+    final_main_raw == "Epithelial"
+
+  final_subtype_raw[
+    epithelial_idx
+  ] <- "Epithelial"
+
+  final_source[
+    epithelial_idx
+  ] <- "Wang_RefAll_Epithelial"
+
+
+  # ============================================================
+  # 15. BROAD-LINEAGE AGREEMENT
+  # ============================================================
+
+  broad_agreement <-
+    final_main_raw ==
+    xenium_main_top$label
+
+
+  # ============================================================
+  # 16. REVIEW FLAGS
+  # ============================================================
+  #
+  # Review flags do NOT automatically invalidate a cell.
+  # They identify cells deserving closer inspection.
+  # ============================================================
+
+  review_flag <- rep(
+    FALSE,
+    n_cells
+  )
+
+
+  # Missing subtype
+  review_flag[
+    is.na(final_subtype_raw)
+  ] <- TRUE
+
+
+  # ------------------------------------------------------------
+  # Partial ontology-gap evidence.
+  #
+  # Example:
+  # cluster says Schwann but neighborhood does not.
+  # ------------------------------------------------------------
+
+  schwann_partial <-
+    (
+      cluster_subtype == "Schwann" |
+      xenium_subtype_top$label == "Schwann"
+    ) &
+    !schwann_support
+
+  lymphatic_partial <-
+    (
+      cluster_subtype == "Lymphatic_EC" |
+      xenium_subtype_top$label == "Lymphatic_EC"
+    ) &
+    !lymphatic_support
+
+  review_flag[
+    schwann_partial |
+      lymphatic_partial
+  ] <- TRUE
+
+
+    review_flag[
+      stromal_discordant
+    ] <- TRUE
+        
+  # ------------------------------------------------------------
+  # For nonimmune cells, disagreement between Wang broad lineage
+  # and Xenium broad marker evidence is worth reviewing.
+  #
+  # We deliberately do NOT impose this rule on immune cells,
+  # because B/T/NK/DC resolution is uneven in the targeted panel.
+  # ------------------------------------------------------------
+
+  nonimmune_idx <- !immune_idx
+
+  review_flag[
+    nonimmune_idx &
+      !broad_agreement
+  ] <- TRUE
+
+
+  # ------------------------------------------------------------
+  # Existing segmentation/QC flags
+  # ------------------------------------------------------------
+
+  if (
+    "segmentation_multiplet_flag" %in%
+    colnames(md)
+  ) {
+
+    review_flag[
+      md$segmentation_multiplet_flag %in%
+        TRUE
+    ] <- TRUE
+  }
+
+
+  if (
+    "do_not_interpret" %in%
+    colnames(md)
+  ) {
+
+    review_flag[
+      md$do_not_interpret %in%
+        TRUE
+    ] <- TRUE
+  }
+
+
+  # ============================================================
+  # 17. OPTIONAL SCORE/MARGIN REVIEW THRESHOLDS
+  # ============================================================
+  #
+  # These are intentionally optional.
+  #
+  # Do NOT choose thresholds just because they "look reasonable".
+  # Inspect score/margin distributions first.
+  # ============================================================
+
+  if (!is.null(wang_main_review_score)) {
+
+    review_flag[
+      wang_main_top$score <
+        wang_main_review_score
+    ] <- TRUE
+  }
+
+
+  if (!is.null(wang_main_review_margin)) {
+
+    review_flag[
+      wang_main_top$margin <
+        wang_main_review_margin
+    ] <- TRUE
+  }
+
+
+  if (!is.null(wang_subtype_review_margin)) {
+
+    review_flag[
+      immune_idx &
+        final_subtype_margin <
+        wang_subtype_review_margin
+    ] <- TRUE
+  }
+
+
+  if (!is.null(xenium_subtype_review_margin)) {
+
+    review_flag[
+      nonimmune_idx &
+        is.finite(final_subtype_margin) &
+        final_subtype_margin <
+        xenium_subtype_review_margin
+    ] <- TRUE
+  }
+
+
+  # ============================================================
+  # 18. QUALITATIVE CONFIDENCE
+  # ============================================================
+  #
+  # Continuous score and margin columns remain the primary
+  # quantitative evidence.
+  #
+  # These qualitative labels are deliberately conservative.
+  # ============================================================
+
+  confidence <- dplyr::case_when(
+
+    review_flag ~
+      "REVIEW",
+
+    schwann_support |
+      lymphatic_support ~
+      "ONTOLOGY_GAP_SUPPORTED",
+
+    broad_agreement ~
+      "HIGH_CONCORDANT",
+
+    immune_idx ~
+      "REFERENCE_PRIMARY",
+
+    TRUE ~
+      "HYBRID_SUPPORTED"
+  )
+
+
+  # ============================================================
+  # 19. WRITE EVIDENCE + FINAL LABELS INTO metadata
+  # ============================================================
+
+  # Wang kNN evidence
+  md$WangKNN_main <-
+    display_main(
+      wang_main_top$label
+    )
+
+  md$WangKNN_main_score <-
+    wang_main_top$score
+
+  md$WangKNN_main_second <-
+    display_main(
+      wang_main_top$second
+    )
+
+  md$WangKNN_main_margin <-
+    wang_main_top$margin
+
+  md$WangKNN_immune_probability <-
+    wang_immune_probability
+
+
+  md$WangKNN_subtype <-
+    display_subtype(
+      wang_subtype_top$label
+    )
+
+  md$WangKNN_subtype_score <-
+    wang_subtype_top$score
+
+  md$WangKNN_subtype_margin <-
+    wang_subtype_top$margin
+
+
+  # Xenium kNN evidence
+  md$XeniumKNN_main <-
+    display_main(
+      xenium_main_top$label
+    )
+
+  md$XeniumKNN_main_score <-
+    xenium_main_top$score
+
+  md$XeniumKNN_main_margin <-
+    xenium_main_top$margin
+
+
+  md$XeniumKNN_subtype <-
+    display_subtype(
+      xenium_subtype_top$label
+    )
+
+  md$XeniumKNN_subtype_score <-
+    xenium_subtype_top$score
+
+  md$XeniumKNN_subtype_margin <-
+    xenium_subtype_top$margin
+
+
+  # Ontology-gap information
+  md$Ontology_gap_support <- dplyr::case_when(
+
+    schwann_support ~
+      "Schwann",
+
+    lymphatic_support ~
+      "Lymphatic_EC",
+
+    TRUE ~
+      NA_character_
+  )
+
+
+  # Final annotation
+  md$Final_CellType_main <-
+    display_main(
+      final_main_raw
+    )
+
+  md$Final_CellType_subtype <-
+    display_subtype(
+      final_subtype_raw
+    )
+
+  md$Final_main_score <-
+    final_main_score
+
+  md$Final_main_margin <-
+    final_main_margin
+
+  md$Final_subtype_score <-
+    final_subtype_score
+
+  md$Final_subtype_margin <-
+    final_subtype_margin
+
+  md$Final_annotation_source <-
+    final_source
+
+  md$Final_annotation_confidence <-
+    confidence
+
+  md$Final_review_flag <-
+    review_flag
+
+  md$Final_annotation_reason <-
+    final_reason
+
+
+  # Restore metadata
+  object@meta.data <- md
+
+
+  # ============================================================
+  # 20. SUMMARY OUTPUT
+  # ============================================================
+
+  summary_table <- md %>%
+    tibble::rownames_to_column(
+      "cell"
+    ) %>%
+    dplyr::count(
+      Final_CellType_main,
+      Final_CellType_subtype,
+      Final_annotation_source,
+      Final_annotation_confidence,
+      Final_review_flag,
+      name = "n_cells"
+    ) %>%
+    dplyr::arrange(
+      Final_CellType_main,
+      dplyr::desc(n_cells)
+    )
+
+
+  if (verbose) {
+
+    message(
+      "Annotation complete."
+    )
+
+    message(
+      "Review cells: ",
+      sum(review_flag),
+      " / ",
+      n_cells,
+      " (",
+      round(
+        100 * mean(review_flag),
+        2
+      ),
+      "%)"
+    )
+
+    message(
+      "Schwann ontology-gap rescue: ",
+      sum(schwann_support)
+    )
+
+    message(
+      "Lymphatic EC ontology-gap rescue: ",
+      sum(lymphatic_support)
+    )
+  }
+
+
+  # ============================================================
+  # Return both annotated object and useful diagnostics
+  # ============================================================
+
+  list(
+    object = object,
+
+    summary = summary_table,
+
+    parameters = list(
+      reduction = reduction,
+      dims = dims,
+      k = k,
+      self_weight = self_weight,
+      wang_prefix = wang_prefix,
+      ontology_gap_max_immune_prob =
+        ontology_gap_max_immune_prob
+    )
+  )
+}
+
+refine_eosinophil_identity <- function(
+  object,
+
+  # ----------------------------------------------------------
+  # Seurat / kNN settings
+  # ----------------------------------------------------------
+  assay = "Xenium",
+  reduction = "pca",
+  dims = 1:12,
+  k = 15,
+  self_weight = 0.70,
+
+  # ----------------------------------------------------------
+  # Wang reference columns
+  # Uses pooled/all-age Wang reference only.
+  # ----------------------------------------------------------
+  wang_main_eos_col =
+    "RefAll_main_prediction.score.Eosinophil",
+
+  wang_subtype_eos_col =
+    "RefAll_subtype_prediction.score.Eosinophil",
+
+  wang_subtype_prefix =
+    "RefAll_subtype_prediction.score.",
+
+  # ----------------------------------------------------------
+  # Xenium Eos identity score
+  # ----------------------------------------------------------
+  xenium_eos_score_col =
+    "SubtypeScore_Eosinophil",
+
+  # ----------------------------------------------------------
+  # Direct Eos identity genes
+  #
+  # IMPORTANT:
+  # These should be identity genes only.
+  # Do NOT include short-lived / long-lived Eos state genes
+  # used later for biological state analysis.
+  # ----------------------------------------------------------
+  eos_core_genes = c(
+    "Siglecf",
+    "Ccr3",
+    "Il5ra",
+    "Prg2",
+    "Epx"
+  ),
+
+  eos_support_genes = c(
+    "Alox15",
+    "Ear1",
+    "Ear2",
+    "Ltc4s"
+  ),
+
+  # ----------------------------------------------------------
+  # Main competing Xenium populations
+  #
+  # These are populations most likely to generate a false Eos
+  # call in a targeted immune panel.
+  # ----------------------------------------------------------
+  competitor_score_cols = c(
+    "SubtypeScore_MC",
+    "SubtypeScore_Neutrophil",
+    "SubtypeScore_Monocyte",
+    "SubtypeScore_LYVE_macrophage",
+    "SubtypeScore_Scavenging_macrophage",
+    "SubtypeScore_DC",
+    "SubtypeScore_cDC",
+    "SubtypeScore_T.cell",
+    "SubtypeScore_NK"
+  ),
+
+  # ----------------------------------------------------------
+  # Starting thresholds for Eos confidence.
+  #
+  # These are deliberately configurable.
+  # They should later be checked against the distributions
+  # observed in the actual Xenium dataset.
+  # ----------------------------------------------------------
+
+  # Strong Wang Eos support
+  wang_high = 0.50,
+
+  # Some Wang Eos support
+  wang_support = 0.20,
+
+  # Minimum directly detected canonical Eos genes
+  # for a high-confidence molecular call
+  min_core_high = 2,
+
+  # Minimum direct Eos genes for a probable call
+  min_core_probable = 1,
+
+  # Minimum Xenium Eos advantage over closest competitor
+  # for a strongly specific Eos marker program.
+  xenium_margin_high = 0.20,
+
+  verbose = TRUE
+) {
+
+  # ==========================================================
+  # 0. CHECK INPUTS
+  # ==========================================================
+
+  if (!inherits(object, "Seurat")) {
+    stop("'object' must be a Seurat object.")
+  }
+
+  if (!requireNamespace("FNN", quietly = TRUE)) {
+    stop(
+      "Package 'FNN' is required. ",
+      "Install with install.packages('FNN')."
+    )
+  }
+
+  if (!requireNamespace("Matrix", quietly = TRUE)) {
+    stop("Package 'Matrix' is required.")
+  }
+
+  if (!reduction %in% Reductions(object)) {
+    stop(
+      "Reduction '",
+      reduction,
+      "' is not present in the object."
+    )
+  }
+
+  if (!assay %in% Assays(object)) {
+    stop(
+      "Assay '",
+      assay,
+      "' is not present in the object."
+    )
+  }
+
+  cells <- colnames(object)
+
+  md <- object@meta.data[
+    cells,
+    ,
+    drop = FALSE
+  ]
+
+
+  # ----------------------------------------------------------
+  # Check essential metadata columns.
+  # ----------------------------------------------------------
+
+  required_cols <- c(
+    wang_main_eos_col,
+    wang_subtype_eos_col,
+    xenium_eos_score_col
+  )
+
+  missing_required <- setdiff(
+    required_cols,
+    colnames(md)
+  )
+
+  if (length(missing_required) > 0) {
+    stop(
+      "Missing required metadata columns: ",
+      paste(
+        missing_required,
+        collapse = ", "
+      )
+    )
+  }
+
+
+  # ==========================================================
+  # 1. BUILD TRANSCRIPTOMIC kNN
+  # ==========================================================
+  #
+  # These are PCA-expression neighbors, NOT spatial neighbors.
+  #
+  # We use them as conservative molecular context:
+  #
+  #   70% = cell's own evidence
+  #   30% = transcriptionally similar neighbors
+  #
+  # This avoids replacing rare Eos cells by the local majority.
+  # ==========================================================
+
+  embedding <- Embeddings(
+    object,
+    reduction = reduction
+  )
+
+  embedding <- embedding[
+    cells,
+    ,
+    drop = FALSE
+  ]
+
+  if (max(dims) > ncol(embedding)) {
+    stop(
+      "Requested PCA dimensions exceed those available."
+    )
+  }
+
+  embedding <- embedding[
+    ,
+    dims,
+    drop = FALSE
+  ]
+
+  if (verbose) {
+    message(
+      "Building transcriptomic kNN: k = ",
+      k,
+      "; PCs = ",
+      paste(range(dims), collapse = ":")
+    )
+  }
+
+  knn <- FNN::get.knn(
+    embedding,
+    k = k
+  )
+
+
+  # ==========================================================
+  # 2. DISTANCE-WEIGHT THE NEIGHBORS
+  # ==========================================================
+  #
+  # Closer transcriptomic neighbors contribute more strongly.
+  # ==========================================================
+
+  d <- knn$nn.dist
+
+  sigma <- apply(
+    d,
+    1,
+    median
+  )
+
+  sigma[
+    !is.finite(sigma) |
+      sigma <= 0
+  ] <- 1
+
+  weights <- exp(
+    -(d^2) /
+      (2 * sigma^2)
+  )
+
+  weights <- weights /
+    rowSums(weights)
+
+
+  # Sparse neighbor-weight matrix.
+  W <- Matrix::sparseMatrix(
+    i = rep(
+      seq_len(nrow(embedding)),
+      each = k
+    ),
+    j = as.vector(
+      t(knn$nn.index)
+    ),
+    x = as.vector(
+      t(weights)
+    ),
+    dims = c(
+      nrow(embedding),
+      nrow(embedding)
+    )
+  )
+
+
+  # ----------------------------------------------------------
+  # Helper:
+  # smooth any continuous evidence matrix over kNN.
+  # ----------------------------------------------------------
+
+  smooth_knn <- function(x) {
+
+    if (is.vector(x)) {
+      x <- matrix(
+        x,
+        ncol = 1
+      )
+    }
+
+    neighbour_signal <-
+      as.matrix(
+        W %*% x
+      )
+
+    out <-
+      self_weight * x +
+      (1 - self_weight) *
+      neighbour_signal
+
+    rownames(out) <- cells
+
+    out
+  }
+
+
+  # ==========================================================
+  # 3. WANG EOSINOPHIL EVIDENCE
+  # ==========================================================
+  #
+  # Keep BOTH:
+  #
+  #   main Eosinophil probability
+  #   subtype Eosinophil probability
+  #
+  # We do not simply use:
+  #
+  #   predicted.id == "Eosinophil"
+  #
+  # because a winning probability of 0.30 is very different
+  # from a winning probability of 0.90.
+  # ==========================================================
+
+  wang_main_eos_raw <-
+    as.numeric(
+      md[[wang_main_eos_col]]
+    )
+
+  wang_subtype_eos_raw <-
+    as.numeric(
+      md[[wang_subtype_eos_col]]
+    )
+
+
+  wang_main_eos_knn <-
+    as.numeric(
+      smooth_knn(
+        wang_main_eos_raw
+      )[, 1]
+    )
+
+  wang_subtype_eos_knn <-
+    as.numeric(
+      smooth_knn(
+        wang_subtype_eos_raw
+      )[, 1]
+    )
+
+
+  # ==========================================================
+  # 4. DETERMINE WANG'S BEST IMMUNE SUBTYPE
+  # ==========================================================
+  #
+  # This tells us whether Eosinophil is actually the leading
+  # Wang immune identity rather than merely having some
+  # non-zero probability.
+  # ==========================================================
+
+  wang_subtype_cols <- grep(
+    paste0(
+      "^",
+      gsub(
+        "\\.",
+        "\\\\.",
+        wang_subtype_prefix
+      )
+    ),
+    colnames(md),
+    value = TRUE
+  )
+
+  wang_subtype_cols <- setdiff(
+    wang_subtype_cols,
+    paste0(
+      sub(
+        "\\.$",
+        "",
+        wang_subtype_prefix
+      ),
+      ".max"
+    )
+  )
+
+
+  # Restrict this comparison to immune populations.
+  wang_immune_subtypes <- c(
+    "CCR2_inflammatory_Monocyte",
+    "CX3CR1_Monocyte",
+    "Inflammatory_Mac",
+    "LYVE1_resident_Mac",
+    "TREM2_LAM",
+    "cDC1",
+    "cDC2",
+    "CCR7_migratory_DC",
+    "Neutrophil",
+    "Eosinophil",
+    "Mast.cell",
+    "T",
+    "γδ.T",
+    "NK",
+    "ILC2",
+    "B",
+    "Plasma"
+  )
+
+  wang_immune_cols <- paste0(
+    wang_subtype_prefix,
+    wang_immune_subtypes
+  )
+
+  wang_immune_cols <- intersect(
+    wang_immune_cols,
+    colnames(md)
+  )
+
+  wang_immune_matrix <- as.matrix(
+    md[
+      ,
+      wang_immune_cols,
+      drop = FALSE
+    ]
+  )
+
+  storage.mode(
+    wang_immune_matrix
+  ) <- "double"
+
+  colnames(
+    wang_immune_matrix
+  ) <- sub(
+    paste0(
+      "^",
+      gsub(
+        "\\.",
+        "\\\\.",
+        wang_subtype_prefix
+      )
+    ),
+    "",
+    colnames(
+      wang_immune_matrix
+    )
+  )
+
+  wang_immune_knn <-
+    smooth_knn(
+      wang_immune_matrix
+    )
+
+  wang_immune_best_idx <-
+    max.col(
+      wang_immune_knn,
+      ties.method = "first"
+    )
+
+  wang_immune_best <-
+    colnames(
+      wang_immune_knn
+    )[
+      wang_immune_best_idx
+    ]
+
+  wang_immune_best_score <-
+    wang_immune_knn[
+      cbind(
+        seq_len(nrow(wang_immune_knn)),
+        wang_immune_best_idx
+      )
+    ]
+
+  wang_eos_is_best <-
+    wang_immune_best ==
+      "Eosinophil"
+
+
+  # ==========================================================
+  # 5. XENIUM EOS SCORE
+  # ==========================================================
+  #
+  # Xenium Eos marker score is kept independent of Wang.
+  # ==========================================================
+
+  xenium_eos_raw <-
+    as.numeric(
+      md[[xenium_eos_score_col]]
+    )
+
+  xenium_eos_knn <-
+    as.numeric(
+      smooth_knn(
+        xenium_eos_raw
+      )[, 1]
+    )
+
+
+  # ==========================================================
+  # 6. XENIUM COMPETING IMMUNE PROGRAMS
+  # ==========================================================
+  #
+  # The important question is NOT simply:
+  #
+  #   "Is the Eos score positive?"
+  #
+  # but:
+  #
+  #   "Does the Eos program beat plausible competing
+  #    immune identities?"
+  #
+  # ==========================================================
+
+  competitor_score_cols_use <-
+    intersect(
+      competitor_score_cols,
+      colnames(md)
+    )
+
+  if (!length(competitor_score_cols_use)) {
+    stop(
+      "None of the requested competitor-score columns ",
+      "are present."
+    )
+  }
+
+  competitor_matrix <- as.matrix(
+    md[
+      ,
+      competitor_score_cols_use,
+      drop = FALSE
+    ]
+  )
+
+  storage.mode(
+    competitor_matrix
+  ) <- "double"
+
+  colnames(
+    competitor_matrix
+  ) <- sub(
+    "^SubtypeScore_",
+    "",
+    colnames(
+      competitor_matrix
+    )
+  )
+
+  competitor_knn <-
+    smooth_knn(
+      competitor_matrix
+    )
+
+  competitor_best_idx <-
+    max.col(
+      competitor_knn,
+      ties.method = "first"
+    )
+
+  eos_competitor <-
+    colnames(
+      competitor_knn
+    )[
+      competitor_best_idx
+    ]
+
+  eos_competitor_score <-
+    competitor_knn[
+      cbind(
+        seq_len(nrow(competitor_knn)),
+        competitor_best_idx
+      )
+    ]
+
+
+  # ----------------------------------------------------------
+  # Positive value:
+  # Eos marker program beats every tested competitor.
+  #
+  # Negative value:
+  # another immune program is stronger.
+  # ----------------------------------------------------------
+
+  eos_vs_competitor_margin <-
+    xenium_eos_knn -
+    eos_competitor_score
+
+  xenium_eos_is_best <-
+    eos_vs_competitor_margin > 0
+
+
+  # ==========================================================
+  # 7. DIRECT EOS IDENTITY-GENE DETECTION
+  # ==========================================================
+  #
+  # This is deliberately separate from module scores.
+  #
+  # It creates an easily interpretable variable such as:
+  #
+  #   3 / 5 core Eos genes detected.
+  #
+  # Raw counts are used because the biological question is
+  # simply whether a transcript was detected in that cell.
+  # ==========================================================
+
+  old_assay <- DefaultAssay(object)
+
+  DefaultAssay(object) <- assay
+
+  eos_core_use <- intersect(
+    eos_core_genes,
+    rownames(object[[assay]])
+  )
+
+  eos_support_use <- intersect(
+    eos_support_genes,
+    rownames(object[[assay]])
+  )
+
+
+  if (verbose) {
+
+    message(
+      "Core Eos identity genes available: ",
+      paste(
+        eos_core_use,
+        collapse = ", "
+      )
+    )
+
+    message(
+      "Support Eos identity genes available: ",
+      paste(
+        eos_support_use,
+        collapse = ", "
+      )
+    )
+  }
+
+
+  # Core genes
+  if (length(eos_core_use) > 0) {
+
+    core_expr <- FetchData(
+      object,
+      vars = eos_core_use,
+      layer = "counts"
+    )
+
+    core_expr <- core_expr[
+      cells,
+      ,
+      drop = FALSE
+    ]
+
+    eos_core_n_detected <-
+      rowSums(
+        core_expr > 0
+      )
+
+  } else {
+
+    eos_core_n_detected <-
+      rep(
+        0L,
+        length(cells)
+      )
+  }
+
+
+  # Support genes
+  if (length(eos_support_use) > 0) {
+
+    support_expr <- FetchData(
+      object,
+      vars = eos_support_use,
+      layer = "counts"
+    )
+
+    support_expr <- support_expr[
+      cells,
+      ,
+      drop = FALSE
+    ]
+
+    eos_support_n_detected <-
+      rowSums(
+        support_expr > 0
+      )
+
+  } else {
+
+    eos_support_n_detected <-
+      rep(
+        0L,
+        length(cells)
+      )
+  }
+
+
+  DefaultAssay(object) <- old_assay
+
+
+  # ==========================================================
+  # 8. DEFINE INDEPENDENT SUPPORT FLAGS
+  # ==========================================================
+  #
+  # Do NOT numerically average these scores together.
+  #
+  # Wang probabilities and Xenium z-score marker scores are
+  # different quantities on different scales.
+  #
+  # We instead combine them logically.
+  # ==========================================================
+
+
+  # Strong external-reference evidence
+  wang_high_support <-
+    wang_eos_is_best &
+    wang_subtype_eos_knn >=
+      wang_high
+
+
+  # Moderate external-reference evidence
+  wang_some_support <-
+    wang_subtype_eos_knn >=
+      wang_support
+
+
+  # Strong Xenium-specific evidence
+  xenium_high_support <-
+    xenium_eos_is_best &
+    eos_vs_competitor_margin >=
+      xenium_margin_high
+
+
+  # Any Xenium-specific support
+  xenium_some_support <-
+    xenium_eos_is_best
+
+
+  # Direct canonical transcript evidence
+  direct_high_support <-
+    eos_core_n_detected >=
+      min_core_high
+
+  direct_some_support <-
+    eos_core_n_detected >=
+      min_core_probable
+
+
+  # ==========================================================
+  # 9. EOSINOPHIL CONFIDENCE CLASSIFICATION
+  # ==========================================================
+  #
+  # The hierarchy is intentionally conservative because Eos
+  # identity drives the downstream biological conclusions.
+  #
+  # HIGH_CONFIDENCE_EOS:
+  #
+  #   external reference agrees
+  #   +
+  #   Xenium-specific Eos program wins
+  #   +
+  #   multiple canonical Eos genes detected
+  #
+  #
+  # PROBABLE_EOS:
+  #
+  #   strong evidence from two systems but one component is
+  #   weakened by expected targeted-panel dropout.
+  #
+  #
+  # AMBIGUOUS_EOS:
+  #
+  #   some Eos evidence exists, but independent evidence
+  #   disagrees or is insufficient.
+  #
+  #
+  # NON_EOS:
+  #
+  #   no compelling Eos evidence.
+  # ==========================================================
+
+  eos_call <- rep(
+    "NON_EOS",
+    length(cells)
+  )
+
+
+  # ----------------------------------------------------------
+  # HIGH-CONFIDENCE EOS
+  #
+  # Require concordance across:
+  #
+  #   1. Wang
+  #   2. Xenium marker program
+  #   3. direct identity-gene detection
+  # ----------------------------------------------------------
+
+  high_confidence <-
+    wang_high_support &
+    xenium_high_support &
+    direct_high_support
+
+  eos_call[
+    high_confidence
+  ] <- "HIGH_CONFIDENCE_EOS"
+
+
+  # ----------------------------------------------------------
+  # PROBABLE EOS
+  #
+  # Route A:
+  # Strong Wang + Eos marker program + >=1 core gene.
+  #
+  # This allows some transcript dropout.
+  # ----------------------------------------------------------
+
+  probable_A <-
+    !high_confidence &
+    wang_high_support &
+    xenium_some_support &
+    direct_some_support
+
+
+  # ----------------------------------------------------------
+  # Route B:
+  # Strong Xenium/direct molecular evidence,
+  # but Wang mapping is weaker.
+  #
+  # This avoids forcing external-reference false negatives.
+  # ----------------------------------------------------------
+
+  probable_B <-
+    !high_confidence &
+    xenium_high_support &
+    direct_high_support &
+    wang_some_support
+
+
+  probable <-
+    probable_A |
+    probable_B
+
+  eos_call[
+    probable
+  ] <- "PROBABLE_EOS"
+
+
+  # ----------------------------------------------------------
+  # AMBIGUOUS EOS CANDIDATE
+  #
+  # Any meaningful Eos signal that did not satisfy the
+  # concordant criteria above is retained for review rather
+  # than silently classified as non-Eos.
+  # ----------------------------------------------------------
+
+  ambiguous <-
+    !high_confidence &
+    !probable &
+    (
+      wang_eos_is_best |
+      xenium_eos_is_best |
+      direct_high_support
+    )
+
+  eos_call[
+    ambiguous
+  ] <- "AMBIGUOUS_EOS"
+
+
+  # ==========================================================
+  # 10. GENERATE HUMAN-READABLE REVIEW REASONS
+  # ==========================================================
+
+  eos_review_reason <- rep(
+    NA_character_,
+    length(cells)
+  )
+
+
+  eos_review_reason[
+    high_confidence
+  ] <- paste0(
+    "Concordant Wang reference, Xenium Eos marker program, ",
+    "and direct canonical Eos-gene detection."
+  )
+
+
+  eos_review_reason[
+    probable_A
+  ] <- paste0(
+    "Strong Wang and Xenium Eos evidence with limited direct ",
+    "canonical-gene detection, compatible with transcript dropout."
+  )
+
+
+  eos_review_reason[
+    probable_B
+  ] <- paste0(
+    "Strong Xenium marker and direct canonical-gene evidence; ",
+    "Wang Eos probability is supportive but weaker."
+  )
+
+
+  # More detailed ambiguous reasons
+
+  idx <- ambiguous &
+    wang_eos_is_best &
+    !xenium_eos_is_best
+
+  eos_review_reason[idx] <- paste0(
+    "Wang favors Eosinophil, but a competing Xenium immune ",
+    "marker program is stronger."
+  )
+
+
+  idx <- ambiguous &
+    !wang_eos_is_best &
+    xenium_eos_is_best
+
+  eos_review_reason[idx] <- paste0(
+    "Xenium favors Eosinophil, but Wang reference does not; ",
+    "requires review."
+  )
+
+
+  idx <- ambiguous &
+    direct_high_support &
+    !wang_eos_is_best &
+    !xenium_eos_is_best
+
+  eos_review_reason[idx] <- paste0(
+    "Multiple canonical Eos genes are detected, but neither ",
+    "Wang nor the Xenium score classifier selects Eosinophil."
+  )
+
+
+  # ==========================================================
+  # 11. ADD ALL EOS-SPECIFIC EVIDENCE TO METADATA
+  # ==========================================================
+
+  md$Eos_Wang_main_probability_raw <-
+    wang_main_eos_raw
+
+  md$Eos_Wang_main_probability_knn <-
+    wang_main_eos_knn
+
+  md$Eos_Wang_subtype_probability_raw <-
+    wang_subtype_eos_raw
+
+  md$Eos_Wang_subtype_probability_knn <-
+    wang_subtype_eos_knn
+
+  md$Eos_Wang_best_immune_subtype <-
+    wang_immune_best
+
+  md$Eos_Wang_best_immune_score <-
+    wang_immune_best_score
+
+  md$Eos_Wang_is_best <-
+    wang_eos_is_best
+
+
+  md$Eos_Xenium_score_raw <-
+    xenium_eos_raw
+
+  md$Eos_Xenium_score_knn <-
+    xenium_eos_knn
+
+  md$Eos_competitor <-
+    eos_competitor
+
+  md$Eos_competitor_score <-
+    eos_competitor_score
+
+  md$Eos_vs_competitor_margin <-
+    eos_vs_competitor_margin
+
+  md$Eos_Xenium_is_best <-
+    xenium_eos_is_best
+
+
+  md$Eos_core_n_detected <-
+    eos_core_n_detected
+
+  md$Eos_core_fraction_detected <-
+    if (length(eos_core_use) > 0) {
+      eos_core_n_detected /
+        length(eos_core_use)
+    } else {
+      NA_real_
+    }
+
+  md$Eos_support_n_detected <-
+    eos_support_n_detected
+
+
+  md$Eos_call <-
+    factor(
+      eos_call,
+      levels = c(
+        "HIGH_CONFIDENCE_EOS",
+        "PROBABLE_EOS",
+        "AMBIGUOUS_EOS",
+        "NON_EOS"
+      )
+    )
+
+  md$Eos_primary_include <-
+    eos_call ==
+      "HIGH_CONFIDENCE_EOS"
+
+  md$Eos_sensitivity_include <-
+    eos_call %in%
+      c(
+        "HIGH_CONFIDENCE_EOS",
+        "PROBABLE_EOS"
+      )
+
+  md$Eos_manual_review <-
+    eos_call ==
+      "AMBIGUOUS_EOS"
+
+  md$Eos_review_reason <-
+    eos_review_reason
+
+
+  object@meta.data <- md
+
+
+  # ==========================================================
+  # 12. SUMMARY TABLE
+  # ==========================================================
+
+  summary <- md %>%
+    tibble::rownames_to_column(
+      "cell"
+    ) %>%
+    dplyr::count(
+      Eos_call,
+      name = "n_cells"
+    ) %>%
+    dplyr::mutate(
+      fraction =
+        n_cells /
+        sum(n_cells)
+    )
+
+
+  # ==========================================================
+  # 13. COMPETITOR SUMMARY FOR EOS CANDIDATES
+  # ==========================================================
+
+  candidate_summary <- md %>%
+    tibble::rownames_to_column(
+      "cell"
+    ) %>%
+    dplyr::filter(
+      Eos_call !=
+        "NON_EOS"
+    ) %>%
+    dplyr::count(
+      Eos_call,
+      Eos_competitor,
+      name = "n_cells"
+    ) %>%
+    dplyr::group_by(
+      Eos_call
+    ) %>%
+    dplyr::mutate(
+      fraction =
+        n_cells /
+        sum(n_cells)
+    ) %>%
+    dplyr::ungroup()
+
+
+  if (verbose) {
+
+    message(
+      "Eosinophil refinement complete."
+    )
+
+    message(
+      "HIGH_CONFIDENCE_EOS: ",
+      sum(
+        eos_call ==
+          "HIGH_CONFIDENCE_EOS"
+      )
+    )
+
+    message(
+      "PROBABLE_EOS: ",
+      sum(
+        eos_call ==
+          "PROBABLE_EOS"
+      )
+    )
+
+    message(
+      "AMBIGUOUS_EOS: ",
+      sum(
+        eos_call ==
+          "AMBIGUOUS_EOS"
+      )
+    )
+
+    message(
+      "Core identity genes used: ",
+      paste(
+        eos_core_use,
+        collapse = ", "
+      )
+    )
+  }
+
+
+  # ==========================================================
+  # 14. RETURN
+  # ==========================================================
+
+  list(
+    object = object,
+
+    summary = summary,
+
+    candidate_summary =
+      candidate_summary,
+
+    genes = list(
+      core = eos_core_use,
+      support = eos_support_use
+    ),
+
+    parameters = list(
+      reduction = reduction,
+      dims = dims,
+      k = k,
+      self_weight = self_weight,
+      wang_high = wang_high,
+      wang_support = wang_support,
+      min_core_high = min_core_high,
+      min_core_probable =
+        min_core_probable,
+      xenium_margin_high =
+        xenium_margin_high
+    )
+  )
+}
+
+score_eosinophil_likeness <- function(
+
+  reference,
+  query,
+
+  # ==========================================================
+  # REFERENCE ANNOTATION
+  # ==========================================================
+
+  reference_group_col = "CellType_subtype",
+  eos_label = "Eosinophil",
+
+  # Retained for compatibility / possible future
+  # sample-wise validation.
+  reference_sample_col = NULL,
+
+
+  # ==========================================================
+  # ASSAYS
+  # ==========================================================
+
+  reference_assay = "RNA",
+  query_assay = "Xenium",
+
+
+  # ==========================================================
+  # TIER DEFINITIONS
+  # ==========================================================
+
+  # Tier 1:
+  # Siglecf + Ccr3
+  core_markers = c(
+    "Siglecf",
+    "Ccr3"
+  ),
+
+  # Tier 2:
+  # one core marker + Il5ra/Alox15
+  support_markers = c(
+    "Il5ra",
+    "Alox15"
+  ),
+
+  # Tier 3:
+  # one core marker + Itgam
+  tier3_marker = "Itgam",
+
+  # Additional markers contributing to Tier 4.
+  context_markers = c(
+    "Ear1",
+    "Ear2"
+  ),
+
+
+  # ==========================================================
+  # REFERENCE IMMUNE POPULATIONS
+  # ==========================================================
+
+  reference_immune_labels = c(
+    "Eosinophil",
+
+    "LYVE1_resident_Mac",
+    "Inflammatory_Mac",
+    "TREM2_LAM",
+
+    "CCR2_inflammatory_Monocyte",
+    "CX3CR1_Monocyte",
+
+    "Neutrophil",
+    "Mast cell",
+
+    "cDC1",
+    "cDC2",
+    "CCR7_migratory_DC",
+
+    "NK",
+    "T",
+    "γδ T",
+    "B",
+    "Plasma",
+    "ILC2"
+  ),
+
+
+  # ==========================================================
+  # QUERY IMMUNE DEFINITION
+  # ==========================================================
+
+  query_main_col = "Final_CellType_main",
+
+  query_immune_labels = c(
+    "Macrophage",
+    "Monocyte",
+    "Neutrophil",
+    "Mast cell",
+    "Eosinophil",
+    "T cell",
+    "NK",
+    "DC",
+    "B cell",
+    "Plasma",
+    "ILC"
+  ),
+
+
+  # ==========================================================
+  # WANG EVIDENCE
+  #
+  # Kept completely separate from Tier assignment.
+  # ==========================================================
+
+  wang_predicted_col =
+    "RefAll_subtype_predicted.id",
+
+  wang_eos_score_col =
+    "RefAll_subtype_prediction.score.Eosinophil",
+
+
+  # ==========================================================
+  # REFERENCE VALIDATION
+  # ==========================================================
+
+  min_core_eos_cells = 3,
+  min_core_eos_pct = 5,
+
+  min_pair_eos_cells = 3,
+  min_pair_eos_pct = 1,
+
+  min_competitor_cells = 20,
+
+  smoothing = 0.5,
+
+
+  # Nonimmune Tier-1 + Wang-Eos cells are surfaced
+  # for review, never automatically relabelled.
+  allow_nonimmune_rescue = TRUE,
+
+  verbose = TRUE
+) {
+
+
+  # ==========================================================
+  # 0. BASIC CHECKS
+  # ==========================================================
+
+  if (!inherits(reference, "Seurat")) {
+    stop("'reference' must be a Seurat object.")
+  }
+
+  if (!inherits(query, "Seurat")) {
+    stop("'query' must be a Seurat object.")
+  }
+
+  if (!reference_assay %in% Assays(reference)) {
+    stop(
+      "Reference assay '",
+      reference_assay,
+      "' was not found."
+    )
+  }
+
+  if (!query_assay %in% Assays(query)) {
+    stop(
+      "Query assay '",
+      query_assay,
+      "' was not found."
+    )
+  }
+
+  if (length(core_markers) != 2) {
+    stop(
+      "Tier 1 requires exactly two core markers."
+    )
+  }
+
+  if (length(tier3_marker) != 1) {
+    stop(
+      "'tier3_marker' must contain exactly one marker."
+    )
+  }
+
+
+  # ==========================================================
+  # 1. ALIGN METADATA
+  # ==========================================================
+
+  ref_cells <- colnames(reference)
+  query_cells <- colnames(query)
+
+  ref_md <- reference@meta.data[
+    ref_cells,
+    ,
+    drop = FALSE
+  ]
+
+  query_md <- query@meta.data[
+    query_cells,
+    ,
+    drop = FALSE
+  ]
+
+  if (!reference_group_col %in% colnames(ref_md)) {
+    stop(
+      "Reference metadata column '",
+      reference_group_col,
+      "' was not found."
+    )
+  }
+
+  if (!query_main_col %in% colnames(query_md)) {
+    stop(
+      "Query metadata column '",
+      query_main_col,
+      "' was not found."
+    )
+  }
+
+  if (
+    !is.null(reference_sample_col) &&
+    !reference_sample_col %in% colnames(ref_md)
+  ) {
+    stop(
+      "Reference sample column '",
+      reference_sample_col,
+      "' was not found."
+    )
+  }
+
+
+  # ==========================================================
+  # 2. MARKERS
+  # ==========================================================
+
+  core_markers <- unique(core_markers)
+  support_markers <- unique(support_markers)
+  context_markers <- unique(context_markers)
+
+  all_requested_markers <- unique(
+    c(
+      core_markers,
+      support_markers,
+      tier3_marker,
+      context_markers
+    )
+  )
+
+  ref_features <- rownames(
+    reference[[reference_assay]]
+  )
+
+  query_features <- rownames(
+    query[[query_assay]]
+  )
+
+  all_markers_use <- all_requested_markers[
+    all_requested_markers %in% ref_features &
+      all_requested_markers %in% query_features
+  ]
+
+  missing_markers <- setdiff(
+    all_requested_markers,
+    all_markers_use
+  )
+
+
+  # These are required because they explicitly define
+  # Tier 1-3.
+  required_tier_markers <- unique(
+    c(
+      core_markers,
+      support_markers,
+      tier3_marker
+    )
+  )
+
+  missing_required <- setdiff(
+    required_tier_markers,
+    all_markers_use
+  )
+
+  if (length(missing_required) > 0) {
+    stop(
+      "Markers required for Tier 1-3 are missing: ",
+      paste(
+        missing_required,
+        collapse = ", "
+      )
+    )
+  }
+
+
+  core_markers_use <- core_markers
+  support_markers_use <- support_markers
+
+  context_markers_use <- intersect(
+    context_markers,
+    all_markers_use
+  )
+
+
+  if (verbose) {
+
+    message(
+      "Tier 1 core markers: ",
+      paste(
+        core_markers_use,
+        collapse = ", "
+      )
+    )
+
+    message(
+      "Tier 2 support markers: ",
+      paste(
+        support_markers_use,
+        collapse = ", "
+      )
+    )
+
+    message(
+      "Tier 3 marker: ",
+      tier3_marker
+    )
+
+    message(
+      "Tier 4 additional markers: ",
+      ifelse(
+        length(context_markers_use) > 0,
+        paste(
+          context_markers_use,
+          collapse = ", "
+        ),
+        "None"
+      )
+    )
+
+    if (length(missing_markers) > 0) {
+      message(
+        "Unavailable optional markers: ",
+        paste(
+          missing_markers,
+          collapse = ", "
+        )
+      )
+    }
+  }
+
+
+  # ==========================================================
+  # 3. RAW COUNTS -> DETECTION
+  #
+  # Cross-platform rule:
+  #
+  # count > 0
+  # ==========================================================
+
+  old_ref_assay <- DefaultAssay(reference)
+  old_query_assay <- DefaultAssay(query)
+
+  DefaultAssay(reference) <- reference_assay
+  DefaultAssay(query) <- query_assay
+
+  ref_counts <- FetchData(
+    reference,
+    vars = all_markers_use,
+    layer = "counts"
+  )
+
+  query_counts <- FetchData(
+    query,
+    vars = all_markers_use,
+    layer = "counts"
+  )
+
+  DefaultAssay(reference) <- old_ref_assay
+  DefaultAssay(query) <- old_query_assay
+
+
+  ref_counts <- ref_counts[
+    ref_cells,
+    all_markers_use,
+    drop = FALSE
+  ]
+
+  query_counts <- query_counts[
+    query_cells,
+    all_markers_use,
+    drop = FALSE
+  ]
+
+
+  ref_binary <- as.matrix(
+    ref_counts > 0
+  )
+
+  query_binary <- as.matrix(
+    query_counts > 0
+  )
+
+
+  # ==========================================================
+  # 4. REFERENCE IMMUNE CELLS
+  # ==========================================================
+
+  ref_celltype <- as.character(
+    ref_md[[reference_group_col]]
+  )
+
+  ref_is_immune <- ref_celltype %in%
+    reference_immune_labels
+
+  ref_is_eos <- ref_celltype ==
+    eos_label
+
+  keep_ref <- (
+    ref_is_immune &
+      !is.na(ref_celltype)
+  )
+
+  ref_binary_immune <- ref_binary[
+    keep_ref,
+    ,
+    drop = FALSE
+  ]
+
+  ref_celltype_immune <- ref_celltype[
+    keep_ref
+  ]
+
+  ref_is_eos_immune <- ref_is_eos[
+    keep_ref
+  ]
+
+  n_ref_eos <- sum(
+    ref_is_eos_immune
+  )
+
+  n_ref_other <- sum(
+    !ref_is_eos_immune
+  )
+
+  if (n_ref_eos == 0) {
+    stop(
+      "No reference Eosinophils remain after immune filtering."
+    )
+  }
+
+  if (n_ref_other == 0) {
+    stop(
+      "No non-Eosinophil immune reference cells remain."
+    )
+  }
+
+
+  # ==========================================================
+  # 5. COMPETING REFERENCE CELL TYPES
+  # ==========================================================
+
+  get_competing_types <- function(
+    celltype,
+    eos_status
+  ) {
+
+    competitor_table <- table(
+      celltype[
+        !eos_status &
+          !is.na(celltype)
+      ]
+    )
+
+    competing_types <- names(
+      competitor_table[
+        competitor_table >= min_competitor_cells
+      ]
+    )
+
+    if (length(competing_types) == 0) {
+      competing_types <- names(
+        competitor_table
+      )
+    }
+
+    competing_types
+  }
+
+
+  # ==========================================================
+  # 6. REFERENCE SIGNAL STATISTICS
+  # ==========================================================
+
+  summarize_signal <- function(
+    signal,
+    eos_status,
+    celltype
+  ) {
+
+    eos_signal <- signal[
+      eos_status
+    ]
+
+    eos_n <- length(
+      eos_signal
+    )
+
+    eos_positive <- sum(
+      eos_signal,
+      na.rm = TRUE
+    )
+
+    eos_pct <- 100 *
+      eos_positive /
+      eos_n
+
+
+    competing_types <- get_competing_types(
+      celltype,
+      eos_status
+    )
+
+
+    competitor_stats <- lapply(
+      competing_types,
+      function(ct) {
+
+        idx <- (
+          !eos_status &
+            celltype == ct
+        )
+
+        n_ct <- sum(
+          idx
+        )
+
+        positive_ct <- sum(
+          signal[idx],
+          na.rm = TRUE
+        )
+
+        pct_ct <- 100 *
+          positive_ct /
+          n_ct
+
+        p_ct <- (
+          positive_ct +
+            smoothing
+        ) / (
+          n_ct +
+            2 * smoothing
+        )
+
+        data.frame(
+          CellType = ct,
+          n = n_ct,
+          positive = positive_ct,
+          pct = pct_ct,
+          p_smoothed = p_ct,
+          stringsAsFactors = FALSE
+        )
+      }
+    )
+
+    competitor_stats <- do.call(
+      rbind,
+      competitor_stats
+    )
+
+
+    other_macro_pct <- mean(
+      competitor_stats$pct,
+      na.rm = TRUE
+    )
+
+    p_other_macro <- mean(
+      competitor_stats$p_smoothed,
+      na.rm = TRUE
+    )
+
+    worst_idx <- which.max(
+      competitor_stats$p_smoothed
+    )
+
+    max_other_pct <-
+      competitor_stats$pct[
+        worst_idx
+      ]
+
+    max_other_celltype <-
+      competitor_stats$CellType[
+        worst_idx
+      ]
+
+
+    p_eos <- (
+      eos_positive +
+        smoothing
+    ) / (
+      eos_n +
+        2 * smoothing
+    )
+
+
+    eps <- 1e-8
+
+    p_eos <- pmin(
+      pmax(p_eos, eps),
+      1 - eps
+    )
+
+    p_other_macro <- pmin(
+      pmax(p_other_macro, eps),
+      1 - eps
+    )
+
+
+    log2_or_macro <- log2(
+      (
+        p_eos /
+          (1 - p_eos)
+      ) /
+        (
+          p_other_macro /
+            (1 - p_other_macro)
+        )
+    )
+
+
+    list(
+      n_Eos = eos_n,
+      Eos_positive = eos_positive,
+      Eos_pct = eos_pct,
+      Other_macro_pct = other_macro_pct,
+      Max_other_pct = max_other_pct,
+      Max_other_celltype = max_other_celltype,
+      log2_detection_OR_macro = log2_or_macro
+    )
+  }
+
+
+  # ==========================================================
+  # 7. INDIVIDUAL MARKER STATISTICS
+  # ==========================================================
+
+  marker_stats <- do.call(
+    rbind,
+    lapply(
+      all_markers_use,
+      function(g) {
+
+        stats <- summarize_signal(
+          ref_binary_immune[, g],
+          ref_is_eos_immune,
+          ref_celltype_immune
+        )
+
+        marker_role <- dplyr::case_when(
+          g %in% core_markers_use ~
+            "Tier1_core",
+
+          g %in% support_markers_use ~
+            "Tier2_support",
+
+          g == tier3_marker ~
+            "Tier3_support",
+
+          TRUE ~
+            "Tier4_context"
+        )
+
+        data.frame(
+          Gene = g,
+          Marker_role = marker_role,
+
+          n_Eos =
+            stats$n_Eos,
+
+          Eos_positive =
+            stats$Eos_positive,
+
+          Eos_pct =
+            stats$Eos_pct,
+
+          Other_macro_pct =
+            stats$Other_macro_pct,
+
+          Max_other_pct =
+            stats$Max_other_pct,
+
+          Max_other_celltype =
+            stats$Max_other_celltype,
+
+          log2_detection_OR_macro =
+            stats$log2_detection_OR_macro,
+
+          stringsAsFactors = FALSE
+        )
+      }
+    )
+  )
+
+
+  # ==========================================================
+  # 8. CORE MARKER VALIDATION
+  # ==========================================================
+
+  marker_stats$core_anchor_valid <- (
+    marker_stats$Marker_role ==
+      "Tier1_core" &
+      marker_stats$Eos_positive >=
+      min_core_eos_cells &
+      marker_stats$Eos_pct >=
+      min_core_eos_pct &
+      marker_stats$log2_detection_OR_macro >
+      0 &
+      marker_stats$Eos_pct >
+      marker_stats$Max_other_pct
+  )
+
+
+  core_stats <- marker_stats[
+    marker_stats$Marker_role ==
+      "Tier1_core",
+    ,
+    drop = FALSE
+  ]
+
+
+  if (!all(core_stats$core_anchor_valid)) {
+    warning(
+      "One or more Tier-1 core markers do not satisfy ",
+      "the requested reference-specificity criteria. ",
+      "Tier calls will still be generated, but inspect marker_stats."
+    )
+  }
+
+
+  # ==========================================================
+  # 9. CORE SCORE
+  #
+  # Diagnostic / ranking only.
+  #
+  # It does NOT determine the Tier.
+  # ==========================================================
+
+  core_specificity <- pmax(
+    core_stats$log2_detection_OR_macro,
+    0
+  )
+
+  if (sum(core_specificity) > 0) {
+
+    core_weights <- core_specificity /
+      sum(core_specificity)
+
+  } else {
+
+    core_weights <- rep(
+      1 / length(core_markers_use),
+      length(core_markers_use)
+    )
+  }
+
+  names(core_weights) <- core_stats$Gene
+
+
+  marker_stats$core_weight <- 0
+
+  marker_stats$core_weight[
+    match(
+      names(core_weights),
+      marker_stats$Gene
+    )
+  ] <- core_weights
+
+
+  # ==========================================================
+  # 10. DIAGNOSTIC PAIR STATISTICS
+  #
+  # IMPORTANT:
+  #
+  # These statistics NO LONGER determine Tier membership.
+  #
+  # They only tell us how the fixed Tier2 / Tier3
+  # combinations perform in the reference.
+  # ==========================================================
+
+  tier2_grid <- expand.grid(
+    Core_marker = core_markers_use,
+    Partner_marker = support_markers_use,
+    Tier_rule = "Tier2",
+    stringsAsFactors = FALSE
+  )
+
+  tier3_grid <- data.frame(
+    Core_marker = core_markers_use,
+    Partner_marker = tier3_marker,
+    Tier_rule = "Tier3",
+    stringsAsFactors = FALSE
+  )
+
+  pair_grid <- rbind(
+    tier2_grid,
+    tier3_grid
+  )
+
+
+  pair_stats <- do.call(
+    rbind,
+    lapply(
+      seq_len(nrow(pair_grid)),
+      function(i) {
+
+        core_gene <-
+          pair_grid$Core_marker[i]
+
+        partner_gene <-
+          pair_grid$Partner_marker[i]
+
+
+        signal <- (
+          ref_binary_immune[, core_gene] &
+            ref_binary_immune[, partner_gene]
+        )
+
+
+        stats <- summarize_signal(
+          signal,
+          ref_is_eos_immune,
+          ref_celltype_immune
+        )
+
+
+        reference_supported <- (
+          stats$Eos_positive >=
+            min_pair_eos_cells &
+            stats$Eos_pct >=
+            min_pair_eos_pct &
+            stats$log2_detection_OR_macro >
+            0 &
+            stats$Eos_pct >
+            stats$Max_other_pct
+        )
+
+
+        data.frame(
+          Tier_rule =
+            pair_grid$Tier_rule[i],
+
+          Core_marker =
+            core_gene,
+
+          Partner_marker =
+            partner_gene,
+
+          Pair =
+            paste0(
+              core_gene,
+              " + ",
+              partner_gene
+            ),
+
+          n_Eos =
+            stats$n_Eos,
+
+          Eos_positive =
+            stats$Eos_positive,
+
+          Eos_pct =
+            stats$Eos_pct,
+
+          Other_macro_pct =
+            stats$Other_macro_pct,
+
+          Max_other_pct =
+            stats$Max_other_pct,
+
+          Max_other_celltype =
+            stats$Max_other_celltype,
+
+          log2_detection_OR_macro =
+            stats$log2_detection_OR_macro,
+
+          reference_supported =
+            reference_supported,
+
+          stringsAsFactors = FALSE
+        )
+      }
+    )
+  )
+
+
+  # ==========================================================
+  # 11. FIXED HIERARCHICAL TIER RULE
+  # ==========================================================
+
+  apply_tier_rule <- function(
+    binary_matrix
+  ) {
+
+    n_cells <- nrow(
+      binary_matrix
+    )
+
+
+    # --------------------------------------------------------
+    # Marker detection components
+    # --------------------------------------------------------
+
+    core_binary <- binary_matrix[
+      ,
+      core_markers_use,
+      drop = FALSE
+    ]
+
+
+    n_core_detected <- rowSums(
+      core_binary
+    )
+
+
+    any_core <- (
+      n_core_detected >= 1
+    )
+
+
+    both_core <- (
+      n_core_detected == 2
+    )
+
+
+    n_tier2_detected <- rowSums(
+      binary_matrix[
+        ,
+        support_markers_use,
+        drop = FALSE
+      ]
+    )
+
+
+    any_tier2_support <- (
+      n_tier2_detected >= 1
+    )
+
+
+    tier3_detected <- as.logical(
+      binary_matrix[
+        ,
+        tier3_marker
+      ]
+    )
+
+
+    n_all_markers <- rowSums(
+      binary_matrix[
+        ,
+        all_markers_use,
+        drop = FALSE
+      ]
+    )
+
+
+    # --------------------------------------------------------
+    # TIER 1
+    #
+    # Siglecf + Ccr3
+    # --------------------------------------------------------
+
+    tier1 <- both_core
+
+
+    # --------------------------------------------------------
+    # TIER 2
+    #
+    # one core
+    # +
+    # Il5ra and/or Alox15
+    #
+    # Tier1 always takes precedence.
+    # --------------------------------------------------------
+
+    tier2 <- (
+      !tier1 &
+        any_core &
+        any_tier2_support
+    )
+
+
+    # --------------------------------------------------------
+    # TIER 3
+    #
+    # one core
+    # +
+    # Itgam
+    #
+    # Tier1 and Tier2 take precedence.
+    # --------------------------------------------------------
+
+    tier3 <- (
+      !tier1 &
+        !tier2 &
+        any_core &
+        tier3_detected
+    )
+
+
+    # --------------------------------------------------------
+    # TIER 4
+    #
+    # Any remaining >=2-marker combination.
+    # --------------------------------------------------------
+
+    tier4 <- (
+      !tier1 &
+        !tier2 &
+        !tier3 &
+        n_all_markers >= 2
+    )
+
+
+    # --------------------------------------------------------
+    # FINAL MUTUALLY EXCLUSIVE TIER
+    # --------------------------------------------------------
+
+    tier <- dplyr::case_when(
+
+      tier1 ~
+        "Conf Tier1",
+
+      tier2 ~
+        "Conf Tier2",
+
+      tier3 ~
+        "Conf Tier3",
+
+      tier4 ~
+        "Conf Tier4",
+
+      TRUE ~
+        "Rest"
+    )
+
+
+    tier_reason <- dplyr::case_when(
+
+      tier1 ~
+        "Siglecf + Ccr3",
+
+      tier2 ~
+        "Core + Il5ra/Alox15",
+
+      tier3 ~
+        "Core + Itgam",
+
+      tier4 ~
+        "Other >=2-marker combination",
+
+      TRUE ~
+        "No qualifying >=2-marker combination"
+    )
+
+
+    # --------------------------------------------------------
+    # Exact detected-marker combination
+    # --------------------------------------------------------
+
+    marker_combination <- apply(
+      binary_matrix[
+        ,
+        all_markers_use,
+        drop = FALSE
+      ],
+      1,
+      function(x) {
+
+        genes <- all_markers_use[
+          as.logical(x)
+        ]
+
+        if (length(genes) == 0) {
+
+          "None"
+
+        } else {
+
+          paste(
+            genes,
+            collapse = " + "
+          )
+        }
+      }
+    )
+
+
+    core_pattern <- apply(
+      core_binary,
+      1,
+      function(x) {
+
+        genes <- core_markers_use[
+          as.logical(x)
+        ]
+
+        if (length(genes) == 0) {
+
+          "None"
+
+        } else {
+
+          paste(
+            genes,
+            collapse = " + "
+          )
+        }
+      }
+    )
+
+
+    data.frame(
+
+      EosRef_tier =
+        tier,
+
+      EosRef_tier_reason =
+        tier_reason,
+
+      EosRef_n_core_detected =
+        n_core_detected,
+
+      EosRef_core_pattern =
+        core_pattern,
+
+      EosRef_n_tier2_support_detected =
+        n_tier2_detected,
+
+      EosRef_tier3_marker_detected =
+        tier3_detected,
+
+      EosRef_n_all_markers_detected =
+        n_all_markers,
+
+      EosRef_marker_combination =
+        marker_combination,
+
+      stringsAsFactors = FALSE
+    )
+  }
+
+
+  # ==========================================================
+  # 12. APPLY TIER RULE TO REFERENCE
+  # ==========================================================
+
+  reference_rule_all <- apply_tier_rule(
+    ref_binary
+  )
+
+
+  reference_rule_immune <- reference_rule_all[
+    keep_ref,
+    ,
+    drop = FALSE
+  ]
+
+
+  # ==========================================================
+  # 13. REFERENCE RULE PERFORMANCE
+  #
+  # CUMULATIVE logic:
+  #
+  # Tier1
+  # Tier1 + Tier2
+  # Tier1 + Tier2 + Tier3
+  # Tier1 + Tier2 + Tier3 + Tier4
+  # ==========================================================
+
+  evaluate_rule <- function(
+    predicted,
+    eos_status,
+    celltype
+  ) {
+
+    sensitivity <- mean(
+      predicted[eos_status]
+    )
+
+    pooled_fpr <- mean(
+      predicted[!eos_status]
+    )
+
+
+    competing_types <- get_competing_types(
+      celltype,
+      eos_status
+    )
+
+
+    lineage_fpr <- sapply(
+      competing_types,
+      function(ct) {
+
+        idx <- (
+          !eos_status &
+            celltype == ct
+        )
+
+        mean(
+          predicted[idx]
+        )
+      }
+    )
+
+
+    macro_fpr <- mean(
+      lineage_fpr
+    )
+
+    max_fpr <- max(
+      lineage_fpr
+    )
+
+    worst_lineage <- names(
+      lineage_fpr
+    )[
+      which.max(
+        lineage_fpr
+      )
+    ]
+
+
+    data.frame(
+
+      sensitivity =
+        sensitivity,
+
+      pooled_false_positive_rate =
+        pooled_fpr,
+
+      macro_false_positive_rate =
+        macro_fpr,
+
+      macro_specificity =
+        1 - macro_fpr,
+
+      max_lineage_false_positive_rate =
+        max_fpr,
+
+      worst_false_positive_lineage =
+        worst_lineage,
+
+      stringsAsFactors = FALSE
+    )
+  }
+
+
+  reference_tier <- reference_rule_immune$EosRef_tier
+
+
+  cumulative_rules <- list(
+
+    "TIER1_ONLY" =
+      reference_tier ==
+      "Conf Tier1",
+
+    "TIER1_TO_TIER2" =
+      reference_tier %in%
+      c(
+        "Conf Tier1",
+        "Conf Tier2"
+      ),
+
+    "TIER1_TO_TIER3" =
+      reference_tier %in%
+      c(
+        "Conf Tier1",
+        "Conf Tier2",
+        "Conf Tier3"
+      ),
+
+    "TIER1_TO_TIER4" =
+      reference_tier %in%
+      c(
+        "Conf Tier1",
+        "Conf Tier2",
+        "Conf Tier3",
+        "Conf Tier4"
+      )
+  )
+
+
+  reference_rule_performance <- do.call(
+    rbind,
+    lapply(
+      names(cumulative_rules),
+      function(rule_name) {
+
+        cbind(
+
+          data.frame(
+            Rule = rule_name,
+            calibration_method =
+              "FIXED_HIERARCHICAL_TIER_RULE",
+            stringsAsFactors = FALSE
+          ),
+
+          evaluate_rule(
+            cumulative_rules[[rule_name]],
+            ref_is_eos_immune,
+            ref_celltype_immune
+          )
+        )
+      }
+    )
+  )
+
+
+  # ==========================================================
+  # 14. REFERENCE TIER DISTRIBUTION
+  #
+  # Useful directly for your stacked barplot.
+  # ==========================================================
+
+  reference_tier_distribution <- data.frame(
+
+    CellType =
+      ref_celltype,
+
+    EosRef_tier =
+      reference_rule_all$EosRef_tier,
+
+    stringsAsFactors = FALSE
+  ) %>%
+
+    dplyr::count(
+      CellType,
+      EosRef_tier,
+      name = "n"
+    ) %>%
+
+    dplyr::group_by(
+      CellType
+    ) %>%
+
+    dplyr::mutate(
+
+      n_total =
+        sum(n),
+
+      fraction =
+        n / n_total
+    ) %>%
+
+    dplyr::ungroup()
+
+
+  # ==========================================================
+  # 15. APPLY TIERS TO QUERY
+  # ==========================================================
+
+  query_rule <- apply_tier_rule(
+    query_binary
+  )
+
+
+  query_is_immune <- as.character(
+    query_md[[query_main_col]]
+  ) %in%
+    query_immune_labels
+
+
+  # ==========================================================
+  # 16. FINAL IMMUNE-GATED EOS CALL
+  #
+  # Molecular Tier is retained for EVERY CELL.
+  #
+  # EosRef_call is immune-gated.
+  # ==========================================================
+
+  tier_to_call <- c(
+
+    "Conf Tier1" =
+      "REF_EOS_TIER1",
+
+    "Conf Tier2" =
+      "REF_EOS_TIER2",
+
+    "Conf Tier3" =
+      "REF_EOS_TIER3",
+
+    "Conf Tier4" =
+      "REF_EOS_TIER4",
+
+    "Rest" =
+      "REF_EOS_REST"
+  )
+
+
+  eos_call <- rep(
+    "OUTSIDE_IMMUNE",
+    length(query_cells)
+  )
+
+
+  eos_call[
+    query_is_immune
+  ] <- unname(
+    tier_to_call[
+      query_rule$EosRef_tier[
+        query_is_immune
+      ]
+    ]
+  )
+
+
+  # ==========================================================
+  # 17. WANG EOS EVIDENCE
+  # ==========================================================
+
+  wang_predicted_eos <- rep(
+    NA,
+    length(query_cells)
+  )
+
+  wang_eos_score <- rep(
+    NA_real_,
+    length(query_cells)
+  )
+
+
+  if (
+    wang_predicted_col %in%
+    colnames(query_md)
+  ) {
+
+    wang_predicted_eos <- (
+      as.character(
+        query_md[[wang_predicted_col]]
+      ) ==
+        eos_label
+    )
+  }
+
+
+  if (
+    wang_eos_score_col %in%
+    colnames(query_md)
+  ) {
+
+    wang_eos_score <- as.numeric(
+      query_md[[wang_eos_score_col]]
+    )
+  }
+
+
+  # ==========================================================
+  # 18. NONIMMUNE REVIEW RESCUE
+  #
+  # Only:
+  #
+  # Tier1
+  # +
+  # Wang predicts Eosinophil
+  #
+  # Never automatically relabel.
+  # ==========================================================
+
+  if (
+    allow_nonimmune_rescue &&
+      any(
+        !is.na(
+          wang_predicted_eos
+        )
+      )
+  ) {
+
+    rescue <- (
+      !query_is_immune &
+        query_rule$EosRef_tier ==
+        "Conf Tier1" &
+        wang_predicted_eos %in% TRUE
+    )
+
+    eos_call[
+      rescue
+    ] <-
+      "REVIEW_NONIMMUNE_EOS_RESCUE"
+  }
+
+
+  # ==========================================================
+  # 19. CORE SCORE
+  #
+  # Diagnostic ranking only.
+  # ==========================================================
+
+  query_core_score <- as.numeric(
+
+    query_binary[
+      ,
+      names(core_weights),
+      drop = FALSE
+    ] %*%
+      core_weights
+  )
+
+
+  ref_core_score <- as.numeric(
+
+    ref_binary[
+      ,
+      names(core_weights),
+      drop = FALSE
+    ] %*%
+      core_weights
+  )
+
+
+  # ==========================================================
+  # 20. RANK QUERY IMMUNE CELLS
+  # ==========================================================
+
+  rank_priority <- c(
+
+    "REF_EOS_TIER1" = 1,
+
+    "REF_EOS_TIER2" = 2,
+
+    "REF_EOS_TIER3" = 3,
+
+    "REF_EOS_TIER4" = 4,
+
+    "REF_EOS_REST" = 5
+  )
+
+
+  eos_rank <- rep(
+    NA_integer_,
+    length(query_cells)
+  )
+
+
+  immune_idx <- which(
+    query_is_immune
+  )
+
+
+  if (length(immune_idx) > 0) {
+
+    priority_value <- unname(
+      rank_priority[
+        eos_call[
+          immune_idx
+        ]
+      ]
+    )
+
+
+    rank_order <- order(
+
+      priority_value,
+
+      -query_core_score[
+        immune_idx
+      ],
+
+      -query_rule$EosRef_n_all_markers_detected[
+        immune_idx
+      ]
+    )
+
+
+    eos_rank[
+      immune_idx[
+        rank_order
+      ]
+    ] <- seq_along(
+      rank_order
+    )
+  }
+
+
+  # ==========================================================
+  # 21. QUERY METADATA
+  # ==========================================================
+
+  new_md <- data.frame(
+
+    row.names =
+      query_cells,
+
+
+    EosRef_is_immune =
+      query_is_immune,
+
+
+    # Molecular Tier assigned regardless of broad annotation.
+    EosRef_tier =
+      query_rule$EosRef_tier,
+
+
+    EosRef_tier_reason =
+      query_rule$EosRef_tier_reason,
+
+
+    # Immune-gated final call.
+    EosRef_call =
+      eos_call,
+
+
+    EosRef_core_score =
+      query_core_score,
+
+
+    EosRef_rank =
+      eos_rank,
+
+
+    EosRef_n_core_detected =
+      query_rule$EosRef_n_core_detected,
+
+
+    EosRef_core_pattern =
+      query_rule$EosRef_core_pattern,
+
+
+    EosRef_n_tier2_support_detected =
+      query_rule$EosRef_n_tier2_support_detected,
+
+
+    EosRef_tier3_marker_detected =
+      query_rule$EosRef_tier3_marker_detected,
+
+
+    EosRef_n_all_markers_detected =
+      query_rule$EosRef_n_all_markers_detected,
+
+
+    EosRef_marker_combination =
+      query_rule$EosRef_marker_combination,
+
+
+    EosRef_Wang_predicted_Eos =
+      wang_predicted_eos,
+
+
+    EosRef_Wang_Eos_score =
+      wang_eos_score,
+
+
+    stringsAsFactors = FALSE
+  )
+
+
+  # ==========================================================
+  # 22. PER-GENE DETECTION FLAGS
+  # ==========================================================
+
+  for (g in all_markers_use) {
+
+    new_md[[
+      paste0(
+        "EosRef_detect_",
+        g
+      )
+    ]] <- query_binary[
+      ,
+      g
+    ]
+  }
+
+
+  # ==========================================================
+  # 23. ADD TO SEURAT OBJECT
+  # ==========================================================
+
+  query <- AddMetaData(
+    query,
+    metadata = new_md
+  )
+
+
+  # ==========================================================
+  # 24. REFERENCE CELL TABLE
+  # ==========================================================
+
+  reference_score_table <- data.frame(
+
+    cell =
+      ref_cells,
+
+    CellType =
+      ref_celltype,
+
+    IsEosinophil =
+      ref_is_eos,
+
+    IsImmuneReference =
+      ref_is_immune,
+
+    EosRef_tier =
+      reference_rule_all$EosRef_tier,
+
+    EosRef_tier_reason =
+      reference_rule_all$EosRef_tier_reason,
+
+    EosRef_core_score =
+      ref_core_score,
+
+    EosRef_n_all_markers_detected =
+      reference_rule_all$EosRef_n_all_markers_detected,
+
+    EosRef_marker_combination =
+      reference_rule_all$EosRef_marker_combination,
+
+    stringsAsFactors = FALSE
+  )
+
+
+  # ==========================================================
+  # 25. QUERY CANDIDATE TABLE
+  # ==========================================================
+
+  candidate_table <- cbind(
+
+    data.frame(
+
+      cell =
+        query_cells,
+
+      Final_CellType_main =
+        as.character(
+          query_md[[query_main_col]]
+        ),
+
+      stringsAsFactors = FALSE
+    ),
+
+    new_md
+  )
+
+
+  candidate_table <- candidate_table[
+    order(
+      candidate_table$EosRef_rank,
+      na.last = TRUE
+    ),
+    ,
+    drop = FALSE
+  ]
+
+
+  # ==========================================================
+  # 26. QUERY SUMMARY
+  # ==========================================================
+
+  summary_table <- as.data.frame(
+
+    table(
+      new_md$EosRef_call,
+      useNA = "ifany"
+    ),
+
+    stringsAsFactors = FALSE
+  )
+
+  colnames(
+    summary_table
+  ) <- c(
+    "EosRef_call",
+    "n_cells"
+  )
+
+
+  summary_table$fraction <-
+    summary_table$n_cells /
+    sum(summary_table$n_cells)
+
+
+  tier_summary <- as.data.frame(
+
+    table(
+      new_md$EosRef_tier,
+      useNA = "ifany"
+    ),
+
+    stringsAsFactors = FALSE
+  )
+
+  colnames(
+    tier_summary
+  ) <- c(
+    "EosRef_tier",
+    "n_cells"
+  )
+
+
+  tier_summary$fraction <-
+    tier_summary$n_cells /
+    sum(tier_summary$n_cells)
+
+
+  # ==========================================================
+  # 27. VERBOSE REPORT
+  # ==========================================================
+
+  if (verbose) {
+
+    message(
+      "Reference Eosinophils: ",
+      n_ref_eos
+    )
+
+    message(
+      "Reference other immune cells: ",
+      n_ref_other
+    )
+
+    message(
+      "Tier hierarchy:"
+    )
+
+    message(
+      "  Tier1 = Siglecf + Ccr3"
+    )
+
+    message(
+      "  Tier2 = core + Il5ra/Alox15"
+    )
+
+    message(
+      "  Tier3 = core + Itgam"
+    )
+
+    message(
+      "  Tier4 = any remaining >=2-marker combination"
+    )
+
+    message(
+      "  Rest  = all remaining cells"
+    )
+
+    message(
+      "Core weights (ranking only): ",
+      paste(
+        paste0(
+          names(core_weights),
+          "=",
+          round(
+            core_weights,
+            3
+          )
+        ),
+        collapse = "; "
+      )
+    )
+
+    message(
+      "Tier assignment complete."
+    )
+  }
+
+
+  # ==========================================================
+  # 28. RETURN
+  # ==========================================================
+
+  list(
+
+    object =
+      query,
+
+
+    marker_stats =
+      marker_stats,
+
+
+    # Tier2/Tier3 combinations evaluated in reference.
+    # Diagnostic only; they do not determine Tier assignment.
+    pair_stats =
+      pair_stats,
+
+
+    # Cumulative sensitivity / FPR:
+    # T1, T1-2, T1-3, T1-4.
+    rule_performance =
+      reference_rule_performance,
+
+
+    calibration =
+      reference_rule_performance,
+
+
+    # All reference cells.
+    reference_scores =
+      reference_score_table,
+
+
+    # Ready for stacked-bar plotting.
+    reference_tier_distribution =
+      reference_tier_distribution,
+
+
+    candidate_table =
+      candidate_table,
+
+
+    summary =
+      summary_table,
+
+
+    tier_summary =
+      tier_summary,
+
+
+    parameters = list(
+
+      core_markers =
+        core_markers_use,
+
+      tier2_support_markers =
+        support_markers_use,
+
+      tier3_marker =
+        tier3_marker,
+
+      tier4_context_markers =
+        context_markers_use,
+
+      all_markers =
+        all_markers_use,
+
+      reference_group_col =
+        reference_group_col,
+
+      reference_sample_col =
+        reference_sample_col,
+
+      tier_rule =
+        "FIXED_HIERARCHICAL",
+
+      min_competitor_cells =
+        min_competitor_cells
+    )
+  )
+}
+
+plot_eos_with_celltypes <- function(
+  object,
+  celltypes,
+  subtype_col = "Final_CellType_subtype_refined",
+  eos_label = "Eosinophil",
+  fov = "fov",
+
+  # Colours
+  eos_col = "#E89A8F",
+  other_cols = NULL,
+  background_col = "#D9D9D9",
+
+  # Point sizes
+  background_size = 0.10,
+  other_size = 0.65,
+  eos_size = 1.00,
+
+  background_alpha = 0.6,
+  highlight_alpha = 0.95,
+
+  flip_xy = FALSE
+) {
+
+  stopifnot(
+    inherits(object, "Seurat"),
+    subtype_col %in% colnames(object@meta.data),
+    fov %in% names(object@images)
+  )
+
+  celltypes <- unique(as.character(celltypes))
+
+  # Don't duplicate Eosinophil if accidentally supplied
+  celltypes <- setdiff(
+    celltypes,
+    eos_label
+  )
+
+  # ----------------------------------------------------------
+  # 1. Get centroid coordinates
+  # ----------------------------------------------------------
+
+  coords <- Seurat::GetTissueCoordinates(
+    object[[fov]],
+    which = "centroids"
+  ) |>
+    as.data.frame()
+
+  # Usually rownames are cell IDs
+  if (!"cell" %in% colnames(coords)) {
+    coords$cell <- rownames(coords)
+  }
+
+  # ----------------------------------------------------------
+  # 2. Match annotations
+  # ----------------------------------------------------------
+
+  md <- object@meta.data
+
+  coords$celltype <- as.character(
+    md[
+      match(
+        coords$cell,
+        rownames(md)
+      ),
+      subtype_col
+    ]
+  )
+
+  if (anyNA(coords$celltype)) {
+    warning(
+      sum(is.na(coords$celltype)),
+      " centroid(s) could not be matched to ",
+      subtype_col
+    )
+  }
+
+  # ----------------------------------------------------------
+  # 3. Define display groups
+  # ----------------------------------------------------------
+
+  coords$plot_group <- dplyr::case_when(
+    coords$celltype == eos_label ~ eos_label,
+    coords$celltype %in% celltypes ~ coords$celltype,
+    TRUE ~ "Other"
+  )
+
+  # ----------------------------------------------------------
+  # 4. Default comparison colours
+  # ----------------------------------------------------------
+
+  default_cols <- c(
+    "#7E9AD9",
+    "#BFDCC8",
+    "#B9B3D7",
+    "#F4D6A0",
+    "#9FC5C6",
+    "#C8B6A6",
+    "#A9BEDC",
+    "#D6B5CF"
+  )
+
+  if (is.null(other_cols)) {
+
+    if (length(celltypes) > length(default_cols)) {
+      stop(
+        "More comparison cell types requested than default colours. ",
+        "Please supply named 'other_cols'."
+      )
+    }
+
+    other_cols <- default_cols[
+      seq_along(celltypes)
+    ]
+
+    names(other_cols) <- celltypes
+
+  } else {
+
+    # If unnamed colours supplied, assign in celltypes order
+    if (is.null(names(other_cols))) {
+
+      if (length(other_cols) < length(celltypes)) {
+        stop(
+          "'other_cols' must contain at least one colour ",
+          "for each requested cell type."
+        )
+      }
+
+      other_cols <- other_cols[
+        seq_along(celltypes)
+      ]
+
+      names(other_cols) <- celltypes
+    }
+  }
+
+  # ----------------------------------------------------------
+  # 5. Base ImageDimPlot
+  # ----------------------------------------------------------
+
+  display_cols <- c(
+    "Other" = background_col,
+    other_cols,
+    setNames(eos_col, eos_label)
+  )
+
+  object$.__Eos_overlay_group__ <- coords$plot_group[
+    match(
+      colnames(object),
+      coords$cell
+    )
+  ]
+
+  p <- Seurat::ImageDimPlot(
+    object,
+    fov = fov,
+    group.by = ".__Eos_overlay_group__",
+    cols = display_cols,
+    size = background_size,
+    border.color = NA,
+    dark.background = FALSE,
+    flip_xy = flip_xy
+  )
+
+  # ----------------------------------------------------------
+  # 6. Overlay comparison populations with larger points
+  # ----------------------------------------------------------
+
+  for (ct in celltypes) {
+
+    tmp <- coords |>
+      dplyr::filter(
+        plot_group == ct
+      )
+
+    p <- p +
+      ggplot2::geom_point(
+        data = tmp,
+        ggplot2::aes(
+          x = x,
+          y = y
+        ),
+        inherit.aes = FALSE,
+        colour = other_cols[[ct]],
+        size = other_size,
+        alpha = highlight_alpha
+      )
+  }
+
+  # ----------------------------------------------------------
+  # 7. Overlay Eos last so they remain visible
+  # ----------------------------------------------------------
+
+  eos_df <- coords |>
+    dplyr::filter(
+      plot_group == eos_label
+    )
+
+  p <- p +
+    ggplot2::geom_point(
+      data = eos_df,
+      ggplot2::aes(
+        x = x,
+        y = y
+      ),
+      inherit.aes = FALSE,
+      colour = eos_col,
+      size = eos_size,
+      alpha = highlight_alpha
+    )
+
+  p
 }
