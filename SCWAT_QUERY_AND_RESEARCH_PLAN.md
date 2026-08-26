@@ -181,3 +181,15 @@
 - Merged it into `codex/notebook-qc-pipeline` as merge commit `686feac`.
 - Re-ran the complete verification suite from the merged target checkout; every gate passed.
 - Pushed `codex/notebook-qc-pipeline` to the configured GitHub repository.
+
+### 2026-08-27 — Colon-parity initial-QC notebook refactor
+
+- User requested that the four scWAT `01_QC` notebooks and `02_slide_QC_summary.ipynb` use exactly the same concise reader flow as the Colon pipeline, with only scWAT paths, inputs, metadata, and four-region logic changed.
+- Replaced the four previously executed 133-cell region notebooks with four output-free, region-locked 12-cell notebooks and replaced the 80-cell summary with an output-free 10-cell summary.
+- Added a four-region scWAT bundle API with roxygen-style purpose, parameter, return, path-safety, sparse-alignment, and reload contracts.
+- Kept initial technical readiness separate from later Region 3 anchor admission and Region 4 mapping-only decisions.
+- A call-graph audit retained 51 actively reachable functions in `R/source.R` and moved 57 newly obsolete extended/evidence-only initial-QC functions to `R/source_bk.R`; previously archived downstream reference functions remain preserved there.
+- Added roxygen-style documentation to every active named function and to the `%||%` helper.
+- TDD red gates confirmed the previous 133/80-cell notebooks and missing scWAT bundle API; focused R and notebook contracts subsequently passed.
+- Local D:-only Region 1 smoke execution passed. A complete bounded run of Regions 1-4 (500 cells each) plus the slide summary also passed and wrote test outputs under `adipose_analysis/scwat_qc_outputs/local_colon_parity_all`.
+- Full-data execution is still required on HPC before using the initial-QC readiness results for downstream admission decisions.

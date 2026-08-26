@@ -6,8 +6,8 @@ This repository contains the reusable scWAT Xenium QC code. Run one parameterize
 
 - `R/source.R`: documented functions used by current notebooks, their transitive dependencies, and active test/support entry points.
 - `R/source_bk.R`: archival functions with no active notebook, test, or support-script consumer; QC notebooks do not source this file.
-- `notebooks/01_QC_Region1.ipynb` through `01_QC_Region4.ipynb`: committed, parameter-locked notebooks to run and review one section at a time.
-- `notebooks/02_slide_QC_summary.ipynb`: the sole slide-level QC summary/report, with final decision tables and Cell-inspired figures inline.
+- `notebooks/01_QC_Region1.ipynb` through `01_QC_Region4.ipynb`: four output-free, region-locked notebooks with the same 12-cell initial-QC flow as the Colon pipeline, adapted only for scWAT inputs and four regions.
+- `notebooks/02_slide_QC_summary.ipynb`: the matching 10-cell slide-level initial-QC summary for two sections from each of two mice; it does not redefine cell masks or perform Region 3 anchor admission.
 - `config/fixed_cell_qc_thresholds.tsv`: versioned exclusive primary-cell bounds (`5 < nFeature_Xenium < 200`, `10 < nCount_Xenium < 1000`).
 - `config/eos_gene_sets.tsv`: 100 unique expected genes: 7 common, 47 short-lived, and 46 long-lived.
 - `tests/test_source.R`: reusable-function tests.
@@ -180,7 +180,7 @@ The metadata-aware subset rerun reproduces 500 cells per section and 2,000 total
 
 The applied study design is: sections 62308 and 62309 are from Mouse 1; sections 62310 and 62311 are from Mouse 2. All samples are untreated WT scWAT from normal 8-week-old mice. Left/right is not a design factor. Section is the technical processing unit and mouse is the biological replicate.
 
-The current reader-facing QC report is `notebooks/02_slide_QC_summary.ipynb`. It reports direct alarm evidence, clearly labelled candidate-gene evidence, spatial and within-mouse diagnostics, section decisions, and the exact full-HPC/10x evidence still required.
+The current reader-facing initial-QC report is `notebooks/02_slide_QC_summary.ipynb`. It combines four validated section bundles, fixed-bound cell QC, review flags, technical readiness, and descriptive within-mouse summaries. Region 3 anchoring, conditional admission of Regions 1-2, Region 4 mapping, gene-tier analysis, and Eosinophil analysis remain separate downstream stages.
 
 ### Local validation evidence (2026-08-14)
 
