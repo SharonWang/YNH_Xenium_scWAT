@@ -4,10 +4,11 @@ This repository contains the reusable scWAT Xenium QC code. Run one parameterize
 
 ## Files
 
-- `R/source.R`: general Xenium path, metadata, integrity, panel, sparse-import, QC, aggregation, artifact, and plotting functions.
-- `notebooks/01_section_phase0_2_QC.ipynb`: reusable combined Phase 0-2 source template.
-- `notebooks/01_section_phase0_2_QC_Region1.ipynb` through `01_section_phase0_2_QC_Region4.ipynb`: committed, parameter-locked notebooks to run and review one section at a time.
+- `R/source.R`: documented functions used by current notebooks, their transitive dependencies, and active test/support entry points.
+- `R/source_bk.R`: archival functions with no active notebook, test, or support-script consumer; QC notebooks do not source this file.
+- `notebooks/01_QC_Region1.ipynb` through `01_QC_Region4.ipynb`: committed, parameter-locked notebooks to run and review one section at a time.
 - `notebooks/02_slide_QC_summary.ipynb`: the sole slide-level QC summary/report, with final decision tables and Cell-inspired figures inline.
+- `config/fixed_cell_qc_thresholds.tsv`: versioned exclusive primary-cell bounds (`5 < nFeature_Xenium < 200`, `10 < nCount_Xenium < 1000`).
 - `config/eos_gene_sets.tsv`: 100 unique expected genes: 7 common, 47 short-lived, and 46 long-lived.
 - `tests/test_source.R`: reusable-function tests.
 - `tests/test_extended_qc.R`: alarm, gene-quality, spatial, ranking, concordance, and artifact-contract tests.
@@ -72,7 +73,7 @@ Local execution uses only `adipose_analysis/subset_input/adipose_data` and write
 
 Use `-RegionId Region_1`, `Region_2`, `Region_3`, or `Region_4` to execute only one named section notebook. Use `-RegionId SUMMARY` after all four section bundles exist under the same run label. `ALL` runs the four sections and then the summary.
 
-The local computer does not have IRkernel/Jupyter notebook packages. Therefore, local validation evaluates the R cells sequentially in one clean R environment and saves executed notebook JSON. HPC uses the standard registered Jupyter R kernel.
+Local R is `D:\Programs\R-4.6.1\bin\Rscript.exe` with user library `D:\Programs\R_library`. Local contract tests use this installation and force `TMPDIR`, `TMP`, and `TEMP` below the D: worktree. Full notebook execution remains an HPC task when a compatible Jupyter R kernel or full Xenium inputs are unavailable locally.
 
 ## HPC preflight and submission
 
@@ -167,10 +168,11 @@ The evidence-only downstream contract is in `${RUN_ROOT}/slide_summary/cell_down
 ## Evidence-only downstream decisions
 
 - Region 1: `PRIMARY_CONDITIONAL`; Region 2: `PRIMARY_CONDITIONAL`; Region 3: `PRIMARY`; Region 4: `SENSITIVITY_ONLY`.
-- `primary_include` excludes core-QC failures, segmentation multiplets, and high-control cells. `strict_include` excludes every review-flagged cell. `hotspot_sensitivity_include` additionally excludes Region 3 morphology-review hotspot cells without removing them from primary analysis.
+- `qc_core_pass` and `primary_include` use strict open intervals: `5 < nFeature_Xenium < 200` and `10 < nCount_Xenium < 1000`; exact boundary values fail. `strict_include = primary_include & !qc_review_flag`. `hotspot_sensitivity_include` additionally excludes Region 3 morphology-review hotspot cells without deleting cells or changing raw objects.
 - All genes remain in `RAW_COMPLETE_PANEL`. The primary feature eligibility field is `PROVISIONAL_PRIMARY_FEATURES`; its zero-alarm subset is `CONSERVATIVE_NO_SIGNAL_DETECTED`. Genes recurring in at least two alarm-positive sections are `TECHNICAL_RISK_SENSITIVITY_ONLY` and cannot define primary clusters.
 - Region 4 never contributes to reference discovery or primary gene-level results. Its downstream bundle requires mapping to the finalized Region 1-3 reference and an `Uncertain` label for insufficient-confidence assignments.
 - Phase 0-2 produces inputs rather than PCA, clusters, Eos states, or Region 4 mapping. Therefore the overall primary release remains `PENDING_DOWNSTREAM_ANALYSIS` until the automated downstream stability gates are supplied.
+- The legacy nearest-cell block in `B1_Region3_primary_479.ipynb` is explicitly marked invalid: rescued Eos selected with `Final_CellType_subtype_refined` overlap the older-label non-Eos reference pool, causing zero-distance self-matches. Its spatial-neighbour outputs must not be interpreted until query/reference IDs are made disjoint.
 
 ## Current scientific gate
 

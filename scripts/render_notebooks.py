@@ -8,10 +8,10 @@ from pathlib import Path
 
 
 REGION_NOTEBOOKS = {
-    "Region_1": "01_section_phase0_2_QC_Region1.ipynb",
-    "Region_2": "01_section_phase0_2_QC_Region2.ipynb",
-    "Region_3": "01_section_phase0_2_QC_Region3.ipynb",
-    "Region_4": "01_section_phase0_2_QC_Region4.ipynb",
+    "Region_1": "01_QC_Region1.ipynb",
+    "Region_2": "01_QC_Region2.ipynb",
+    "Region_3": "01_QC_Region3.ipynb",
+    "Region_4": "01_QC_Region4.ipynb",
 }
 
 
@@ -52,13 +52,15 @@ def section_cells(incomplete=False):
             'SEED <- 20260814L\n'
             'STRICT_MODE <- FALSE\n'
             'EXTENDED_QC_MODE <- "AUTO"\n'
-            'EXTENDED_QC_CONFIG_PATH <- file.path(PIPELINE_REPO, "config", "extended_qc_defaults.tsv")\n',
+            'EXTENDED_QC_CONFIG_PATH <- file.path(PIPELINE_REPO, "config", "extended_qc_defaults.tsv")\n'
+            'FIXED_CELL_QC_THRESHOLDS_PATH <- file.path(PIPELINE_REPO, "config", "fixed_cell_qc_thresholds.tsv")\n',
             tags=["parameters"],
         ),
         code(
             'OUTPUT_ROOT <- file.path(PROJECT_ROOT, "adipose_analysis", "scwat_qc_outputs", RUN_LABEL)\n'
             'SECTION_OUTPUT_DIR <- file.path(OUTPUT_ROOT, "sections", REGION_ID)\n'
             'source(file.path(PIPELINE_REPO, "R", "source.R"))\n'
+            'fixed_thresholds <- read_fixed_cell_qc_thresholds(FIXED_CELL_QC_THRESHOLDS_PATH)\n'
             'for (package in c("Matrix", "jsonlite", "ggplot2")) require_package(package)\n'
             'validate_runtime_paths(PROJECT_ROOT, INPUT_ROOT, SECTION_OUTPUT_DIR, tempdir())\n'
             'dir.create(SECTION_OUTPUT_DIR, recursive = TRUE, showWarnings = FALSE)\n'
@@ -109,10 +111,13 @@ def section_cells(incomplete=False):
             'names(feature_type_summary) <- c("feature_type", "n_features")\n'
             'list(integrity = integrity, alarms = alarms, panel = table(panel_reconciliation$status))\n'
         ),
-        markdown("## Phase 2 - Sparse import and section-specific cell QC"),
+        markdown("## Phase 2 - Sparse import and section-specific cell QC\n\nThe primary cohort uses strict fixed bounds: `5 < nFeature_Xenium < 200` and `10 < nCount_Xenium < 1000`; exact boundary values fail."),
         code(
             'xenium <- import_xenium_mex(region_dir)\n'
-            'qc <- calculate_xenium_cell_qc(xenium$counts, xenium$cells, REGION_ID)\n'
+            'qc <- calculate_xenium_cell_qc(\n'
+            '  xenium$counts, xenium$cells, REGION_ID,\n'
+            '  fixed_thresholds = fixed_thresholds\n'
+            ')\n'
             'metadata_columns <- intersect(c("mouse_id", "side", "section_id", "biological_replicate_id", "genotype", "treatment", "condition", "age_weeks", "metadata_status", "do_not_interpret"), names(section_manifest))\n'
             'for (column in metadata_columns) qc$cell_metadata[[column]] <- section_manifest[[column]][[1]]\n'
             'qc$summary\n'
@@ -175,7 +180,7 @@ def section_cells(incomplete=False):
             'extended_plots <- plot_extended_spatial_qc(spatial_cells, spatial_edge_density, spatial_hotspots, REGION_ID)\n'
             'for (plot in extended_plots) print(plot)\n'
         ),
-        markdown("## Evidence-only downstream masks\n\nThe raw objects are not modified. `primary_include`, `strict_include`, and `hotspot_sensitivity_include` are retained together so downstream notebooks can select a prespecified analysis without deleting cells. Region 3 hotspot cells remain in primary analysis; Region 4 is sensitivity-only."),
+        markdown("## Evidence-only downstream masks\n\nThe raw objects are not modified. `primary_include` equals the strict fixed core rule (`5 < nFeature_Xenium < 200` and `10 < nCount_Xenium < 1000`). `strict_include` additionally requires `!qc_review_flag`; `hotspot_sensitivity_include` excludes Region 3 morphology-review hotspot cells. Region 4 is sensitivity-only."),
         code(
             'mask_provenance <- paste(RUN_LABEL, REGION_ID, extended_mode, normalizePath(region_dir, winslash = "/", mustWork = TRUE), sep = "|")\n'
             'downstream_masks <- build_cell_downstream_masks(spatial_cells, spatial_hotspots, mask_provenance)\n'
@@ -239,12 +244,14 @@ def summary_cells(incomplete=False):
             'EXPECTED_SECTION_COUNT <- 4L\n'
             'METADATA_PATH <- file.path(PIPELINE_REPO, "config", "scwat_sample_manifest.tsv")\n'
             'EXTENDED_QC_CONFIG_PATH <- file.path(PIPELINE_REPO, "config", "extended_qc_defaults.tsv")\n'
-            'SUBSET_REFERENCE_PATH <- file.path(PIPELINE_REPO, "config", "subset_qc_reference.tsv")\n',
+            'SUBSET_REFERENCE_PATH <- file.path(PIPELINE_REPO, "config", "subset_qc_reference.tsv")\n'
+            'FIXED_CELL_QC_THRESHOLDS_PATH <- file.path(PIPELINE_REPO, "config", "fixed_cell_qc_thresholds.tsv")\n',
             tags=["parameters"],
         ),
         code(
             'RUN_ROOT <- file.path(PROJECT_ROOT, "adipose_analysis", "scwat_qc_outputs", RUN_LABEL)\n'
             'source(file.path(PIPELINE_REPO, "R", "source.R"))\n'
+            'fixed_thresholds <- read_fixed_cell_qc_thresholds(FIXED_CELL_QC_THRESHOLDS_PATH)\n'
             'for (package in c("Matrix", "jsonlite", "ggplot2")) require_package(package)\n'
             'assert_path_within(PROJECT_ROOT, RUN_ROOT)\n'
             'assert_path_within(PROJECT_ROOT, tempdir())\n'
@@ -270,6 +277,14 @@ def summary_cells(incomplete=False):
             '  RUN_LABEL, unique(extended_coverage$mode), release_provenance\n'
             ')\n'
             'stopifnot(length(unique(slide_data$cell_metadata$region_id)) == 4L)\n'
+            'expected_primary_include <- with(\n'
+            '  evidence_summary$cell_masks,\n'
+            '  apply_fixed_primary_bounds(nFeature_Xenium, nCount_Xenium, fixed_thresholds)\n'
+            ')\n'
+            'stopifnot(identical(\n'
+            '  as.logical(evidence_summary$cell_masks$primary_include),\n'
+            '  as.logical(expected_primary_include)\n'
+            '))\n'
             'list(core = coverage, extended = extended_coverage, cells = nrow(slide_data$cell_metadata))\n'
         ),
         markdown("## TL;DR and QC decision\n\nFixed evidence-only status: Region 1 `PRIMARY_CONDITIONAL`, Region 2 `PRIMARY_CONDITIONAL`, Region 3 `PRIMARY`, and Region 4 `SENSITIVITY_ONLY`. Region 4 cannot enter cluster discovery or primary gene-level results; it will later map to the finalized Region 1-3 reference, with low-confidence assignments labelled `Uncertain`."),
@@ -349,14 +364,15 @@ def validate_notebook(path, notebook_type="section", expected_region_id=None):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     errors = []
     if data.get("nbformat") != 4 or not isinstance(data.get("cells"), list): errors.append("invalid nbformat structure")
-    if data.get("metadata", {}).get("kernelspec", {}).get("name") != "ir": errors.append("R kernelspec is required")
+    kernel_name = str(data.get("metadata", {}).get("kernelspec", {}).get("name", ""))
+    if not kernel_name.startswith("ir"): errors.append("R kernelspec is required")
     text = "\n".join("".join(cell.get("source", [])) for cell in data.get("cells", []))
     if re.search(r"(?i)(?:^|[\"'])C:[/\\]", text, flags=re.MULTILINE): errors.append("notebook contains a C: path")
     parameter_cells = [c for c in data.get("cells", []) if "parameters" in c.get("metadata", {}).get("tags", [])]
     if len(parameter_cells) != 1: errors.append("exactly one tagged parameters cell is required")
     if notebook_type == "section":
-        required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "INPUT_ROOT", "REGION_ID", "RUN_LABEL", "METADATA_PATH", "EXPECTED_SECTION_COUNT", "SEED", "STRICT_MODE", "EXTENDED_QC_MODE", "EXTENDED_QC_CONFIG_PATH"]
-        required_sections = ["## Goal", "## Setup", "## Inputs", "## Phase 0", "## Phase 1", "## Phase 2", "## Extended QC preflight", "## Extended per-gene", "## Extended spatial diagnostics", "## Checks", "## Outputs"]
+        required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "INPUT_ROOT", "REGION_ID", "RUN_LABEL", "METADATA_PATH", "EXPECTED_SECTION_COUNT", "SEED", "STRICT_MODE", "EXTENDED_QC_MODE", "EXTENDED_QC_CONFIG_PATH", "FIXED_CELL_QC_THRESHOLDS_PATH"]
+        required_sections = ["## Setup", "## Inputs", "## Step1 - Configuration and metadata contract", "## Step2 - Provenance, integrity, panel reconciliation, and QC gate", "## Step3 - Sparse import and section-specific cell QC", "## Step4 - Cycle Alarm Check", "## Step5 - Per-gene quality diagnostics", "## Step6 - Spatial diagnostics", "## Step7 - Evidence-only downstream masks", "## Step8 - Final Checks", "## Outputs"]
         for value in required_parameters + required_sections:
             if value not in text: errors.append(f"missing required section/parameter: {value}")
         if expected_region_id is not None:
@@ -365,8 +381,8 @@ def validate_notebook(path, notebook_type="section", expected_region_id=None):
             if match is None or match.group(1) != expected_region_id:
                 errors.append(f"expected fixed REGION_ID {expected_region_id}")
     if notebook_type == "summary":
-        required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "RUN_LABEL", "EXPECTED_SECTION_COUNT", "METADATA_PATH", "EXTENDED_QC_CONFIG_PATH", "SUBSET_REFERENCE_PATH"]
-        required_sections = ["## Setup", "## Inputs and validation", "## TL;DR and QC decision", "## Core QC distributions", "## Alarm evidence and evidence-only gene tiers", "## Subset versus full-data burden", "## Spatial QC", "## Within-mouse concordance", "## Diagnostic Cell-style figures", "## Final QC decision and next actions", "## Outputs and reload checks"]
+        required_parameters = ["PROJECT_ROOT", "PIPELINE_REPO", "RUN_LABEL", "EXPECTED_SECTION_COUNT", "METADATA_PATH", "EXTENDED_QC_CONFIG_PATH", "SUBSET_REFERENCE_PATH", "FIXED_CELL_QC_THRESHOLDS_PATH"]
+        required_sections = ["## Setup", "## Step1 - Inputs and validation", "## Step2 - QC decision", "## Step3 - Alarm evidence and evidence-only gene tiers", "## Step 4 - Subset versus full-data burden", "## Step5 - Spatial QC", "## Step6 - Within-mouse concordance", "## Step7 - Diagnostic Cell-style figures", "## Step8 - Final QC decision and next actions", "## Outputs and reload checks"]
         for value in required_parameters + required_sections:
             if value not in text: errors.append(f"missing required section/parameter: {value}")
     if errors: raise ValueError("; ".join(errors))
