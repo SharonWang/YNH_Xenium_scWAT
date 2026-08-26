@@ -193,3 +193,5 @@
 - TDD red gates confirmed the previous 133/80-cell notebooks and missing scWAT bundle API; focused R and notebook contracts subsequently passed.
 - Local D:-only Region 1 smoke execution passed. A complete bounded run of Regions 1-4 (500 cells each) plus the slide summary also passed and wrote test outputs under `adipose_analysis/scwat_qc_outputs/local_colon_parity_all`.
 - Full-data execution is still required on HPC before using the initial-QC readiness results for downstream admission decisions.
+- Committed the implementation as `565edcd` and merged it locally into `codex/notebook-qc-pipeline` as `b43ec07`; the complete post-merge suite passed.
+- Two non-force GitHub push attempts failed because the current session could not connect to `github.com:443`. The local target branch remains clean and ahead of its remote; no force operation was attempted.
