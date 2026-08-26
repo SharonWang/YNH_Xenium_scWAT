@@ -104,7 +104,7 @@
 - [x] Run R syntax/source checks, focused QC tests, extended tests, Python notebook tests, notebook JSON validation, and `git diff --check`.
 - [x] Record all pass/fail results and any pre-existing environment discrepancies below.
 - [x] Inspect the final diff for accidental notebook-output churn and any file outside D:.
-- [ ] Commit the isolated branch, merge it locally into `codex/notebook-qc-pipeline`, rerun verification, and push the updated branch to GitHub.
+- [x] Commit the isolated branch, merge it locally into `codex/notebook-qc-pipeline`, rerun verification, and push the updated branch to GitHub.
 
 ## Progress Log
 
@@ -174,3 +174,10 @@
 - Parsed every R code cell in the four region notebooks, slide summary, and `B1_Region3_primary_479.ipynb`; no syntax errors were found.
 - `git diff --check` reported no whitespace or conflict-marker errors. Line-ending notices reflect the repository's existing Windows checkout behavior.
 - All test/cache/temp paths were redirected to D:. The bundled Python executable was read from C: but was configured not to write bytecode; no project, temporary, or test files were placed on C:.
+
+### 2026-08-26 — Git integration
+
+- Committed the isolated implementation as `958fa38` on `codex/source-qc-refactor`.
+- Merged it into `codex/notebook-qc-pipeline` as merge commit `686feac`.
+- Re-ran the complete verification suite from the merged target checkout; every gate passed.
+- Pushed `codex/notebook-qc-pipeline` to the configured GitHub repository.
