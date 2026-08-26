@@ -41,7 +41,8 @@ expect_error(resolve_extended_qc_mode("BAD", subset_region_dir), "AUTO")
 # Local mode may skip large inputs but must report the skip explicitly.
 preflight <- extended_qc_preflight("LOCAL_SUBSET", subset_region_dir, config)
 stopifnot(preflight$status[preflight$check == "transcripts_parquet"] == "SKIP_ALLOWED")
-stopifnot(preflight$status[preflight$check == "arrow"] == "SKIP_ALLOWED")
+expected_arrow_status <- if (requireNamespace("arrow", quietly = TRUE)) "PASS" else "SKIP_ALLOWED"
+stopifnot(preflight$status[preflight$check == "arrow"] == expected_arrow_status)
 full_preflight <- extended_qc_preflight("FULL_HPC", full_region_dir, config)
 if (!requireNamespace("arrow", quietly = TRUE)) stopifnot(full_preflight$status[full_preflight$check == "arrow"] == "FAIL")
 if (!requireNamespace("RANN", quietly = TRUE)) stopifnot(full_preflight$status[full_preflight$check == "RANN"] == "FAIL")

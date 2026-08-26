@@ -19,6 +19,7 @@ stopifnot(
 source_path <- file.path(repo_root, "R", "source.R")
 stopifnot(file.exists(source_path))
 source(source_path)
+fixed_thresholds <- read_fixed_cell_qc_thresholds(file.path(repo_root, "config", "fixed_cell_qc_thresholds.tsv"))
 
 expect_error <- function(expr, pattern = NULL) {
   error <- tryCatch({ force(expr); NULL }, error = identity)
@@ -127,7 +128,7 @@ imported <- import_xenium_mex(region_dir)
 stopifnot(inherits(imported$counts, "sparseMatrix"), identical(dim(imported$counts), c(1L, 2L)))
 stopifnot(identical(colnames(imported$counts), imported$cells$cell_id))
 
-qc <- calculate_xenium_cell_qc(imported$counts, imported$cells, "Region_1")
+qc <- calculate_xenium_cell_qc(imported$counts, imported$cells, "Region_1", fixed_thresholds)
 stopifnot(nrow(qc$cell_metadata) == 2L, nrow(qc$thresholds) == 4L, nrow(qc$summary) == 1L)
 stopifnot(qc$cell_metadata$multiple_nuclei_flag[[2]], qc$cell_metadata$segmentation_multiplet_flag[[2]])
 stopifnot(all(c("qc_core_pass", "qc_review_flag", "high_control_flag") %in% names(qc$cell_metadata)))
@@ -137,7 +138,7 @@ palette <- section_palette()
 stopifnot(identical(names(palette), paste0("Region_", 1:4)), length(unique(palette)) == 4L)
 plots <- plot_section_qc(qc$cell_metadata, "Region_1")
 stopifnot(all(c("counts", "features", "area", "spatial") %in% names(plots)))
-stopifnot(inherits(plots$spatial$coordinates, "CoordFixed"))
+stopifnot(inherits(plots$spatial$coordinates, "CoordCartesian"), identical(plots$spatial$coordinates$ratio, 1))
 
 synthetic_row <- m1[m1$region_id == "Region_1", , drop = FALSE]
 gates <- calculate_readiness_gates(
@@ -216,9 +217,9 @@ hotspot_fixture <- data.frame(
 )
 masks <- build_cell_downstream_masks(mask_fixture, hotspot_fixture, provenance = "unit_fixture")
 stopifnot(nrow(masks) == nrow(mask_fixture))
-stopifnot(identical(masks$primary_include, c(TRUE, FALSE, FALSE, FALSE)))
+stopifnot(identical(masks$primary_include, c(TRUE, FALSE, TRUE, TRUE)))
 stopifnot(identical(masks$strict_include, c(TRUE, FALSE, FALSE, FALSE)))
-stopifnot(identical(masks$hotspot_sensitivity_include, c(FALSE, FALSE, FALSE, FALSE)))
+stopifnot(identical(masks$hotspot_sensitivity_include, c(FALSE, FALSE, TRUE, TRUE)))
 stopifnot(identical(section_downstream_status(paste0("Region_", 1:4)),
                     c("PRIMARY_CONDITIONAL", "PRIMARY_CONDITIONAL", "PRIMARY", "SENSITIVITY_ONLY")))
 mask_section_decision <- build_one_section_downstream_decision(

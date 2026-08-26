@@ -1,3 +1,18 @@
+# scWAT Xenium reusable QC functions
+#
+# Active contract:
+# - This file is sourced by the four region QC notebooks, the slide summary,
+#   and active exploratory Region 3 notebooks.
+# - Raw matrices/objects are never overwritten; QC decisions are added as
+#   metadata, summaries, masks, or separately written artifacts.
+# - Functions validate required columns, alignment, path containment, and
+#   output provenance before returning or writing results.
+# - Functions with no active notebook/test/support consumer are preserved in
+#   R/source_bk.R and are intentionally not loaded by the QC notebooks.
+#
+# Documentation convention: every function states its purpose, required and
+# optional inputs, and output/write behavior immediately above its definition.
+
 options(stringsAsFactors = FALSE)
 
 `%||%` <- function(x, y) {
@@ -7,6 +22,9 @@ options(stringsAsFactors = FALSE)
   if (missing_scalar) y else x
 }
 
+# Purpose: Canonical path.
+# Inputs: required: path.
+# Output: Returns a deterministic scalar, vector, path, status, or empty-schema object used by downstream functions.
 canonical_path <- function(path) {
   value <- normalizePath(path, winslash = "/", mustWork = FALSE)
   value <- sub("/+$", "", value)
@@ -14,6 +32,9 @@ canonical_path <- function(path) {
   value
 }
 
+# Purpose: Assert path within.
+# Inputs: required: project_root, candidate.
+# Output: Returns validation evidence/TRUE (or the validated value) and stops with an informative error when the contract fails.
 assert_path_within <- function(project_root, candidate) {
   root <- canonical_path(project_root)
   path <- canonical_path(candidate)
@@ -22,6 +43,9 @@ assert_path_within <- function(project_root, candidate) {
   invisible(TRUE)
 }
 
+# Purpose: Validate runtime paths.
+# Inputs: required: project_root, input_root, output_root; optional/defaulted: temp_root.
+# Output: Returns validation evidence/TRUE (or the validated value) and stops with an informative error when the contract fails.
 validate_runtime_paths <- function(project_root, input_root, output_root, temp_root = tempdir()) {
   if (!dir.exists(project_root)) stop(sprintf("Project root does not exist: %s", project_root), call. = FALSE)
   if (!dir.exists(input_root)) stop(sprintf("Input root does not exist: %s", input_root), call. = FALSE)
@@ -29,6 +53,9 @@ validate_runtime_paths <- function(project_root, input_root, output_root, temp_r
   invisible(TRUE)
 }
 
+# Purpose: Discover xenium sections.
+# Inputs: required: input_root; optional/defaulted: expected_section_count.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 discover_xenium_sections <- function(input_root, expected_section_count = 4L) {
   if (!dir.exists(input_root)) stop(sprintf("Input root does not exist: %s", input_root), call. = FALSE)
   dirs <- list.dirs(input_root, recursive = FALSE, full.names = TRUE)
@@ -48,6 +75,9 @@ discover_xenium_sections <- function(input_root, expected_section_count = 4L) {
   )
 }
 
+# Purpose: Discover one section.
+# Inputs: required: input_root, region_id.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 discover_one_section <- function(input_root, region_id) {
   if (!grepl("^Region_[1-9][0-9]*$", region_id)) stop("region_id must use Region_<integer> format.", call. = FALSE)
   dirs <- list.dirs(input_root, recursive = FALSE, full.names = TRUE)
@@ -61,6 +91,9 @@ discover_one_section <- function(input_root, region_id) {
   )
 }
 
+# Purpose: Create synthetic manifest.
+# Inputs: required: region_ids; optional/defaulted: seed.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 create_synthetic_manifest <- function(region_ids, seed = 20260814L) {
   region_ids <- sort(unique(as.character(region_ids)))
   if (length(region_ids) != 4L) stop("Synthetic scWAT metadata requires exactly four regions.", call. = FALSE)
@@ -79,6 +112,9 @@ create_synthetic_manifest <- function(region_ids, seed = 20260814L) {
   )
 }
 
+# Purpose: Validate sample manifest.
+# Inputs: required: manifest, expected_regions.
+# Output: Returns validation evidence/TRUE (or the validated value) and stops with an informative error when the contract fails.
 validate_sample_manifest <- function(manifest, expected_regions) {
   required <- c("tissue", "region_id", "mouse_id", "section_id", "biological_replicate_id", "technical_replicate_id", "metadata_status")
   issues <- character()
@@ -95,6 +131,9 @@ validate_sample_manifest <- function(manifest, expected_regions) {
   list(valid = !length(issues), issues = issues)
 }
 
+# Purpose: Xenium required files.
+# Inputs: none.
+# Output: Returns a deterministic scalar, vector, path, status, or empty-schema object used by downstream functions.
 xenium_required_files <- function() {
   c(
     "experiment.xenium", "metrics_summary.csv", "analysis_summary.html", "gene_panel.json",
@@ -103,6 +142,9 @@ xenium_required_files <- function() {
   )
 }
 
+# Purpose: Inventory section files.
+# Inputs: required: region_dir, region_id; optional/defaulted: calculate_md5.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 inventory_section_files <- function(region_dir, region_id, calculate_md5 = TRUE) {
   relative <- xenium_required_files()
   paths <- file.path(region_dir, relative)
@@ -118,6 +160,9 @@ inventory_section_files <- function(region_dir, region_id, calculate_md5 = TRUE)
   )
 }
 
+# Purpose: Read mtx dimensions.
+# Inputs: required: path.
+# Output: Returns parsed, validated R data (vector, data frame, sparse matrix bundle, or named list according to the input format).
 read_mtx_dimensions <- function(path) {
   if (!file.exists(path)) stop(sprintf("Matrix file not found: %s", path), call. = FALSE)
   con <- gzfile(path, "rt"); on.exit(close(con), add = TRUE)
@@ -131,10 +176,16 @@ read_mtx_dimensions <- function(path) {
   setNames(as.integer(values), c("features", "cells", "nonzero"))
 }
 
+# Purpose: Read gz rows.
+# Inputs: required: path; optional/defaulted: header.
+# Output: Returns parsed, validated R data (vector, data frame, sparse matrix bundle, or named list according to the input format).
 read_gz_rows <- function(path, header = FALSE) {
   utils::read.delim(gzfile(path), header = header, quote = "", check.names = FALSE, stringsAsFactors = FALSE)
 }
 
+# Purpose: Validate section integrity.
+# Inputs: required: region_dir, region_id.
+# Output: Returns validation evidence/TRUE (or the validated value) and stops with an informative error when the contract fails.
 validate_section_integrity <- function(region_dir, region_id) {
   matrix_dir <- file.path(region_dir, "cell_feature_matrix")
   dimensions <- read_mtx_dimensions(file.path(matrix_dir, "matrix.mtx.gz"))
@@ -153,6 +204,9 @@ validate_section_integrity <- function(region_dir, region_id) {
   out
 }
 
+# Purpose: Write tsv.
+# Inputs: required: x, path, project_root.
+# Output: Writes validated artifact file(s) and returns their path(s) invisibly or as a named path list.
 write_tsv <- function(x, path, project_root) {
   assert_path_within(project_root, path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
@@ -160,10 +214,16 @@ write_tsv <- function(x, path, project_root) {
   invisible(path)
 }
 
+# Purpose: Require package.
+# Inputs: required: package.
+# Output: Returns invisibly after validation and stops if the required dependency or argument is unavailable.
 require_package <- function(package) {
   if (!requireNamespace(package, quietly = TRUE)) stop(sprintf("Required R package '%s' is unavailable.", package), call. = FALSE)
 }
 
+# Purpose: Read extended qc config.
+# Inputs: required: path.
+# Output: Returns parsed, validated R data (vector, data frame, sparse matrix bundle, or named list according to the input format).
 read_extended_qc_config <- function(path) {
   if (!file.exists(path)) stop(sprintf("Extended QC config not found: %s", path), call. = FALSE)
   config <- utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
@@ -193,6 +253,9 @@ read_extended_qc_config <- function(path) {
   stats::setNames(values, config$key)
 }
 
+# Purpose: Resolve extended qc mode.
+# Inputs: required: region_dir; optional/defaulted: requested_mode.
+# Output: Returns a deterministic scalar, vector, path, status, or empty-schema object used by downstream functions.
 resolve_extended_qc_mode <- function(requested_mode = "AUTO", region_dir) {
   mode <- toupper(trimws(as.character(requested_mode)))
   allowed <- c("AUTO", "LOCAL_SUBSET", "FULL_HPC")
@@ -203,6 +266,9 @@ resolve_extended_qc_mode <- function(requested_mode = "AUTO", region_dir) {
   if (file.exists(file.path(region_dir, "transcripts.parquet"))) "FULL_HPC" else "LOCAL_SUBSET"
 }
 
+# Purpose: Extended qc preflight.
+# Inputs: required: mode, region_dir, config.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 extended_qc_preflight <- function(mode, region_dir, config) {
   mode <- resolve_extended_qc_mode(mode, region_dir)
   if (!is.list(config) || !length(config)) stop("Extended QC config must be a non-empty named list.", call. = FALSE)
@@ -228,6 +294,9 @@ extended_qc_preflight <- function(mode, region_dir, config) {
   checks[, c("check", "required", "available", "status", "details", "mode")]
 }
 
+# Purpose: Build cycle alarm evidence.
+# Inputs: required: alarms, region_id.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 build_cycle_alarm_evidence <- function(alarms, region_id) {
   if (!is.data.frame(alarms)) stop("alarms must be a data.frame.", call. = FALSE)
   required <- c("raised", "title", "message", "level", "id")
@@ -250,6 +319,9 @@ build_cycle_alarm_evidence <- function(alarms, region_id) {
   evidence[, c("region_id", required, "evidence_status", "cycle_identity_status", "gene_effect_status")]
 }
 
+# Purpose: Resolve transcript schema.
+# Inputs: required: columns.
+# Output: Returns a deterministic scalar, vector, path, status, or empty-schema object used by downstream functions.
 resolve_transcript_schema <- function(columns) {
   columns <- as.character(columns)
   select_alias <- function(aliases, label, required = TRUE) {
@@ -268,6 +340,9 @@ resolve_transcript_schema <- function(columns) {
   )
 }
 
+# Purpose: Summarise transcript quality table.
+# Inputs: required: transcripts, region_id; optional/defaulted: qv_threshold.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 summarise_transcript_quality_table <- function(transcripts, region_id, qv_threshold = 20) {
   if (!is.data.frame(transcripts)) stop("transcripts must be a data.frame.", call. = FALSE)
   schema <- resolve_transcript_schema(names(transcripts))
@@ -294,6 +369,9 @@ summarise_transcript_quality_table <- function(transcripts, region_id, qv_thresh
   out[order(out$gene), , drop = FALSE]
 }
 
+# Purpose: Build transcript quality queries.
+# Inputs: required: projected; optional/defaulted: qv_threshold, has_codeword.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 build_transcript_quality_queries <- function(projected, qv_threshold = 20, has_codeword = TRUE) {
   require_package("dplyr")
   required <- c("gene", "qv", if (isTRUE(has_codeword)) "codeword")
@@ -321,6 +399,9 @@ build_transcript_quality_queries <- function(projected, qv_threshold = 20, has_c
   list(summary = summary, codewords = codewords)
 }
 
+# Purpose: Summarise transcript quality arrow.
+# Inputs: required: path, region_id; optional/defaulted: qv_threshold.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 summarise_transcript_quality_arrow <- function(path, region_id, qv_threshold = 20) {
   require_package("arrow")
   require_package("dplyr")
@@ -372,6 +453,9 @@ summarise_transcript_quality_arrow <- function(path, region_id, qv_threshold = 2
   out[order(out$gene), , drop = FALSE]
 }
 
+# Purpose: Summarise gene matrix qc.
+# Inputs: required: counts, region_id; optional/defaulted: gene_sets.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 summarise_gene_matrix_qc <- function(counts, region_id, gene_sets = NULL) {
   require_package("Matrix")
   if (is.null(rownames(counts)) || is.null(colnames(counts))) stop("Gene count matrix requires row and column names.", call. = FALSE)
@@ -390,6 +474,9 @@ summarise_gene_matrix_qc <- function(counts, region_id, gene_sets = NULL) {
   )
 }
 
+# Purpose: Combine gene quality.
+# Inputs: required: matrix_qc, transcript_qc.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 combine_gene_quality <- function(matrix_qc, transcript_qc) {
   required_matrix <- c("region_id", "gene")
   if (!all(required_matrix %in% names(matrix_qc))) stop("matrix_qc requires region_id and gene.", call. = FALSE)
@@ -402,6 +489,9 @@ combine_gene_quality <- function(matrix_qc, transcript_qc) {
   out
 }
 
+# Purpose: Validate spatial cells.
+# Inputs: required: cells.
+# Output: Returns validation evidence/TRUE (or the validated value) and stops with an informative error when the contract fails.
 validate_spatial_cells <- function(cells) {
   required <- c("cell_id", "x_centroid", "y_centroid", "qc_review_flag")
   missing <- setdiff(required, names(cells))
@@ -411,6 +501,9 @@ validate_spatial_cells <- function(cells) {
   invisible(TRUE)
 }
 
+# Purpose: Knn index distance.
+# Inputs: required: cells; optional/defaulted: k, mode.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 knn_index_distance <- function(cells, k = 15L, mode = "LOCAL_SUBSET") {
   validate_spatial_cells(cells)
   n <- nrow(cells); k <- as.integer(k); mode <- toupper(mode)
@@ -434,6 +527,9 @@ knn_index_distance <- function(cells, k = 15L, mode = "LOCAL_SUBSET") {
   list(index = index, distance = distance)
 }
 
+# Purpose: Calculate knn density.
+# Inputs: required: cells; optional/defaulted: k, mode.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 calculate_knn_density <- function(cells, k = 15L, mode = "LOCAL_SUBSET") {
   neighbors <- knn_index_distance(cells, k, mode)
   radius <- neighbors$distance[, ncol(neighbors$distance)]
@@ -441,6 +537,9 @@ calculate_knn_density <- function(cells, k = 15L, mode = "LOCAL_SUBSET") {
   as.numeric(k) / (pi * radius^2)
 }
 
+# Purpose: Assign spatial grid.
+# Inputs: required: cells; optional/defaulted: grid_size_um.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 assign_spatial_grid <- function(cells, grid_size_um = 100) {
   validate_spatial_cells(cells)
   if (length(grid_size_um) != 1L || !is.finite(grid_size_um) || grid_size_um <= 0) stop("grid_size_um must be positive.", call. = FALSE)
@@ -462,6 +561,9 @@ assign_spatial_grid <- function(cells, grid_size_um = 100) {
   out
 }
 
+# Purpose: Summarise spatial enrichment.
+# Inputs: required: annotated_cells.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 summarise_spatial_enrichment <- function(annotated_cells) {
   if (!all(c("qc_review_flag", "edge_proxy") %in% names(annotated_cells))) stop("Spatial enrichment requires qc_review_flag and edge_proxy.", call. = FALSE)
   make_rows <- function(class_type, positive, positive_label, negative_label) {
@@ -489,6 +591,9 @@ summarise_spatial_enrichment <- function(annotated_cells) {
   out
 }
 
+# Purpose: Test spatial flag clustering.
+# Inputs: required: cells; optional/defaulted: k, permutations, seed, mode.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 test_spatial_flag_clustering <- function(cells, k = 15L, permutations = 999L, seed = 20260814L, mode = "LOCAL_SUBSET") {
   validate_spatial_cells(cells)
   flags <- as.numeric(as.logical(cells$qc_review_flag))
@@ -513,6 +618,9 @@ test_spatial_flag_clustering <- function(cells, k = 15L, permutations = 999L, se
   )
 }
 
+# Purpose: Find spatial qc hotspots.
+# Inputs: required: annotated_cells; optional/defaulted: permutations, min_bin_cells, fdr, seed.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 find_spatial_qc_hotspots <- function(annotated_cells, permutations = 999L, min_bin_cells = 20L, fdr = 0.05, seed = 20260814L) {
   required <- c("grid_id", "grid_x", "grid_y", "x_centroid", "y_centroid", "qc_review_flag", "grid_size_um")
   missing <- setdiff(required, names(annotated_cells))
@@ -556,6 +664,9 @@ find_spatial_qc_hotspots <- function(annotated_cells, permutations = 999L, min_b
   )
 }
 
+# Purpose: Rank candidate cycle genes.
+# Inputs: required: gene_quality, config; optional/defaulted: reference_region.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 rank_candidate_cycle_genes <- function(gene_quality, config, reference_region = "Region_3") {
   required <- c("region_id", "gene", "counts_per_10000", "detection_fraction", "fraction_q20")
   missing <- setdiff(required, names(gene_quality))
@@ -613,6 +724,9 @@ rank_candidate_cycle_genes <- function(gene_quality, config, reference_region = 
   out[order(out$gene, out$region_id), , drop = FALSE]
 }
 
+# Purpose: Build gene downstream decision.
+# Inputs: required: candidates, panel_genes, run_label, execution_mode, provenance.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 build_gene_downstream_decision <- function(candidates, panel_genes, run_label,
                                            execution_mode, provenance) {
   required <- c(
@@ -683,6 +797,9 @@ build_gene_downstream_decision <- function(candidates, panel_genes, run_label,
   out[order(out$gene), , drop = FALSE]
 }
 
+# Purpose: Build eos gene decision.
+# Inputs: required: gene_decision, eos_gene_sets, run_label, execution_mode, provenance.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 build_eos_gene_decision <- function(gene_decision, eos_gene_sets, run_label,
                                     execution_mode, provenance) {
   required_gene <- c("gene", "primary_feature_status", "conservative_evidence_status", "technical_risk_status")
@@ -714,6 +831,9 @@ build_eos_gene_decision <- function(gene_decision, eos_gene_sets, run_label,
   out
 }
 
+# Purpose: Compare subset full qc.
+# Inputs: required: full_summary, subset_reference.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 compare_subset_full_qc <- function(full_summary, subset_reference) {
   full_required <- c("region_id", "input_cells", "review_flagged")
   subset_required <- c("region_id", "review_fraction", "subset_rank")
@@ -741,6 +861,9 @@ compare_subset_full_qc <- function(full_summary, subset_reference) {
   list(ranking = ranking, agreement = agreement)
 }
 
+# Purpose: Build section pairs.
+# Inputs: required: manifest.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 build_section_pairs <- function(manifest) {
   required <- c("region_id", "mouse_id", "section_id")
   missing <- setdiff(required, names(manifest))
@@ -764,6 +887,9 @@ build_section_pairs <- function(manifest) {
   out <- do.call(rbind, rows); rownames(out) <- NULL; out
 }
 
+# Purpose: Quantile distribution distance.
+# Inputs: required: a, b; optional/defaulted: probabilities.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 quantile_distribution_distance <- function(a, b, probabilities = seq(0.01, 0.99, 0.01)) {
   a <- a[is.finite(a)]; b <- b[is.finite(b)]
   if (!length(a) || !length(b)) return(NA_real_)
@@ -774,6 +900,9 @@ quantile_distribution_distance <- function(a, b, probabilities = seq(0.01, 0.99,
   mean(abs(qa - qb)) / abs(scale)
 }
 
+# Purpose: Calculate within mouse concordance.
+# Inputs: required: manifest, section_summary, cell_metadata, gene_quality, config.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 calculate_within_mouse_concordance <- function(manifest, section_summary, cell_metadata, gene_quality, config) {
   pairs <- build_section_pairs(manifest)
   summary_required <- c("region_id", "input_cells", "review_flagged")
@@ -849,6 +978,9 @@ calculate_within_mouse_concordance <- function(manifest, section_summary, cell_m
   list(summary = summary, genes = genes)
 }
 
+# Purpose: Empty alarm table.
+# Inputs: none.
+# Output: Returns a deterministic scalar, vector, path, status, or empty-schema object used by downstream functions.
 empty_alarm_table <- function() {
   data.frame(
     raw_value = logical(), formatted_value = character(), raised = logical(),
@@ -857,6 +989,9 @@ empty_alarm_table <- function() {
   )
 }
 
+# Purpose: Extract analysis alarms.
+# Inputs: required: path.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 extract_analysis_alarms <- function(path) {
   require_package("jsonlite")
   if (!file.exists(path)) stop(sprintf("Analysis summary not found: %s", path), call. = FALSE)
@@ -875,6 +1010,9 @@ extract_analysis_alarms <- function(path) {
   parsed[, wanted, drop = FALSE]
 }
 
+# Purpose: Read custom panel genes.
+# Inputs: required: path.
+# Output: Returns parsed, validated R data (vector, data frame, sparse matrix bundle, or named list according to the input format).
 read_custom_panel_genes <- function(path) {
   require_package("jsonlite")
   if (!file.exists(path)) stop(sprintf("Panel JSON not found: %s", path), call. = FALSE)
@@ -886,6 +1024,9 @@ read_custom_panel_genes <- function(path) {
   sort(unique(stats::na.omit(genes)))
 }
 
+# Purpose: Reconcile panel.
+# Inputs: required: expected_genes, installed_genes; optional/defaulted: gene_sets.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 reconcile_panel <- function(expected_genes, installed_genes, gene_sets = NULL) {
   genes <- sort(unique(c(as.character(expected_genes), as.character(installed_genes))))
   out <- data.frame(
@@ -897,6 +1038,9 @@ reconcile_panel <- function(expected_genes, installed_genes, gene_sets = NULL) {
   out
 }
 
+# Purpose: Read xenium features.
+# Inputs: required: path.
+# Output: Returns parsed, validated R data (vector, data frame, sparse matrix bundle, or named list according to the input format).
 read_xenium_features <- function(path) {
   features <- read_gz_rows(path, header = FALSE)
   if (ncol(features) != 3L) stop(sprintf("Expected three columns in %s", path), call. = FALSE)
@@ -904,10 +1048,16 @@ read_xenium_features <- function(path) {
   features
 }
 
+# Purpose: Read xenium barcodes.
+# Inputs: required: path.
+# Output: Returns parsed, validated R data (vector, data frame, sparse matrix bundle, or named list according to the input format).
 read_xenium_barcodes <- function(path) {
   scan(gzfile(path), what = character(), quiet = TRUE)
 }
 
+# Purpose: Import xenium mex.
+# Inputs: required: region_dir.
+# Output: Returns parsed, validated R data (vector, data frame, sparse matrix bundle, or named list according to the input format).
 import_xenium_mex <- function(region_dir) {
   require_package("Matrix")
   matrix_dir <- file.path(region_dir, "cell_feature_matrix")
@@ -939,12 +1089,18 @@ import_xenium_mex <- function(region_dir) {
   )
 }
 
+# Purpose: Safe quantile.
+# Inputs: required: x, probability.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 safe_quantile <- function(x, probability) {
   x <- x[is.finite(x)]
   if (!length(x)) return(NA_real_)
   unname(stats::quantile(x, probability, names = FALSE, na.rm = TRUE, type = 7))
 }
 
+# Purpose: Robust interval.
+# Inputs: required: x; optional/defaulted: lower_mads, upper_mads, floor_value.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 robust_interval <- function(x, lower_mads = 3, upper_mads = 5, floor_value = -Inf) {
   x <- x[is.finite(x)]
   if (!length(x)) stop("Cannot calculate a robust interval from empty data.", call. = FALSE)
@@ -960,7 +1116,72 @@ robust_interval <- function(x, lower_mads = 3, upper_mads = 5, floor_value = -In
   c(lower = max(floor_value, lower), upper = upper, median = median_value, mad = mad_value, method = method)
 }
 
-calculate_xenium_cell_qc <- function(counts, cells, region_id) {
+#' Read and validate the prespecified Xenium cell-complexity thresholds.
+#'
+#' @param path Existing TSV with columns metric, bound, value, inclusive, and
+#'   purpose. Exactly one lower and upper row is required for nFeature_Xenium
+#'   and nCount_Xenium; this pipeline requires all four bounds to be exclusive.
+#' @return Named list with numeric feature_lower, feature_upper, count_lower,
+#'   and count_upper values used by calculate_xenium_cell_qc().
+read_fixed_cell_qc_thresholds <- function(path) {
+  if (!file.exists(path)) stop(sprintf("Fixed cell-QC threshold file not found: %s", path), call. = FALSE)
+  thresholds <- utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
+  required <- c("metric", "bound", "value", "inclusive", "purpose")
+  missing <- setdiff(required, names(thresholds))
+  if (length(missing)) stop(sprintf("Fixed cell-QC thresholds missing columns: %s", paste(missing, collapse = ", ")), call. = FALSE)
+  expected_keys <- c(
+    "nFeature_Xenium::lower", "nFeature_Xenium::upper",
+    "nCount_Xenium::lower", "nCount_Xenium::upper"
+  )
+  keys <- paste(thresholds$metric, thresholds$bound, sep = "::")
+  if (nrow(thresholds) != 4L || anyDuplicated(keys) || !setequal(keys, expected_keys)) {
+    stop("Fixed cell-QC thresholds must contain exactly one lower and upper row for nFeature_Xenium and nCount_Xenium.", call. = FALSE)
+  }
+  inclusive <- toupper(trimws(as.character(thresholds$inclusive)))
+  if (any(inclusive != "FALSE")) stop("The approved Xenium primary bounds must all be exclusive.", call. = FALSE)
+  values <- suppressWarnings(as.numeric(thresholds$value))
+  if (anyNA(values) || any(!is.finite(values))) stop("Fixed cell-QC threshold values must be finite numbers.", call. = FALSE)
+  value_for <- function(metric, bound) values[keys == paste(metric, bound, sep = "::")][[1L]]
+  out <- list(
+    feature_lower = value_for("nFeature_Xenium", "lower"),
+    feature_upper = value_for("nFeature_Xenium", "upper"),
+    count_lower = value_for("nCount_Xenium", "lower"),
+    count_upper = value_for("nCount_Xenium", "upper")
+  )
+  if (out$feature_lower >= out$feature_upper || out$count_lower >= out$count_upper) {
+    stop("Each fixed cell-QC lower bound must be smaller than its upper bound.", call. = FALSE)
+  }
+  out
+}
+
+#' Apply the approved fixed, open-interval Xenium primary bounds.
+#'
+#' @param n_feature Numeric detected-gene counts per cell.
+#' @param n_count Numeric transcript counts per cell, aligned to n_feature.
+#' @param fixed_thresholds Named list returned by
+#'   read_fixed_cell_qc_thresholds().
+#' @return Logical vector; TRUE only when both metrics lie strictly inside
+#'   their configured lower and upper bounds.
+apply_fixed_primary_bounds <- function(n_feature, n_count, fixed_thresholds) {
+  required <- c("feature_lower", "feature_upper", "count_lower", "count_upper")
+  if (!is.list(fixed_thresholds) || length(setdiff(required, names(fixed_thresholds)))) {
+    stop("fixed_thresholds must be returned by read_fixed_cell_qc_thresholds().", call. = FALSE)
+  }
+  if (length(n_feature) != length(n_count)) stop("n_feature and n_count must have equal length.", call. = FALSE)
+  n_feature > fixed_thresholds$feature_lower & n_feature < fixed_thresholds$feature_upper &
+    n_count > fixed_thresholds$count_lower & n_count < fixed_thresholds$count_upper
+}
+
+#' Calculate per-cell Xenium QC metrics without deleting or modifying raw data.
+#'
+#' @param counts Sparse gene-by-cell raw-count matrix with cell IDs as columns.
+#' @param cells Cell metadata aligned exactly to the count-matrix columns.
+#' @param region_id Single Xenium region identifier.
+#' @param fixed_thresholds Validated fixed-threshold list from
+#'   read_fixed_cell_qc_thresholds().
+#' @return List with cell_metadata (metrics and flags), thresholds (auditable
+#'   cutoffs/methods), and summary (one-row cell counts for the region).
+calculate_xenium_cell_qc <- function(counts, cells, region_id, fixed_thresholds) {
   require_package("Matrix")
   required <- c("cell_id", "total_counts", "control_probe_counts", "genomic_control_counts", "control_codeword_counts", "cell_area", "nucleus_count")
   missing <- setdiff(required, names(cells))
@@ -968,19 +1189,21 @@ calculate_xenium_cell_qc <- function(counts, cells, region_id) {
   if (!identical(colnames(counts), cells$cell_id)) stop("Count columns and cell metadata are not aligned.", call. = FALSE)
   n_count <- as.numeric(Matrix::colSums(counts))
   n_feature <- as.numeric(Matrix::colSums(counts > 0))
-  count_bounds <- robust_interval(n_count, 3, 5, 1)
-  feature_bounds <- robust_interval(n_feature, 3, 5, 1)
+  count_descriptive <- robust_interval(n_count, 3, 5, 1)
+  feature_descriptive <- robust_interval(n_feature, 3, 5, 1)
   area_bounds <- robust_interval(cells$cell_area, 5, 5, 0)
   control_count <- cells$control_probe_counts + cells$genomic_control_counts + cells$control_codeword_counts
   control_fraction <- ifelse(cells$total_counts > 0, control_count / cells$total_counts, 0)
   control_upper <- max(0.05, safe_quantile(control_fraction, 0.995))
-  qc_core_pass <- n_count >= as.numeric(count_bounds["lower"]) & n_count <= as.numeric(count_bounds["upper"]) &
-    n_feature >= as.numeric(feature_bounds["lower"]) & n_feature <= as.numeric(feature_bounds["upper"])
+  qc_core_pass <- apply_fixed_primary_bounds(n_feature, n_count, fixed_thresholds)
   nucleus_missing <- cells$nucleus_count == 0
   multiple_nuclei <- cells$nucleus_count > 1
   area_outlier <- cells$cell_area < as.numeric(area_bounds["lower"]) | cells$cell_area > as.numeric(area_bounds["upper"])
   high_control <- control_fraction > control_upper
-  high_complexity <- n_count > as.numeric(count_bounds["upper"]) | n_feature > as.numeric(feature_bounds["upper"])
+  # Robust high-tail limits remain diagnostic evidence for a possible
+  # segmentation multiplet. They do not define qc_core_pass or primary_include.
+  high_complexity <- n_count > as.numeric(count_descriptive["upper"]) |
+    n_feature > as.numeric(feature_descriptive["upper"])
   segmentation_multiplet <- multiple_nuclei | (high_complexity & cells$cell_area > as.numeric(area_bounds["upper"]))
   out <- cells
   out$region_id <- region_id; out$nCount_Xenium <- n_count; out$nFeature_Xenium <- n_feature
@@ -990,8 +1213,8 @@ calculate_xenium_cell_qc <- function(counts, cells, region_id) {
   out$qc_core_pass <- qc_core_pass
   out$qc_review_flag <- nucleus_missing | segmentation_multiplet | area_outlier | high_control | !qc_core_pass
   thresholds <- rbind(
-    data.frame(metric = "nCount_Xenium", lower = as.numeric(count_bounds["lower"]), upper = as.numeric(count_bounds["upper"]), value = as.numeric(count_bounds["median"]), method = count_bounds["method"]),
-    data.frame(metric = "nFeature_Xenium", lower = as.numeric(feature_bounds["lower"]), upper = as.numeric(feature_bounds["upper"]), value = as.numeric(feature_bounds["median"]), method = feature_bounds["method"]),
+    data.frame(metric = "nCount_Xenium", lower = fixed_thresholds$count_lower, upper = fixed_thresholds$count_upper, value = stats::median(n_count), method = "fixed_exclusive_user_approved"),
+    data.frame(metric = "nFeature_Xenium", lower = fixed_thresholds$feature_lower, upper = fixed_thresholds$feature_upper, value = stats::median(n_feature), method = "fixed_exclusive_user_approved"),
     data.frame(metric = "cell_area", lower = as.numeric(area_bounds["lower"]), upper = as.numeric(area_bounds["upper"]), value = as.numeric(area_bounds["median"]), method = area_bounds["method"]),
     data.frame(metric = "control_fraction_cell", lower = 0, upper = control_upper, value = stats::median(control_fraction), method = "max_5pct_or_q99.5")
   )
@@ -1007,6 +1230,9 @@ calculate_xenium_cell_qc <- function(counts, cells, region_id) {
   list(cell_metadata = out, thresholds = thresholds, summary = summary)
 }
 
+# Purpose: Overall readiness.
+# Inputs: required: status.
+# Output: Returns a deterministic scalar, vector, path, status, or empty-schema object used by downstream functions.
 overall_readiness <- function(status) {
   status <- toupper(as.character(status))
   if (any(status %in% c("FAIL", "HOLD", "BLOCKED"))) return("HOLD")
@@ -1014,6 +1240,9 @@ overall_readiness <- function(status) {
   "PASS"
 }
 
+# Purpose: Calculate readiness gates.
+# Inputs: required: inventory, integrity, panel_reconciliation, alarms, manifest.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 calculate_readiness_gates <- function(inventory, integrity, panel_reconciliation, alarms, manifest) {
   alarm_levels <- if (nrow(alarms) && "level" %in% names(alarms)) toupper(alarms$level) else character()
   panel_bad <- if (nrow(panel_reconciliation)) sum(panel_reconciliation$status %in% c("MISSING", "EXTRA")) else 0L
@@ -1030,10 +1259,16 @@ calculate_readiness_gates <- function(inventory, integrity, panel_reconciliation
   gates
 }
 
+# Purpose: Section palette.
+# Inputs: none.
+# Output: Returns a deterministic scalar, vector, path, status, or empty-schema object used by downstream functions.
 section_palette <- function() {
   c(Region_1 = "#3C5488", Region_2 = "#00A087", Region_3 = "#E64B35", Region_4 = "#F39B7F")
 }
 
+# Purpose: Section downstream status.
+# Inputs: required: region_id.
+# Output: Returns a deterministic scalar, vector, path, status, or empty-schema object used by downstream functions.
 section_downstream_status <- function(region_id) {
   status <- c(
     Region_1 = "PRIMARY_CONDITIONAL",
@@ -1049,6 +1284,14 @@ section_downstream_status <- function(region_id) {
   unname(status[region_id])
 }
 
+#' Build provenance-preserving primary and sensitivity cell masks.
+#'
+#' @param cell_metadata Per-cell QC metadata from calculate_xenium_cell_qc().
+#' @param spatial_hotspots Optional hotspot table with grid_id and
+#'   hotspot_status; used only for the Region 3 hotspot sensitivity mask.
+#' @param provenance Non-empty run identifier written to every output row.
+#' @return Original cell metadata plus primary_include, strict_include,
+#'   hotspot_sensitivity_include, section status, rule text, and provenance.
 build_cell_downstream_masks <- function(cell_metadata, spatial_hotspots = data.frame(), provenance) {
   required <- c(
     "region_id", "cell_id", "qc_core_pass", "segmentation_multiplet_flag",
@@ -1065,9 +1308,11 @@ build_cell_downstream_masks <- function(cell_metadata, spatial_hotspots = data.f
     stop("A non-empty provenance value is required for downstream masks.", call. = FALSE)
   }
   out <- cell_metadata
-  out$primary_include <- as.logical(out$qc_core_pass) &
-    !as.logical(out$segmentation_multiplet_flag) & !as.logical(out$high_control_flag)
-  out$strict_include <- !as.logical(out$qc_review_flag)
+  # Primary is the prespecified fixed feature/count cohort. Segmentation,
+  # control, nucleus, and area evidence remains visible in review fields and is
+  # excluded by strict_include rather than silently redefining primary_include.
+  out$primary_include <- as.logical(out$qc_core_pass)
+  out$strict_include <- out$primary_include & !as.logical(out$qc_review_flag)
   hotspot_ids <- character()
   if (nrow(spatial_hotspots)) {
     hotspot_required <- c("grid_id", "hotspot_status")
@@ -1083,13 +1328,16 @@ build_cell_downstream_masks <- function(cell_metadata, spatial_hotspots = data.f
   }
   out$hotspot_sensitivity_include <- out$primary_include & !out$hotspot_review_cell
   out$section_status <- section_downstream_status(out$region_id)
-  out$mask_rule_primary <- "qc_core_pass AND NOT segmentation_multiplet_flag AND NOT high_control_flag"
-  out$mask_rule_strict <- "NOT qc_review_flag"
+  out$mask_rule_primary <- "nFeature_Xenium > 5 AND nFeature_Xenium < 200 AND nCount_Xenium > 10 AND nCount_Xenium < 1000"
+  out$mask_rule_strict <- "primary_include AND NOT qc_review_flag"
   out$mask_rule_hotspot_sensitivity <- "primary_include AND NOT Region_3 morphology-review hotspot cell"
   out$provenance <- provenance
   out
 }
 
+# Purpose: Cell style theme.
+# Inputs: optional/defaulted: base_size.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 cell_style_theme <- function(base_size = 14) {
   require_package("ggplot2")
   ggplot2::theme_classic(base_size = base_size) +
@@ -1103,6 +1351,9 @@ cell_style_theme <- function(base_size = 14) {
     )
 }
 
+# Purpose: Plot section qc.
+# Inputs: required: cell_metadata, region_id.
+# Output: Returns a ggplot object or named list of plots; plotting does not mutate the input object.
 plot_section_qc <- function(cell_metadata, region_id) {
   require_package("ggplot2")
   colour <- unname(section_palette()[region_id])
@@ -1125,6 +1376,9 @@ plot_section_qc <- function(cell_metadata, region_id) {
   )
 }
 
+# Purpose: Save section plots.
+# Inputs: required: plots, figure_dir, region_id, project_root.
+# Output: Writes validated artifact file(s) and returns their path(s) invisibly or as a named path list.
 save_section_plots <- function(plots, figure_dir, region_id, project_root) {
   require_package("ggplot2")
   assert_path_within(project_root, figure_dir)
@@ -1141,6 +1395,9 @@ save_section_plots <- function(plots, figure_dir, region_id, project_root) {
   c(pdf_path, unname(png_paths))
 }
 
+# Purpose: Write gz tsv.
+# Inputs: required: x, path, project_root.
+# Output: Writes validated artifact file(s) and returns their path(s) invisibly or as a named path list.
 write_gz_tsv <- function(x, path, project_root) {
   assert_path_within(project_root, path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
@@ -1149,6 +1406,9 @@ write_gz_tsv <- function(x, path, project_root) {
   invisible(path)
 }
 
+# Purpose: Plot extended spatial qc.
+# Inputs: required: spatial_cells, spatial_edge_density, spatial_hotspots, region_id.
+# Output: Returns a ggplot object or named list of plots; plotting does not mutate the input object.
 plot_extended_spatial_qc <- function(spatial_cells, spatial_edge_density, spatial_hotspots, region_id) {
   require_package("ggplot2")
   validate_spatial_cells(spatial_cells)
@@ -1193,6 +1453,9 @@ plot_extended_spatial_qc <- function(spatial_cells, spatial_edge_density, spatia
   )
 }
 
+# Purpose: Extended section required artifacts.
+# Inputs: required: region_id; optional/defaulted: mode.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 extended_section_required_artifacts <- function(region_id, mode = "LOCAL_SUBSET") {
   mode <- toupper(as.character(mode))
   if (length(mode) != 1L || !mode %in% c("LOCAL_SUBSET", "FULL_HPC")) stop("Extended section artifact mode must be LOCAL_SUBSET or FULL_HPC.", call. = FALSE)
@@ -1204,6 +1467,9 @@ extended_section_required_artifacts <- function(region_id, mode = "LOCAL_SUBSET"
   )
 }
 
+# Purpose: Save extended spatial plots.
+# Inputs: required: plots, figure_dir, region_id, project_root.
+# Output: Writes validated artifact file(s) and returns their path(s) invisibly or as a named path list.
 save_extended_spatial_plots <- function(plots, figure_dir, region_id, project_root) {
   require_package("ggplot2")
   if (!length(plots) || any(!vapply(plots, inherits, logical(1), what = "ggplot"))) stop("Extended spatial plots must be a non-empty named list of ggplot objects.", call. = FALSE)
@@ -1217,6 +1483,9 @@ save_extended_spatial_plots <- function(plots, figure_dir, region_id, project_ro
   pdf_path
 }
 
+# Purpose: Write extended section artifacts.
+# Inputs: required: project_root, output_dir, region_id, mode, preflight, cycle_alarm_evidence, gene_quality, spatial_global, spatial_edge_density, spatial_hotspots, spatial_cells, manual_review_manifest, plots.
+# Output: Writes validated artifact file(s) and returns their path(s) invisibly or as a named path list.
 write_extended_section_artifacts <- function(project_root, output_dir, region_id, mode, preflight,
                                              cycle_alarm_evidence, gene_quality, spatial_global,
                                              spatial_edge_density, spatial_hotspots, spatial_cells,
@@ -1256,6 +1525,9 @@ write_extended_section_artifacts <- function(project_root, output_dir, region_id
   paths
 }
 
+# Purpose: Read extended section artifacts.
+# Inputs: required: output_dir, region_id; optional/defaulted: mode.
+# Output: Returns parsed, validated R data (vector, data frame, sparse matrix bundle, or named list according to the input format).
 read_extended_section_artifacts <- function(output_dir, region_id, mode = "LOCAL_SUBSET") {
   if (!validate_extended_section_artifacts(output_dir, region_id, mode, stop_on_error = TRUE)) stop("Extended section artifact validation failed.", call. = FALSE)
   read_table <- function(name) utils::read.delim(file.path(output_dir, name), check.names = FALSE, stringsAsFactors = FALSE)
@@ -1272,6 +1544,9 @@ read_extended_section_artifacts <- function(output_dir, region_id, mode = "LOCAL
   )
 }
 
+# Purpose: Validate extended section artifacts.
+# Inputs: required: output_dir, region_id; optional/defaulted: mode, stop_on_error.
+# Output: Returns validation evidence/TRUE (or the validated value) and stops with an informative error when the contract fails.
 validate_extended_section_artifacts <- function(output_dir, region_id, mode = "LOCAL_SUBSET", stop_on_error = FALSE) {
   fail <- function(message) {
     if (isTRUE(stop_on_error)) stop(message, call. = FALSE)
@@ -1294,6 +1569,9 @@ validate_extended_section_artifacts <- function(output_dir, region_id, mode = "L
   TRUE
 }
 
+# Purpose: Evidence only required artifacts.
+# Inputs: none.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 evidence_only_required_artifacts <- function() {
   c(
     "cell_downstream_masks.tsv.gz",
@@ -1305,6 +1583,9 @@ evidence_only_required_artifacts <- function() {
   )
 }
 
+# Purpose: Add evidence provenance.
+# Inputs: required: table, run_label, execution_mode, provenance, source_artifact, generated_utc.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 add_evidence_provenance <- function(table, run_label, execution_mode, provenance,
                                     source_artifact, generated_utc) {
   table$run_label <- run_label
@@ -1315,6 +1596,9 @@ add_evidence_provenance <- function(table, run_label, execution_mode, provenance
   table
 }
 
+# Purpose: Build one section downstream decision.
+# Inputs: required: masks, run_label, execution_mode, provenance, generated_utc.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 build_one_section_downstream_decision <- function(masks, run_label, execution_mode,
                                                   provenance, generated_utc) {
   regions <- unique(as.character(masks$region_id))
@@ -1331,8 +1615,8 @@ build_one_section_downstream_decision <- function(masks, run_label, execution_mo
     cluster_discovery_eligible = region %in% c("Region_1", "Region_2", "Region_3"),
     primary_gene_result_eligible = region %in% c("Region_1", "Region_2", "Region_3"),
     region4_mapping_rule = if (region == "Region_4") "MAP_TO_FINAL_REGION_1_3_REFERENCE; LOW_CONFIDENCE=Uncertain" else "NOT_APPLICABLE",
-    primary_mask_rule = "qc_core_pass AND NOT segmentation_multiplet_flag AND NOT high_control_flag",
-    strict_mask_rule = "NOT qc_review_flag",
+    primary_mask_rule = "nFeature_Xenium > 5 AND nFeature_Xenium < 200 AND nCount_Xenium > 10 AND nCount_Xenium < 1000",
+    strict_mask_rule = "primary_include AND NOT qc_review_flag",
     hotspot_sensitivity_mask_rule = "primary_include AND NOT Region_3 morphology-review hotspot cell",
     decision_rule = "Fixed evidence-only section decision approved 2026-08-15; masks annotate without deleting raw cells",
     stringsAsFactors = FALSE
@@ -1343,6 +1627,9 @@ build_one_section_downstream_decision <- function(masks, run_label, execution_mo
   )
 }
 
+# Purpose: Build section downstream decision.
+# Inputs: required: masks, run_label, execution_mode, provenance, generated_utc.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 build_section_downstream_decision <- function(masks, run_label, execution_mode,
                                               provenance, generated_utc) {
   regions <- paste0("Region_", 1:4)
@@ -1360,6 +1647,9 @@ build_section_downstream_decision <- function(masks, run_label, execution_mode,
   out
 }
 
+# Purpose: Build hotspot sensitivity decision.
+# Inputs: required: spatial_hotspots, masks, run_label, execution_mode, provenance, generated_utc.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 build_hotspot_sensitivity_decision <- function(spatial_hotspots, masks, run_label,
                                                execution_mode, provenance, generated_utc) {
   positive <- spatial_hotspots[
@@ -1396,6 +1686,9 @@ build_hotspot_sensitivity_decision <- function(spatial_hotspots, masks, run_labe
   )
 }
 
+# Purpose: Build evidence only release.
+# Inputs: required: section_decision, masks, gene_decision, eos_decision, hotspot_decision, run_label, execution_mode, provenance, generated_utc.
+# Output: Returns a newly constructed or annotated R object while preserving the supplied raw object/data rows.
 build_evidence_only_release <- function(section_decision, masks, gene_decision,
                                         eos_decision, hotspot_decision,
                                         run_label, execution_mode, provenance,
@@ -1462,6 +1755,9 @@ build_evidence_only_release <- function(section_decision, masks, gene_decision,
   add_evidence_provenance(out, run_label, execution_mode, provenance, "evidence-only QC decision engine", generated_utc)
 }
 
+# Purpose: Summarise evidence only qc.
+# Inputs: required: extended_slide_data, candidates, eos_gene_sets, run_label, execution_mode, provenance.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 summarise_evidence_only_qc <- function(extended_slide_data, candidates, eos_gene_sets,
                                        run_label, execution_mode, provenance) {
   generated_utc <- format(Sys.time(), tz = "UTC", usetz = TRUE)
@@ -1503,6 +1799,9 @@ summarise_evidence_only_qc <- function(extended_slide_data, candidates, eos_gene
        hotspots = hotspots, release = release)
 }
 
+# Purpose: Write evidence only qc artifacts.
+# Inputs: required: project_root, run_root, evidence_summary.
+# Output: Writes validated artifact file(s) and returns their path(s) invisibly or as a named path list.
 write_evidence_only_qc_artifacts <- function(project_root, run_root, evidence_summary) {
   require_package("Matrix")
   assert_path_within(project_root, run_root)
@@ -1579,6 +1878,9 @@ write_evidence_only_qc_artifacts <- function(project_root, run_root, evidence_su
   all_paths
 }
 
+# Purpose: Validate evidence only qc artifacts.
+# Inputs: required: run_root; optional/defaulted: stop_on_error.
+# Output: Returns validation evidence/TRUE (or the validated value) and stops with an informative error when the contract fails.
 validate_evidence_only_qc_artifacts <- function(run_root, stop_on_error = FALSE) {
   require_package("Matrix")
   fail <- function(message) {
@@ -1610,6 +1912,9 @@ validate_evidence_only_qc_artifacts <- function(run_root, stop_on_error = FALSE)
   TRUE
 }
 
+# Purpose: Extended slide required artifacts.
+# Inputs: none.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 extended_slide_required_artifacts <- function() {
   c(
     "combined_cycle_alarm_evidence.tsv", "combined_gene_transcript_quality.tsv",
@@ -1622,6 +1927,9 @@ extended_slide_required_artifacts <- function() {
   )
 }
 
+# Purpose: Rbind fill.
+# Inputs: required: tables.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 rbind_fill <- function(tables) {
   tables <- tables[vapply(tables, is.data.frame, logical(1))]
   if (!length(tables)) return(data.frame())
@@ -1635,6 +1943,9 @@ rbind_fill <- function(tables) {
   out
 }
 
+# Purpose: Validate four extended section outputs.
+# Inputs: required: run_root; optional/defaulted: expected_regions.
+# Output: Returns validation evidence/TRUE (or the validated value) and stops with an informative error when the contract fails.
 validate_four_extended_section_outputs <- function(run_root, expected_regions = paste0("Region_", 1:4)) {
   sections_root <- file.path(run_root, "sections")
   dirs <- list.dirs(sections_root, recursive = FALSE, full.names = TRUE)
@@ -1660,6 +1971,9 @@ validate_four_extended_section_outputs <- function(run_root, expected_regions = 
   )
 }
 
+# Purpose: Read extended slide qc outputs.
+# Inputs: required: run_root; optional/defaulted: expected_regions.
+# Output: Returns parsed, validated R data (vector, data frame, sparse matrix bundle, or named list according to the input format).
 read_extended_slide_qc_outputs <- function(run_root, expected_regions = paste0("Region_", 1:4)) {
   coverage <- validate_four_extended_section_outputs(run_root, expected_regions)
   bundles <- lapply(seq_len(nrow(coverage)), function(index) {
@@ -1683,6 +1997,9 @@ read_extended_slide_qc_outputs <- function(run_root, expected_regions = paste0("
   )
 }
 
+# Purpose: Summarise extended slide qc.
+# Inputs: required: extended_slide_data, section_summary, manifest, config, subset_reference.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 summarise_extended_slide_qc <- function(extended_slide_data, section_summary, manifest, config, subset_reference) {
   if (!identical(sort(unique(extended_slide_data$gene_quality$region_id)), paste0("Region_", 1:4))) stop("Extended slide gene-quality input must contain Region_1 through Region_4.", call. = FALSE)
   candidates <- rank_candidate_cycle_genes(extended_slide_data$gene_quality, config)
@@ -1725,6 +2042,9 @@ summarise_extended_slide_qc <- function(extended_slide_data, section_summary, ma
   )
 }
 
+# Purpose: Plot extended slide qc.
+# Inputs: required: extended_slide_data, extended_slide_summary.
+# Output: Returns a ggplot object or named list of plots; plotting does not mutate the input object.
 plot_extended_slide_qc <- function(extended_slide_data, extended_slide_summary) {
   require_package("ggplot2")
   palette <- section_palette()
@@ -1762,6 +2082,9 @@ plot_extended_slide_qc <- function(extended_slide_data, extended_slide_summary) 
   )
 }
 
+# Purpose: Write extended slide qc artifacts.
+# Inputs: required: project_root, run_root, extended_slide_data, extended_slide_summary, plots.
+# Output: Writes validated artifact file(s) and returns their path(s) invisibly or as a named path list.
 write_extended_slide_qc_artifacts <- function(project_root, run_root, extended_slide_data, extended_slide_summary, plots) {
   assert_path_within(project_root, run_root)
   output_dir <- file.path(run_root, "slide_summary")
@@ -1791,6 +2114,9 @@ write_extended_slide_qc_artifacts <- function(project_root, run_root, extended_s
   all_paths
 }
 
+# Purpose: Validate extended slide qc artifacts.
+# Inputs: required: run_root; optional/defaulted: stop_on_error.
+# Output: Returns validation evidence/TRUE (or the validated value) and stops with an informative error when the contract fails.
 validate_extended_slide_qc_artifacts <- function(run_root, stop_on_error = FALSE) {
   fail <- function(message) {
     if (isTRUE(stop_on_error)) stop(message, call. = FALSE)
@@ -1807,6 +2133,9 @@ validate_extended_slide_qc_artifacts <- function(run_root, stop_on_error = FALSE
   TRUE
 }
 
+# Purpose: Section required artifacts.
+# Inputs: required: region_id.
+# Output: Returns a deterministic scalar, vector, path, status, or empty-schema object used by downstream functions.
 section_required_artifacts <- function(region_id) {
   c(
     "configuration.tsv", "section_manifest.tsv", "environment_preflight.tsv", "file_inventory.tsv",
@@ -1821,6 +2150,9 @@ section_required_artifacts <- function(region_id) {
   )
 }
 
+# Purpose: Write section artifacts.
+# Inputs: required: project_root, output_dir, region_id, configuration, manifest, environment, inventory, integrity, feature_type_summary, panel_reconciliation, alarms, qc, counts, features; optional/defaulted: strict_mode.
+# Output: Writes validated artifact file(s) and returns their path(s) invisibly or as a named path list.
 write_section_artifacts <- function(project_root, output_dir, region_id, configuration, manifest, environment,
                                     inventory, integrity, feature_type_summary, panel_reconciliation, alarms,
                                     qc, counts, features, strict_mode = FALSE) {
@@ -1846,6 +2178,9 @@ write_section_artifacts <- function(project_root, output_dir, region_id, configu
   paths
 }
 
+# Purpose: Validate section artifacts.
+# Inputs: required: output_dir, region_id.
+# Output: Returns validation evidence/TRUE (or the validated value) and stops with an informative error when the contract fails.
 validate_section_artifacts <- function(output_dir, region_id) {
   require_package("Matrix")
   paths <- file.path(output_dir, section_required_artifacts(region_id))
@@ -1854,10 +2189,16 @@ validate_section_artifacts <- function(output_dir, region_id) {
   inherits(object$counts, "sparseMatrix") && ncol(object$counts) == nrow(object$cells) && identical(colnames(object$counts), object$cells$cell_id)
 }
 
+# Purpose: Slide section required files.
+# Inputs: none.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 slide_section_required_files <- function() {
   c("qc_summary.tsv", "qc_thresholds.tsv", "section_readiness_gates.tsv", "analysis_alerts.tsv", "cell_qc_metadata.tsv.gz")
 }
 
+# Purpose: Validate four section outputs.
+# Inputs: required: run_root; optional/defaulted: expected_regions.
+# Output: Returns validation evidence/TRUE (or the validated value) and stops with an informative error when the contract fails.
 validate_four_section_outputs <- function(run_root, expected_regions = paste0("Region_", 1:4)) {
   sections_root <- file.path(run_root, "sections")
   dirs <- list.dirs(sections_root, recursive = FALSE, full.names = TRUE)
@@ -1878,6 +2219,9 @@ validate_four_section_outputs <- function(run_root, expected_regions = paste0("R
   data.frame(region_id = region_ids, section_output_dir = normalizePath(dirs, winslash = "/", mustWork = TRUE), stringsAsFactors = FALSE)
 }
 
+# Purpose: Read slide qc outputs.
+# Inputs: required: run_root; optional/defaulted: expected_regions.
+# Output: Returns parsed, validated R data (vector, data frame, sparse matrix bundle, or named list according to the input format).
 read_slide_qc_outputs <- function(run_root, expected_regions = paste0("Region_", 1:4)) {
   coverage <- validate_four_section_outputs(run_root, expected_regions)
   read_one <- function(filename, gzipped = FALSE) {
@@ -1897,6 +2241,9 @@ read_slide_qc_outputs <- function(run_root, expected_regions = paste0("Region_",
   )
 }
 
+# Purpose: Summarise slide qc.
+# Inputs: required: slide_data.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 summarise_slide_qc <- function(slide_data) {
   summary <- slide_data$qc_summary
   summary$core_pass_fraction <- ifelse(summary$input_cells > 0, summary$core_qc_pass / summary$input_cells, NA_real_)
@@ -1910,6 +2257,9 @@ summarise_slide_qc <- function(slide_data) {
   list(section_summary = summary, readiness = readiness, overall_status = overall_status)
 }
 
+# Purpose: Plot slide qc.
+# Inputs: required: slide_data, slide_summary.
+# Output: Returns a ggplot object or named list of plots; plotting does not mutate the input object.
 plot_slide_qc <- function(slide_data, slide_summary) {
   require_package("ggplot2")
   palette <- section_palette()
@@ -1943,405 +2293,9 @@ plot_slide_qc <- function(slide_data, slide_summary) {
   )
 }
 
-read_downstream_reference_config <- function(path) {
-  if (!file.exists(path)) stop(sprintf("Missing downstream reference config: %s", path), call. = FALSE)
-  table <- utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
-  required_columns <- c("key", "value", "description")
-  if (length(setdiff(required_columns, names(table)))) {
-    stop("Downstream reference config must contain key, value, and description columns.", call. = FALSE)
-  }
-  if (!nrow(table) || any(!nzchar(table$key)) || anyDuplicated(table$key)) {
-    stop("Downstream reference config keys must be non-empty and unique.", call. = FALSE)
-  }
-  required_keys <- c(
-    "seed", "normalization_scale_factor", "primary_gene_count", "conservative_gene_count",
-    "technical_risk_gene_count", "raw_gene_count", "n_pcs", "knn_k", "leiden_resolution", "marker_score_margin",
-    "seurat_min_version", "harmony_min_version", "harmony_theta", "harmony_lambda",
-    "harmony_sigma", "harmony_max_iter", "harmony_reference_region", "mapping_folds",
-    "mapping_k", "mapping_confidence_quantile", "mapping_distance_quantile",
-    "mapping_min_label_cells", "major_label_fraction", "major_label_cells",
-    "section_cluster_dominance", "section_cluster_min_cells", "label_stability_min",
-    "gene_sensitivity_concordance_min", "section_predictability_permutations",
-    "section_predictability_margin", "eos_assignment_jaccard_min", "eos_score_spearman_min",
-    "eos_module_nbin", "eos_module_ctrl", "marker_detection_min",
-    "marker_average_log_expression_min", "exclusion_contradiction_max",
-    "mapping_accepted_fraction_min", "mapping_unrepresented_fraction_review",
-    "mapping_marker_coherence_min", "mapping_label_stability_min",
-    "consensus_label_stability_min", "eos_identity_min_markers",
-    "eos_identity_detection_min", "eos_state_min_genes_detected"
-  )
-  missing_keys <- setdiff(required_keys, table$key)
-  if (length(missing_keys)) {
-    stop(sprintf("Downstream reference config is missing required keys: %s", paste(missing_keys, collapse = ", ")), call. = FALSE)
-  }
-  integer_keys <- c(
-    "seed", "primary_gene_count", "conservative_gene_count", "technical_risk_gene_count",
-    "raw_gene_count", "n_pcs", "knn_k", "harmony_max_iter", "mapping_folds",
-    "mapping_k", "mapping_min_label_cells", "major_label_cells",
-    "section_cluster_min_cells", "section_predictability_permutations",
-    "eos_module_nbin", "eos_module_ctrl", "eos_identity_min_markers",
-    "eos_state_min_genes_detected"
-  )
-  numeric_keys <- c(
-    "normalization_scale_factor", "leiden_resolution", "marker_score_margin", "harmony_theta", "harmony_lambda",
-    "harmony_sigma", "mapping_confidence_quantile", "mapping_distance_quantile",
-    "major_label_fraction", "section_cluster_dominance", "label_stability_min",
-    "gene_sensitivity_concordance_min", "section_predictability_margin",
-    "eos_assignment_jaccard_min", "eos_score_spearman_min", "marker_score_margin",
-    "marker_detection_min", "marker_average_log_expression_min",
-    "exclusion_contradiction_max", "mapping_accepted_fraction_min",
-    "mapping_unrepresented_fraction_review", "mapping_marker_coherence_min",
-    "mapping_label_stability_min", "consensus_label_stability_min",
-    "eos_identity_detection_min"
-  )
-  values <- setNames(as.list(table$value), table$key)
-  for (key in intersect(integer_keys, names(values))) values[[key]] <- as.integer(values[[key]])
-  for (key in intersect(numeric_keys, names(values))) values[[key]] <- as.numeric(values[[key]])
-  invalid_integer <- integer_keys[!vapply(values[integer_keys], function(value) {
-    length(value) == 1L && !is.na(value) && is.finite(value) && value >= 1L
-  }, logical(1))]
-  if (length(invalid_integer)) {
-    stop(sprintf("Downstream reference config requires a positive integer for: %s", paste(invalid_integer, collapse = ", ")), call. = FALSE)
-  }
-  invalid_numeric <- numeric_keys[!vapply(values[numeric_keys], function(value) {
-    length(value) == 1L && !is.na(value) && is.finite(value)
-  }, logical(1))]
-  if (length(invalid_numeric)) {
-    stop(sprintf("Downstream reference config requires a finite numeric value for: %s", paste(invalid_numeric, collapse = ", ")), call. = FALSE)
-  }
-  open_unit_keys <- c("mapping_confidence_quantile", "mapping_distance_quantile")
-  invalid_open_unit <- open_unit_keys[!vapply(values[open_unit_keys], function(value) value > 0 && value < 1, logical(1))]
-  if (length(invalid_open_unit)) {
-    stop(sprintf("Downstream reference config values must be between 0 and 1 (exclusive) for: %s", paste(invalid_open_unit, collapse = ", ")), call. = FALSE)
-  }
-  closed_unit_keys <- c(
-    "major_label_fraction", "section_cluster_dominance", "label_stability_min",
-    "gene_sensitivity_concordance_min", "section_predictability_margin",
-    "eos_assignment_jaccard_min", "eos_score_spearman_min",
-    "marker_detection_min", "exclusion_contradiction_max",
-    "mapping_accepted_fraction_min", "mapping_unrepresented_fraction_review",
-    "mapping_marker_coherence_min", "mapping_label_stability_min",
-    "consensus_label_stability_min", "eos_identity_detection_min"
-  )
-  invalid_closed_unit <- closed_unit_keys[!vapply(values[closed_unit_keys], function(value) value >= 0 && value <= 1, logical(1))]
-  if (length(invalid_closed_unit)) {
-    stop(sprintf("Downstream reference config values must be between 0 and 1 for: %s", paste(invalid_closed_unit, collapse = ", ")), call. = FALSE)
-  }
-  values
-}
-
-read_canonical_marker_config <- function(path, panel_genes, gene_decision) {
-  if (!file.exists(path)) stop(sprintf("Missing canonical marker config: %s", path), call. = FALSE)
-  markers <- utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
-  required <- c("cell_type", "gene", "direction", "marker_group", "use_policy")
-  if (length(setdiff(required, names(markers)))) {
-    stop("Canonical marker config lacks required columns.", call. = FALSE)
-  }
-  if (!length(panel_genes) || anyDuplicated(panel_genes)) stop("Panel genes must be non-empty and unique.", call. = FALSE)
-  gene_required <- c("gene", "technical_risk_status")
-  if (length(setdiff(gene_required, names(gene_decision))) || anyDuplicated(gene_decision$gene)) {
-    stop("Gene decision must contain unique gene and technical_risk_status columns.", call. = FALSE)
-  }
-  markers <- markers[markers$gene %in% panel_genes, required, drop = FALSE]
-  if (!nrow(markers)) stop("No configured canonical markers are present in the panel.", call. = FALSE)
-  risk_genes <- gene_decision$gene[
-    gene_decision$technical_risk_status == "TECHNICAL_RISK_SENSITIVITY_ONLY"
-  ]
-  markers$use_policy <- ifelse(
-    markers$gene %in% risk_genes,
-    "VALIDATION_ONLY_TECHNICAL_RISK",
-    "PRIMARY_SUPPORT"
-  )
-  marker_counts <- table(markers$cell_type)
-  markers$cell_type_panel_marker_count <- as.integer(marker_counts[markers$cell_type])
-  markers$cell_type_support_status <- ifelse(
-    markers$cell_type_panel_marker_count >= 2L,
-    "SUPPORTED",
-    "INSUFFICIENT_PANEL_SUPPORT"
-  )
-  rownames(markers) <- NULL
-  markers
-}
-
-read_downstream_handoff <- function(qc_run_root, release_path = NULL) {
-  if (!dir.exists(qc_run_root)) stop(sprintf("Missing Phase 0-2 QC run root: %s", qc_run_root), call. = FALSE)
-  region_ids <- paste0("Region_", seq_len(4L))
-  bundle_paths <- file.path(qc_run_root, "downstream_inputs", paste0(region_ids, ".downstream_input.rds"))
-  slide_root <- file.path(qc_run_root, "slide_summary")
-  table_paths <- c(
-    gene_decision = file.path(slide_root, "gene_downstream_decision.tsv"),
-    eos_decision = file.path(slide_root, "eos_gene_decision_summary.tsv"),
-    section_decision = file.path(slide_root, "section_downstream_decision.tsv"),
-    masks = file.path(slide_root, "cell_downstream_masks.tsv.gz"),
-    release = release_path %||% file.path(slide_root, "evidence_only_qc_release.tsv")
-  )
-  missing <- c(bundle_paths[!file.exists(bundle_paths)], table_paths[!file.exists(table_paths)])
-  if (length(missing)) stop(sprintf("Missing downstream handoff artifacts: %s", paste(missing, collapse = ", ")), call. = FALSE)
-  regions <- setNames(lapply(bundle_paths, readRDS), region_ids)
-  list(
-    qc_run_root = normalizePath(qc_run_root, winslash = "/", mustWork = TRUE),
-    release_path = normalizePath(table_paths[["release"]], winslash = "/", mustWork = TRUE),
-    regions = regions,
-    gene_decision = utils::read.delim(table_paths[["gene_decision"]], check.names = FALSE),
-    eos_decision = utils::read.delim(table_paths[["eos_decision"]], check.names = FALSE),
-    section_decision = utils::read.delim(table_paths[["section_decision"]], check.names = FALSE),
-    masks = utils::read.delim(gzfile(table_paths[["masks"]]), check.names = FALSE),
-    release = utils::read.delim(table_paths[["release"]], check.names = FALSE)
-  )
-}
-
-validate_downstream_handoff <- function(qc_run_root, release_path = NULL, stop_on_error = TRUE) {
-  handoff <- read_downstream_handoff(qc_run_root, release_path)
-  region_ids <- paste0("Region_", seq_len(4L))
-  expected_status <- c("PRIMARY_CONDITIONAL", "PRIMARY_CONDITIONAL", "PRIMARY", "SENSITIVITY_ONLY")
-  expected_contract <- c(rep("REFERENCE_ELIGIBILITY_FROM_CELL_MASKS", 3L), "MAP_TO_REGION_1_3_REFERENCE_WITH_UNCERTAIN")
-  checks <- list()
-  add_check <- function(check, passed, details) {
-    checks[[length(checks) + 1L]] <<- data.frame(
-      check = check, status = if (isTRUE(passed)) "PASS" else "FAIL",
-      details = as.character(details), stringsAsFactors = FALSE
-    )
-  }
-
-  add_check("four_region_bundles", identical(names(handoff$regions), region_ids), paste(names(handoff$regions), collapse = ","))
-  bundle_regions <- vapply(handoff$regions, function(bundle) as.character(bundle$region_id %||% ""), character(1))
-  bundle_status <- vapply(handoff$regions, function(bundle) as.character(bundle$section_status %||% ""), character(1))
-  bundle_contract <- vapply(handoff$regions, function(bundle) as.character(bundle$downstream_contract %||% ""), character(1))
-  add_check("bundle_region_identity", identical(unname(bundle_regions), region_ids), paste(bundle_regions, collapse = ","))
-  add_check("section_status_contract", identical(unname(bundle_status), expected_status), paste(bundle_status, collapse = ","))
-  add_check("region4_mapping_only_contract", identical(unname(bundle_contract), expected_contract), paste(bundle_contract, collapse = ","))
-
-  sparse_ok <- vapply(handoff$regions, function(bundle) inherits(bundle$counts, "sparseMatrix"), logical(1))
-  raw_ok <- vapply(handoff$regions, function(bundle) isTRUE(bundle$raw_counts_preserved), logical(1))
-  add_check("sparse_raw_counts", all(sparse_ok & raw_ok), sprintf("sparse=%d/4; preserved=%d/4", sum(sparse_ok), sum(raw_ok)))
-
-  alignment_ok <- vapply(handoff$regions, function(bundle) {
-    counts <- bundle$counts
-    cells <- bundle$cell_metadata
-    genes <- bundle$gene_sets$raw_complete_panel
-    !is.null(counts) && is.data.frame(cells) && length(genes) == nrow(counts) &&
-      identical(colnames(counts), as.character(cells$cell_id)) &&
-      setequal(rownames(counts), as.character(genes)) &&
-      !anyDuplicated(cells$cell_id) && !anyDuplicated(rownames(counts)) && !anyDuplicated(genes)
-  }, logical(1))
-  add_check("matrix_cell_gene_alignment", all(alignment_ok), paste(names(alignment_ok)[!alignment_ok], collapse = ","))
-
-  all_cells <- do.call(rbind, lapply(handoff$regions, function(bundle) bundle$cell_metadata[, c("region_id", "cell_id"), drop = FALSE]))
-  add_check("global_cell_identity", !anyDuplicated(paste(all_cells$region_id, all_cells$cell_id, sep = "|")), sprintf("cells=%d", nrow(all_cells)))
-
-  required_mask_columns <- c("region_id", "cell_id", "primary_include", "strict_include", "hotspot_sensitivity_include")
-  bundle_cell_keys <- sort(paste(all_cells$region_id, all_cells$cell_id, sep = "|"))
-  mask_cell_keys <- if (all(c("region_id", "cell_id") %in% names(handoff$masks))) {
-    sort(paste(handoff$masks$region_id, handoff$masks$cell_id, sep = "|"))
-  } else {
-    character()
-  }
-  masks_ok <- !length(setdiff(required_mask_columns, names(handoff$masks))) &&
-    !anyDuplicated(paste(handoff$masks$region_id, handoff$masks$cell_id, sep = "|")) &&
-    nrow(handoff$masks) == nrow(all_cells) &&
-    identical(mask_cell_keys, bundle_cell_keys) &&
-    all(!handoff$masks$strict_include | handoff$masks$primary_include) &&
-    all(!handoff$masks$hotspot_sensitivity_include | handoff$masks$primary_include)
-  add_check("cell_mask_contract", masks_ok, sprintf("mask_rows=%d; bundle_cells=%d", nrow(handoff$masks), nrow(all_cells)))
-
-  gene <- handoff$gene_decision
-  gene_ok <- all(c("gene", "primary_feature_status", "conservative_evidence_status", "technical_risk_status") %in% names(gene)) &&
-    nrow(gene) == 479L && !anyDuplicated(gene$gene) &&
-    sum(gene$primary_feature_status == "PROVISIONAL_PRIMARY_FEATURES") == 245L &&
-    sum(gene$conservative_evidence_status == "CONSERVATIVE_NO_SIGNAL_DETECTED") == 67L &&
-    sum(gene$technical_risk_status == "TECHNICAL_RISK_SENSITIVITY_ONLY") == 234L
-  add_check("gene_tier_contract", gene_ok, sprintf("rows=%d", nrow(gene)))
-
-  eos <- handoff$eos_decision
-  eos_ok <- all(c("gene", "retained_provisional") %in% names(eos)) &&
-    sum(as.logical(eos$retained_provisional), na.rm = TRUE) == 53L
-  add_check("eosinophil_gene_contract", eos_ok, sprintf("retained=%d", sum(as.logical(eos$retained_provisional), na.rm = TRUE)))
-
-  sections <- handoff$section_decision
-  section_ok <- all(c("region_id", "section_status") %in% names(sections)) &&
-    identical(as.character(sections$region_id), region_ids) &&
-    identical(as.character(sections$section_status), expected_status)
-  add_check("slide_section_decisions", section_ok, paste(sections$section_status, collapse = ","))
-
-  required_qc_gates <- c(
-    "fixed_section_decisions", "cell_mask_reconciliation", "gene_tier_reconciliation",
-    "eos_gene_reconciliation", "region4_excluded_from_reference_definition"
-  )
-  release <- handoff$release
-  gate_ok <- all(c("gate_id", "gate_status") %in% names(release)) &&
-    all(required_qc_gates %in% release$gate_id) &&
-    all(release$gate_status[match(required_qc_gates, release$gate_id)] == "PASS")
-  add_check("completed_qc_release_gates", gate_ok, paste(release$gate_status[match(required_qc_gates, release$gate_id)], collapse = ","))
-
-  result <- do.call(rbind, checks)
-  if (isTRUE(stop_on_error) && any(result$status == "FAIL")) {
-    failed <- result$check[result$status == "FAIL"]
-    stop(sprintf("Downstream handoff validation failed: %s", paste(failed, collapse = ", ")), call. = FALSE)
-  }
-  result
-}
-
-downstream_model_dependencies <- function() {
-  data.frame(
-    package = c("Seurat", "SeuratObject", "harmony", "leidenbase"),
-    minimum_version = c("4.3.0", "4.1.0", "1.2.0", "0.1.0"),
-    role = c("reference_clustering_and_mapping", "sparse_object_container", "eligible_consensus_integration", "leiden_clustering"),
-    stringsAsFactors = FALSE
-  )
-}
-
-primary_model_feature_policy <- function() "FIXED_245_NO_VARIABLE_FEATURE_SELECTION"
-
-downstream_model_preflight <- function(config) {
-  dependencies <- downstream_model_dependencies()
-  dependencies$minimum_version[dependencies$package == "Seurat"] <- as.character(config$seurat_min_version)
-  dependencies$minimum_version[dependencies$package == "harmony"] <- as.character(config$harmony_min_version)
-  dependencies$available <- vapply(dependencies$package, requireNamespace, logical(1), quietly = TRUE)
-  dependencies$installed_version <- vapply(seq_len(nrow(dependencies)), function(index) {
-    if (!dependencies$available[[index]]) return(NA_character_)
-    as.character(utils::packageVersion(dependencies$package[[index]]))
-  }, character(1))
-  dependencies$version_ok <- vapply(seq_len(nrow(dependencies)), function(index) {
-    dependencies$available[[index]] &&
-      utils::compareVersion(dependencies$installed_version[[index]], dependencies$minimum_version[[index]]) >= 0L
-  }, logical(1))
-  dependencies$status <- ifelse(
-    !dependencies$available,
-    "SKIP_LOCAL_MODEL_TEST_HPC_REQUIRED",
-    ifelse(dependencies$version_ok, "PASS", "FAIL_HPC_PACKAGE_VERSION")
-  )
-  dependencies
-}
-
-match_cluster_labels <- function(reference_cluster, candidate_cluster) {
-  if (is.null(names(reference_cluster)) || is.null(names(candidate_cluster))) {
-    stop("Cluster label vectors must be named by cell ID.", call. = FALSE)
-  }
-  shared <- intersect(names(reference_cluster), names(candidate_cluster))
-  if (!length(shared)) stop("No shared cells are available for cluster matching.", call. = FALSE)
-  reference <- as.character(reference_cluster[shared])
-  candidate <- as.character(candidate_cluster[shared])
-  reference_levels <- sort(unique(reference))
-  candidate_levels <- sort(unique(candidate))
-  score <- matrix(0, nrow = length(reference_levels), ncol = length(candidate_levels),
-                  dimnames = list(reference_levels, candidate_levels))
-  for (reference_id in reference_levels) {
-    reference_cells <- shared[reference == reference_id]
-    for (candidate_id in candidate_levels) {
-      candidate_cells <- shared[candidate == candidate_id]
-      score[reference_id, candidate_id] <- length(intersect(reference_cells, candidate_cells)) /
-        length(union(reference_cells, candidate_cells))
-    }
-  }
-  size <- max(nrow(score), ncol(score))
-  padded <- matrix(0, nrow = size, ncol = size)
-  padded[seq_len(nrow(score)), seq_len(ncol(score))] <- score
-  assignment <- clue::solve_LSAP(padded, maximum = TRUE)
-  rows <- seq_len(nrow(score))
-  columns <- as.integer(assignment[rows])
-  keep <- columns <= ncol(score)
-  rows <- rows[keep]
-  columns <- columns[keep]
-  data.frame(
-    reference_cluster = rownames(score)[rows],
-    candidate_cluster = colnames(score)[columns],
-    jaccard = score[cbind(rows, columns)],
-    shared_cells = vapply(seq_along(rows), function(index) {
-      sum(reference == rownames(score)[rows[[index]]] & candidate == colnames(score)[columns[[index]]])
-    }, integer(1)),
-    stringsAsFactors = FALSE
-  )
-}
-
-
-assert_downstream_model_environment <- function(config) {
-  preflight <- downstream_model_preflight(config)
-  if (any(preflight$status != "PASS")) {
-    failed <- paste(preflight$package[preflight$status != "PASS"], preflight$status[preflight$status != "PASS"], sep = "=")
-    stop(sprintf("Seurat/Harmony HPC model environment is not ready: %s", paste(failed, collapse = ", ")), call. = FALSE)
-  }
-  invisible(preflight)
-}
-
-join_seurat_layers_if_needed <- function(object, assay = "RNA") {
-  if (utils::packageVersion("SeuratObject") >= "5.0.0" && exists("JoinLayers", envir = asNamespace("SeuratObject"), inherits = FALSE)) {
-    object <- SeuratObject::JoinLayers(object, assay = assay)
-  }
-  object
-}
-
-build_seurat_reference <- function(counts, cells, genes, config, role, seed = config$seed) {
-  assert_downstream_model_environment(config)
-  if (!inherits(counts, "sparseMatrix")) stop("Reference counts must be a sparse Matrix.", call. = FALSE)
-  if (!is.data.frame(cells) || !"cell_id" %in% names(cells) || anyDuplicated(cells$cell_id)) {
-    stop("Reference cells must contain unique cell_id values.", call. = FALSE)
-  }
-  if (!length(genes) || anyDuplicated(genes) || length(setdiff(genes, rownames(counts)))) {
-    stop("Reference genes must be unique and present in the count matrix.", call. = FALSE)
-  }
-  cell_ids <- as.character(cells$cell_id)
-  if (length(setdiff(cell_ids, colnames(counts)))) stop("Reference cell IDs are absent from the count matrix.", call. = FALSE)
-  if (length(cell_ids) < 3L || length(genes) < 3L) stop("Reference fitting requires at least three cells and genes.", call. = FALSE)
-  model_counts <- counts[, cell_ids, drop = FALSE]
-  metadata <- cells[match(cell_ids, cells$cell_id), , drop = FALSE]
-  rownames(metadata) <- cell_ids
-  set.seed(as.integer(seed))
-  object <- Seurat::CreateSeuratObject(counts = model_counts, meta.data = metadata, project = role, min.cells = 0L, min.features = 0L)
-  object <- Seurat::NormalizeData(
-    object, normalization.method = "LogNormalize",
-    scale.factor = as.numeric(config$normalization_scale_factor), verbose = FALSE
-  )
-  object <- Seurat::ScaleData(object, features = genes, verbose = FALSE)
-  npcs <- min(as.integer(config$n_pcs), length(genes) - 1L, ncol(object) - 1L)
-  object <- Seurat::RunPCA(object, features = genes, npcs = npcs, seed.use = as.integer(seed), verbose = FALSE)
-  dims <- seq_len(npcs)
-  object <- Seurat::FindNeighbors(object, reduction = "pca", dims = dims, k.param = min(as.integer(config$knn_k), ncol(object) - 1L), verbose = FALSE)
-  object <- Seurat::FindClusters(
-    object, resolution = as.numeric(config$leiden_resolution), algorithm = 4L,
-    random.seed = as.integer(seed), verbose = FALSE
-  )
-  object <- Seurat::RunUMAP(
-    object, reduction = "pca", dims = dims, seed.use = as.integer(seed),
-    return.model = TRUE, reduction.name = "umap_pca", verbose = FALSE
-  )
-  object@misc$downstream_reference_contract <- list(
-    role = role, feature_policy = primary_model_feature_policy(), feature_names = genes,
-    raw_feature_names = rownames(model_counts), raw_gene_count = nrow(model_counts),
-    n_pcs = npcs, seed = as.integer(seed), normalization_method = "LogNormalize",
-    normalization_scale_factor = as.numeric(config$normalization_scale_factor),
-    package_versions = setNames(
-      vapply(c("Seurat", "SeuratObject"), function(package) as.character(utils::packageVersion(package)), character(1)),
-      c("Seurat", "SeuratObject")
-    )
-  )
-  object
-}
-
-find_primary_markers <- function(object, genes, config) {
-  assert_downstream_model_environment(config)
-  if (!inherits(object, "Seurat")) stop("Primary marker input must be a Seurat object.", call. = FALSE)
-  genes <- intersect(as.character(genes), rownames(object))
-  if (!length(genes)) stop("No primary marker genes are present in the Seurat object.", call. = FALSE)
-  object <- join_seurat_layers_if_needed(object, "RNA")
-  Seurat::Idents(object) <- "seurat_clusters"
-  markers <- Seurat::FindAllMarkers(
-    object, assay = "RNA", features = genes, only.pos = TRUE,
-    min.pct = 0.05, logfc.threshold = 0.1, verbose = FALSE
-  )
-  if (nrow(markers) && any(!markers$gene %in% genes)) stop("Primary marker result escaped the frozen feature set.", call. = FALSE)
-  markers
-}
-
-
-get_seurat_normalized_data <- function(object, assay = "RNA") {
-  if (utils::packageVersion("SeuratObject") >= "5.0.0" && exists("LayerData", envir = asNamespace("SeuratObject"), inherits = FALSE)) {
-    return(SeuratObject::LayerData(object, assay = assay, layer = "data"))
-  }
-  Seurat::GetAssayData(object, assay = assay, slot = "data")
-}
-
-
-
+# Purpose: Write slide qc artifacts.
+# Inputs: required: project_root, run_root, slide_data, slide_summary, slide_plots.
+# Output: Writes validated artifact file(s) and returns their path(s) invisibly or as a named path list.
 write_slide_qc_artifacts <- function(project_root, run_root, slide_data, slide_summary, slide_plots) {
   assert_path_within(project_root, run_root)
   output_dir <- file.path(run_root, "slide_summary")
@@ -2374,1112 +2328,11 @@ write_slide_qc_artifacts <- function(project_root, run_root, slide_data, slide_s
 }
 
 # -----------------------------------------------------------------------------
-# Scientifically revised downstream reference workflow (2026-08-16)
-# Single canonical implementation; superseded checkpoint definitions were removed.
 # -----------------------------------------------------------------------------
 
-parse_downstream_cli <- function(args = commandArgs(trailingOnly = TRUE)) {
-  values <- list()
-  for (argument in args) {
-    if (!startsWith(argument, "--") || !grepl("=", argument, fixed = TRUE)) next
-    parts <- strsplit(sub("^--", "", argument), "=", fixed = TRUE)[[1]]
-    values[[parts[[1]]]] <- paste(parts[-1], collapse = "=")
-  }
-  values
-}
-
-require_downstream_argument <- function(arguments, name) {
-  value <- arguments[[name]] %||% ""
-  if (length(value) != 1L || is.na(value) || !nzchar(value)) {
-    stop(sprintf("Missing required --%s= argument.", name), call. = FALSE)
-  }
-  value
-}
-
-validate_stage_files <- function(root, required, rds = character(), stop_on_error = TRUE) {
-  paths <- file.path(root, required)
-  missing <- paths[!file.exists(paths)]
-  valid_rds <- vapply(file.path(root, rds), function(path) {
-    file.exists(path) && !inherits(tryCatch(readRDS(path), error = identity), "error")
-  }, logical(1))
-  passed <- !length(missing) && all(valid_rds)
-  result <- data.frame(
-    check = c("required_files", "reloadable_rds"),
-    status = c(if (!length(missing)) "PASS" else "FAIL", if (all(valid_rds)) "PASS" else "FAIL"),
-    details = c(
-      if (!length(missing)) paste("files=", length(required), sep = "") else paste(basename(missing), collapse = ";"),
-      if (all(valid_rds)) paste("rds=", length(rds), sep = "") else paste(basename(file.path(root, rds)[!valid_rds]), collapse = ";")
-    ), stringsAsFactors = FALSE
-  )
-  if (isTRUE(stop_on_error) && !passed) stop(sprintf("Stage artifact validation failed under %s.", root), call. = FALSE)
-  result
-}
-
-region3_anchor_branch_definitions <- function() {
-  data.frame(
-    branch_id = c("primary_245", "strict_245", "hotspot_245", "conservative_67", "complete_479"),
-    mask_name = c(
-      "primary_include", "strict_include", "hotspot_sensitivity_include",
-      "primary_include", "primary_include"
-    ),
-    gene_set_name = c(
-      "provisional_primary_features", "provisional_primary_features",
-      "provisional_primary_features", "conservative_no_signal_detected",
-      "raw_complete_panel"
-    ),
-    scientific_role = c(
-      "PRIMARY", "CELL_QC_SENSITIVITY", "SPATIAL_HOTSPOT_SENSITIVITY",
-      "CONSERVATIVE_LOW_INFORMATION_STRESS_TEST", "CLEAN_SECTION_COMPLETE_PANEL_SENSITIVITY"
-    ),
-    stringsAsFactors = FALSE
-  )
-}
-
-cluster_marker_evidence <- function(object, marker_config, config) {
-  required <- c("cell_type", "gene", "use_policy")
-  if (!inherits(object, "Seurat")) stop("Cluster marker evidence requires a Seurat object.", call. = FALSE)
-  if (!is.data.frame(marker_config) || length(setdiff(required, names(marker_config)))) {
-    stop("Canonical marker configuration is incomplete.", call. = FALSE)
-  }
-  cluster_id <- as.character(object$seurat_clusters)
-  data <- get_seurat_normalized_data(object, "RNA")
-  markers <- marker_config[marker_config$gene %in% rownames(data), , drop = FALSE]
-  clusters <- sort(unique(cluster_id))
-  types <- sort(unique(markers$cell_type))
-  marker_genes <- unique(markers$gene)
-  mean_matrix <- vapply(clusters, function(cluster) {
-    Matrix::rowMeans(data[marker_genes, cluster_id == cluster, drop = FALSE])
-  }, numeric(length(marker_genes)))
-  detection_matrix <- vapply(clusters, function(cluster) {
-    Matrix::rowMeans(data[marker_genes, cluster_id == cluster, drop = FALSE] > 0)
-  }, numeric(length(marker_genes)))
-  if (is.null(dim(mean_matrix))) mean_matrix <- matrix(mean_matrix, ncol = 1L)
-  if (is.null(dim(detection_matrix))) detection_matrix <- matrix(detection_matrix, ncol = 1L)
-  rownames(mean_matrix) <- rownames(detection_matrix) <- marker_genes
-  colnames(mean_matrix) <- colnames(detection_matrix) <- clusters
-  relative_matrix <- matrix(
-    0, nrow = length(marker_genes), ncol = length(clusters),
-    dimnames = list(marker_genes, clusters)
-  )
-  for (gene in marker_genes) {
-    values <- mean_matrix[gene, ]
-    deviation <- stats::sd(values)
-    if (!is.na(deviation) && deviation > 0) relative_matrix[gene, ] <- (values - mean(values)) / deviation
-  }
-  rows <- list()
-  for (cluster in clusters) {
-    cluster_mean <- mean_matrix[, cluster]
-    cluster_detection <- detection_matrix[, cluster]
-    for (cell_type in types) {
-      primary <- markers$gene[
-        markers$cell_type == cell_type & markers$use_policy == "PRIMARY_SUPPORT"
-      ]
-      risk <- markers$gene[
-        markers$cell_type == cell_type & markers$use_policy == "VALIDATION_ONLY_TECHNICAL_RISK"
-      ]
-      primary_detected <- primary[
-        cluster_detection[primary] >= as.numeric(config$marker_detection_min) &
-          cluster_mean[primary] >= as.numeric(config$marker_average_log_expression_min)
-      ]
-      rows[[length(rows) + 1L]] <- data.frame(
-        cluster = cluster, reference_label = cell_type,
-        primary_marker_count = length(primary),
-        supported_primary_marker_count = length(primary_detected),
-        marker_detection_fraction = if (length(primary)) length(primary_detected) / length(primary) else 0,
-        primary_score = if (length(primary_detected)) mean(relative_matrix[primary_detected, cluster]) else NA_real_,
-        risk_marker_count = length(risk),
-        risk_validation_score = if (length(risk)) mean(cluster_mean[risk]) else NA_real_,
-        stringsAsFactors = FALSE
-      )
-    }
-  }
-  do.call(rbind, rows)
-}
-
-annotate_seurat_clusters <- function(object, marker_config, config) {
-  assert_downstream_model_environment(config)
-  scores <- cluster_marker_evidence(object, marker_config, config)
-  clusters <- sort(unique(scores$cluster))
-  support <- do.call(rbind, lapply(clusters, function(cluster) {
-    candidate <- scores[
-      scores$cluster == cluster & scores$supported_primary_marker_count >= 2L &
-        is.finite(scores$primary_score), , drop = FALSE
-    ]
-    if (!nrow(candidate)) {
-      return(data.frame(
-        cluster = cluster, reference_label = paste0("Unresolved_", cluster),
-        support_status = "INSUFFICIENT_ABSOLUTE_MARKER_EVIDENCE",
-        primary_marker_count = 0L, marker_detection_fraction = 0,
-        score_margin = NA_real_, exclusion_contradiction = NA_real_,
-        risk_only_support = any(scores$risk_marker_count[scores$cluster == cluster] >= 2L),
-        stringsAsFactors = FALSE
-      ))
-    }
-    candidate <- candidate[order(candidate$primary_score, decreasing = TRUE), , drop = FALSE]
-    best <- candidate[1, , drop = FALSE]
-    second_score <- if (nrow(candidate) > 1L) candidate$primary_score[[2]] else 0
-    margin <- best$primary_score[[1]] - second_score
-    competing <- scores[
-      scores$cluster == cluster & scores$reference_label != best$reference_label[[1]] &
-        scores$supported_primary_marker_count >= 2L & is.finite(scores$primary_score), , drop = FALSE
-    ]
-    competing_score <- if (nrow(competing)) max(competing$primary_score) else 0
-    contradiction <- if (best$primary_score[[1]] > 0) {
-      max(0, competing_score) / best$primary_score[[1]]
-    } else {
-      Inf
-    }
-    supported <- margin >= as.numeric(config$marker_score_margin) &&
-      contradiction <= as.numeric(config$exclusion_contradiction_max)
-    data.frame(
-      cluster = cluster,
-      reference_label = if (supported) best$reference_label[[1]] else paste0("Unresolved_", cluster),
-      support_status = if (supported) "SUPPORTED" else "AMBIGUOUS_OR_CONTRADICTORY_MARKER_EVIDENCE",
-      primary_marker_count = best$supported_primary_marker_count[[1]],
-      marker_detection_fraction = best$marker_detection_fraction[[1]],
-      score_margin = margin, exclusion_contradiction = contradiction,
-      risk_only_support = FALSE, stringsAsFactors = FALSE
-    )
-  }))
-  label_map <- setNames(support$reference_label, support$cluster)
-  object$reference_label <- unname(label_map[as.character(object$seurat_clusters)])
-  list(object = object, marker_support = support, marker_scores = scores)
-}
-
-label_agreement_on_major <- function(primary_labels, branch_labels, major_labels) {
-  joined <- merge(
-    primary_labels[, c("cell_id", "reference_label")],
-    branch_labels[, c("cell_id", "reference_label")], by = "cell_id",
-    suffixes = c("_primary", "_branch"), sort = FALSE
-  )
-  joined <- joined[joined$reference_label_primary %in% major_labels, , drop = FALSE]
-  if (!nrow(joined)) return(NA_real_)
-  mean(joined$reference_label_primary == joined$reference_label_branch)
-}
-
-validate_anchor_branches <- function(primary, strict, hotspot, conservative, complete,
-                                     markers, config) {
-  branches <- list(primary = primary, strict = strict, hotspot = hotspot,
-                   conservative = conservative, complete = complete)
-  for (name in names(branches)) {
-    labels <- branches[[name]]$cell_labels
-    if (!is.data.frame(labels) || anyDuplicated(labels$cell_id) ||
-        length(setdiff(c("cell_id", "reference_label"), names(labels)))) {
-      stop(sprintf("Anchor branch %s has an invalid label table.", name), call. = FALSE)
-    }
-  }
-  primary_labels <- primary$cell_labels
-  counts <- table(primary_labels$reference_label)
-  major <- names(counts)[
-    counts >= as.integer(config$major_label_cells) |
-      counts / nrow(primary_labels) >= as.numeric(config$major_label_fraction)
-  ]
-  primary_support <- primary$marker_support
-  primary_supported <- major[major %in% primary_support$reference_label[
-    primary_support$support_status == "SUPPORTED" & !primary_support$risk_only_support
-  ]]
-  marker_ok <- length(primary_supported) == length(major) && length(major) > 0L
-  strict_agreement <- label_agreement_on_major(primary_labels, strict$cell_labels, major)
-  hotspot_agreement <- label_agreement_on_major(primary_labels, hotspot$cell_labels, major)
-  complete_agreement <- label_agreement_on_major(primary_labels, complete$cell_labels, major)
-  conservative_supported <- unique(conservative$marker_support$reference_label[
-    conservative$marker_support$support_status == "SUPPORTED"
-  ])
-  conservative_estimable <- length(major) > 0L && all(major %in% conservative_supported)
-  conservative_agreement <- if (conservative_estimable) {
-    label_agreement_on_major(primary_labels, conservative$cell_labels, major)
-  } else {
-    NA_real_
-  }
-  gates <- data.frame(
-    gate_id = c(
-      "major_label_marker_support", "primary_strict_stability", "hotspot_stability",
-      "complete479_vs_primary245_stability", "gene245_vs_gene67_stability"
-    ),
-    observed = c(if (marker_ok) 1 else 0, strict_agreement, hotspot_agreement,
-                 complete_agreement, conservative_agreement),
-    threshold = c(1, config$label_stability_min, config$label_stability_min,
-                  config$label_stability_min, config$gene_sensitivity_concordance_min),
-    gate_status = NA_character_, stringsAsFactors = FALSE
-  )
-  gates$gate_status[1:4] <- ifelse(
-    !is.na(gates$observed[1:4]) & gates$observed[1:4] >= gates$threshold[1:4], "PASS", "STOP"
-  )
-  gates$gate_status[5] <- if (!conservative_estimable) {
-    "NOT_ESTIMABLE_GENE67"
-  } else if (conservative_agreement >= config$gene_sensitivity_concordance_min) {
-    "PASS"
-  } else {
-    "REVIEW_GENE67"
-  }
-  decision <- if (any(gates$gate_status == "STOP")) {
-    "STOP_ANCHOR"
-  } else if (any(grepl("REVIEW|NOT_ESTIMABLE", gates$gate_status))) {
-    "REVIEW_ANCHOR"
-  } else {
-    "PASS_ANCHOR"
-  }
-  list(
-    decision = decision, gate_table = gates, major_labels = major,
-    major_label_counts = as.data.frame(counts, stringsAsFactors = FALSE),
-    scientific_interpretation = "Region_3 is a technical anchor, not biological ground truth"
-  )
-}
-
-fit_region3_anchor_branches <- function(bundle, marker_config, config) {
-  if (!identical(bundle$region_id, "Region_3") || !identical(bundle$section_status, "PRIMARY")) {
-    stop("Region 3 PRIMARY bundle is required for anchor fitting.", call. = FALSE)
-  }
-  definitions <- region3_anchor_branch_definitions()
-  branches <- setNames(vector("list", nrow(definitions)), definitions$branch_id)
-  for (index in seq_len(nrow(definitions))) {
-    definition <- definitions[index, , drop = FALSE]
-    mask <- definition$mask_name[[1]]
-    gene_set <- definition$gene_set_name[[1]]
-    cells <- bundle$cell_metadata[bundle$cell_metadata[[mask]], , drop = FALSE]
-    genes <- bundle$gene_sets[[gene_set]]
-    model <- build_seurat_reference(
-      bundle$counts, cells, genes, config,
-      role = paste0("REGION3_", toupper(definition$branch_id[[1]])), seed = config$seed
-    )
-    markers <- find_primary_markers(model, genes, config)
-    annotation <- annotate_seurat_clusters(model, marker_config, config)
-    labels <- data.frame(
-      cell_id = colnames(annotation$object),
-      cluster = as.character(annotation$object$seurat_clusters),
-      reference_label = as.character(annotation$object$reference_label),
-      stringsAsFactors = FALSE
-    )
-    branches[[definition$branch_id[[1]]]] <- list(
-      object = annotation$object, cell_labels = labels, primary_markers = markers,
-      marker_support = annotation$marker_support, marker_scores = annotation$marker_scores,
-      mask_name = mask, gene_set_name = gene_set, feature_names = genes,
-      scientific_role = definition$scientific_role[[1]]
-    )
-  }
-  validation <- validate_anchor_branches(
-    branches$primary_245, branches$strict_245, branches$hotspot_245,
-    branches$conservative_67, branches$complete_479, marker_config, config
-  )
-  list(branch_definitions = definitions, branches = branches, validation = validation)
-}
-
-write_region3_anchor_artifacts <- function(project_root, output_root, anchor) {
-  assert_path_within(project_root, output_root)
-  dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
-  paths <- c(
-    write_tsv(anchor$branch_definitions, file.path(output_root, "region3_anchor_branches.tsv"), project_root),
-    write_tsv(anchor$validation$gate_table, file.path(output_root, "region3_anchor_gates.tsv"), project_root),
-    write_tsv(anchor$validation$major_label_counts, file.path(output_root, "region3_major_label_counts.tsv"), project_root)
-  )
-  for (branch in names(anchor$branches)) {
-    branch_root <- file.path(output_root, branch)
-    dir.create(branch_root, recursive = TRUE, showWarnings = FALSE)
-    saveRDS(anchor$branches[[branch]]$object, file.path(branch_root, "reference_object.rds"), compress = FALSE)
-    paths <- c(
-      paths,
-      write_tsv(anchor$branches[[branch]]$cell_labels, file.path(branch_root, "cell_labels.tsv"), project_root),
-      write_tsv(anchor$branches[[branch]]$marker_support, file.path(branch_root, "marker_support.tsv"), project_root),
-      write_tsv(anchor$branches[[branch]]$marker_scores, file.path(branch_root, "marker_scores.tsv"), project_root)
-    )
-  }
-  summary <- list(
-    schema_version = "region3_anchor_v2", validation = anchor$validation,
-    branch_definitions = anchor$branch_definitions,
-    primary_object_path = file.path(output_root, "primary_245", "reference_object.rds"),
-    generated_utc = format(Sys.time(), tz = "UTC", usetz = TRUE)
-  )
-  saveRDS(anchor$validation, file.path(output_root, "region3_anchor_validation.rds"))
-  saveRDS(summary, file.path(output_root, "region3_anchor_summary.rds"))
-  validate_stage_files(
-    output_root,
-    c("region3_anchor_branches.tsv", "region3_anchor_gates.tsv", "region3_major_label_counts.tsv",
-      "region3_anchor_validation.rds", "region3_anchor_summary.rds",
-      file.path("primary_245", "reference_object.rds"),
-      file.path("complete_479", "reference_object.rds")),
-    c("region3_anchor_validation.rds", "region3_anchor_summary.rds",
-      file.path("primary_245", "reference_object.rds"),
-      file.path("complete_479", "reference_object.rds")), TRUE
-  )
-  invisible(paths)
-}
-
-read_region3_anchor_artifacts <- function(output_root) {
-  definitions <- utils::read.delim(file.path(output_root, "region3_anchor_branches.tsv"), check.names = FALSE)
-  validation <- readRDS(file.path(output_root, "region3_anchor_validation.rds"))
-  branches <- setNames(lapply(definitions$branch_id, function(branch) {
-    root <- file.path(output_root, branch)
-    object <- readRDS(file.path(root, "reference_object.rds"))
-    list(
-      object = object,
-      cell_labels = utils::read.delim(file.path(root, "cell_labels.tsv"), check.names = FALSE),
-      marker_support = utils::read.delim(file.path(root, "marker_support.tsv"), check.names = FALSE),
-      marker_scores = utils::read.delim(file.path(root, "marker_scores.tsv"), check.names = FALSE),
-      feature_names = object@misc$downstream_reference_contract$feature_names,
-      mask_name = definitions$mask_name[definitions$branch_id == branch],
-      gene_set_name = definitions$gene_set_name[definitions$branch_id == branch],
-      scientific_role = definitions$scientific_role[definitions$branch_id == branch]
-    )
-  }), definitions$branch_id)
-  list(branch_definitions = definitions, branches = branches, validation = validation)
-}
-
-assess_region3_morphology_review <- function(hotspot_decision, review_path = NULL) {
-  required_hotspots <- hotspot_decision[
-    hotspot_decision$region_id == "Region_3" &
-      hotspot_decision$hotspot_status == "MORPHOLOGY_REVIEW_REQUIRED", , drop = FALSE
-  ]
-  if (!nrow(required_hotspots)) {
-    return(data.frame(
-      gate_id = "region3_morphology_review", reviewed = 0L, required = 0L,
-      gate_status = "PASS_NO_HOTSPOTS", details = "No FDR-positive Region 3 hotspots",
-      stringsAsFactors = FALSE
-    ))
-  }
-  if (is.null(review_path) || !nzchar(review_path) || !file.exists(review_path)) {
-    return(data.frame(
-      gate_id = "region3_morphology_review", reviewed = 0L, required = nrow(required_hotspots),
-      gate_status = "REVIEW_MORPHOLOGY_PENDING",
-      details = "DAPI/morphology/cell-boundary review is required before final exploratory release",
-      stringsAsFactors = FALSE
-    ))
-  }
-  review <- utils::read.delim(review_path, check.names = FALSE, stringsAsFactors = FALSE)
-  required <- c("grid_id", "review_decision", "reviewer", "reviewed_utc")
-  if (length(setdiff(required, names(review))) || anyDuplicated(review$grid_id)) {
-    stop("Morphology review requires unique grid_id, review_decision, reviewer, and reviewed_utc columns.", call. = FALSE)
-  }
-  allowed <- c("VALID_ANATOMY", "ARTIFACT_EXCLUDE_IN_SENSITIVITY", "UNCERTAIN_RETAIN_PRIMARY")
-  if (any(!review$review_decision %in% allowed)) stop("Morphology review contains an unsupported decision.", call. = FALSE)
-  matched <- match(required_hotspots$grid_id, review$grid_id)
-  complete <- !anyNA(matched)
-  data.frame(
-    gate_id = "region3_morphology_review", reviewed = sum(!is.na(matched)), required = nrow(required_hotspots),
-    gate_status = if (complete) "PASS_REVIEW_COMPLETE" else "REVIEW_MORPHOLOGY_PENDING",
-    details = if (complete) "All Region 3 hotspots reviewed; primary retention and sensitivity exclusions remain explicit" else "Some required hotspots lack review",
-    stringsAsFactors = FALSE
-  )
-}
-
-assign_spatial_mapping_folds <- function(cells, folds, seed) {
-  if (!is.data.frame(cells) || !"cell_id" %in% names(cells)) stop("Calibration cells require cell_id.", call. = FALSE)
-  folds <- as.integer(folds)
-  if (all(c("x_centroid", "y_centroid") %in% names(cells))) {
-    x_rank <- rank(cells$x_centroid, ties.method = "first")
-    y_rank <- rank(cells$y_centroid, ties.method = "first")
-    x_bin <- pmin(folds - 1L, floor((x_rank - 1L) / nrow(cells) * folds))
-    y_bin <- pmin(folds - 1L, floor((y_rank - 1L) / nrow(cells) * folds))
-    fold <- (x_bin + 2L * y_bin) %% folds + 1L
-    method <- "SPATIALLY_BLOCKED_INTERNAL_CALIBRATION"
-  } else {
-    set.seed(as.integer(seed))
-    fold <- sample(rep(seq_len(folds), length.out = nrow(cells)))
-    method <- "STRATIFIED_RANDOM_FALLBACK_NO_COORDINATES"
-  }
-  data.frame(
-    cell_id = as.character(cells$cell_id), calibration_fold = as.integer(fold),
-    calibration_method = method,
-    interpretation = "INTERNAL_REPRODUCIBILITY_NOT_BIOLOGICAL_ACCURACY",
-    stringsAsFactors = FALSE
-  )
-}
-
-prepare_seurat_query <- function(bundle, mask_name, genes, config, role) {
-  assert_downstream_model_environment(config)
-  cells <- bundle$cell_metadata[bundle$cell_metadata[[mask_name]], , drop = FALSE]
-  ids <- as.character(cells$cell_id)
-  metadata <- cells[match(ids, cells$cell_id), , drop = FALSE]
-  rownames(metadata) <- ids
-  object <- Seurat::CreateSeuratObject(
-    counts = bundle$counts[, ids, drop = FALSE], meta.data = metadata,
-    project = role, min.cells = 0L, min.features = 0L
-  )
-  object <- Seurat::NormalizeData(
-    object, normalization.method = "LogNormalize",
-    scale.factor = config$normalization_scale_factor, verbose = FALSE
-  )
-  object <- Seurat::ScaleData(object, features = genes, verbose = FALSE)
-  object
-}
-
-prediction_score_columns <- function(predictions) {
-  setdiff(grep("^prediction.score\\.", names(predictions), value = TRUE), "prediction.score.max")
-}
-
-reference_label_centroids <- function(reference, label_column = "reference_label") {
-  embedding <- Seurat::Embeddings(reference, reduction = "pca")
-  labels <- as.character(reference[[label_column, drop = TRUE]])
-  split_rows <- split(seq_len(nrow(embedding)), labels)
-  do.call(rbind, lapply(names(split_rows), function(label) {
-    values <- matrix(colMeans(embedding[split_rows[[label]], , drop = FALSE]), nrow = 1L)
-    rownames(values) <- label
-    values
-  }))
-}
-
-map_query_to_frozen_reference <- function(reference, query, features, config,
-                                          thresholds = NULL) {
-  assert_downstream_model_environment(config)
-  if (!inherits(reference, "Seurat") || !inherits(query, "Seurat")) stop("Mapping requires Seurat reference and query objects.", call. = FALSE)
-  features <- intersect(features, intersect(rownames(reference), rownames(query)))
-  dims <- seq_len(min(config$n_pcs, ncol(Seurat::Embeddings(reference, "pca"))))
-  anchors <- Seurat::FindTransferAnchors(
-    reference = reference, query = query, normalization.method = "LogNormalize",
-    reference.reduction = "pca", reduction = "pcaproject", features = features,
-    dims = dims, k.score = as.integer(config$mapping_k), verbose = FALSE
-  )
-  predictions <- Seurat::TransferData(
-    anchorset = anchors, refdata = as.character(reference$reference_label),
-    dims = dims, k.weight = min(as.integer(config$mapping_k), ncol(reference) - 1L), verbose = FALSE
-  )
-  score_columns <- prediction_score_columns(predictions)
-  score_matrix <- as.matrix(predictions[, score_columns, drop = FALSE])
-  ordered <- t(apply(score_matrix, 1L, sort, decreasing = TRUE))
-  margin <- if (ncol(ordered) >= 2L) ordered[, 1] - ordered[, 2] else ordered[, 1]
-  second_best <- if (ncol(score_matrix) >= 2L) {
-    sub("^prediction.score\\.", "", apply(score_matrix, 1L, function(values) names(sort(values, decreasing = TRUE))[[2]]))
-  } else {
-    rep(NA_character_, nrow(score_matrix))
-  }
-  mapped_query <- Seurat::MapQuery(
-    anchorset = anchors, query = query, reference = reference,
-    refdata = list(reference_label = "reference_label"),
-    new.reduction.name = "ref.pca", reference.reduction = "pca", reduction.model = "umap_pca",
-    transferdata.args = list(k.weight = min(as.integer(config$mapping_k), ncol(reference) - 1L)),
-    verbose = FALSE
-  )
-  query_embedding <- Seurat::Embeddings(mapped_query, reduction = "ref.pca")
-  query_embedding <- query_embedding[rownames(predictions), , drop = FALSE]
-  centroids <- reference_label_centroids(reference)
-  predicted <- as.character(predictions$predicted.id)
-  distance <- vapply(seq_len(nrow(query_embedding)), function(index) {
-    label <- predicted[[index]]
-    if (!label %in% rownames(centroids)) return(Inf)
-    sqrt(sum((query_embedding[index, ] - centroids[label, ])^2))
-  }, numeric(1))
-  out <- data.frame(
-    cell_id = rownames(predictions), predicted_label = predicted,
-    prediction_confidence = as.numeric(predictions$prediction.score.max),
-    confidence_margin = as.numeric(margin), second_best_label = second_best,
-    reference_distance = distance, stringsAsFactors = FALSE
-  )
-  if (!is.null(thresholds)) out <- classify_mapping_uncertainty(out, thresholds)
-  attr(out, "anchors") <- anchors
-  attr(out, "mapped_query") <- mapped_query
-  out
-}
-
-calibrate_mapping_thresholds <- function(mapping, config) {
-  required <- c("predicted_label", "prediction_confidence", "confidence_margin", "reference_distance")
-  if (length(setdiff(required, names(mapping)))) stop("Calibration mapping table is incomplete.", call. = FALSE)
-  labels <- c("__GLOBAL__", sort(unique(mapping$predicted_label)))
-  rows <- lapply(labels, function(label) {
-    x <- if (label == "__GLOBAL__") mapping else mapping[mapping$predicted_label == label, , drop = FALSE]
-    enough <- label == "__GLOBAL__" || nrow(x) >= as.integer(config$mapping_min_label_cells)
-    if (!enough) return(NULL)
-    data.frame(
-      reference_label = label, cells = nrow(x),
-      confidence_min = as.numeric(stats::quantile(x$prediction_confidence, config$mapping_confidence_quantile, na.rm = TRUE)),
-      margin_min = as.numeric(stats::quantile(x$confidence_margin, config$mapping_confidence_quantile, na.rm = TRUE)),
-      distance_max = as.numeric(stats::quantile(x$reference_distance, config$mapping_distance_quantile, na.rm = TRUE)),
-      calibration_scope = "INTERNAL_REPRODUCIBILITY_NOT_BIOLOGICAL_ACCURACY",
-      stringsAsFactors = FALSE
-    )
-  })
-  do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
-}
-
-classify_mapping_uncertainty <- function(mapping, thresholds) {
-  global <- thresholds[thresholds$reference_label == "__GLOBAL__", , drop = FALSE]
-  if (nrow(global) != 1L) stop("Mapping thresholds require exactly one global row.", call. = FALSE)
-  matched <- match(mapping$predicted_label, thresholds$reference_label)
-  confidence_min <- ifelse(is.na(matched), global$confidence_min, thresholds$confidence_min[matched])
-  margin_min <- ifelse(is.na(matched), global$margin_min, thresholds$margin_min[matched])
-  distance_max <- ifelse(is.na(matched), global$distance_max, thresholds$distance_max[matched])
-  confidence_fail <- mapping$prediction_confidence < confidence_min
-  margin_fail <- mapping$confidence_margin < margin_min
-  distance_fail <- mapping$reference_distance > distance_max
-  mapping$mapping_status <- ifelse(
-    distance_fail & confidence_fail, "Potentially_unrepresented",
-    ifelse(confidence_fail | margin_fail | distance_fail, "Uncertain", "Mapped")
-  )
-  mapping$final_label <- ifelse(mapping$mapping_status == "Mapped", mapping$predicted_label, mapping$mapping_status)
-  mapping$confidence_threshold <- confidence_min
-  mapping$margin_threshold <- margin_min
-  mapping$distance_threshold <- distance_max
-  mapping
-}
-
-calibrate_region3_mapping <- function(bundle, anchor, config) {
-  primary <- anchor$branches$primary_245
-  cells <- bundle$cell_metadata[bundle$cell_metadata$primary_include, , drop = FALSE]
-  folds <- assign_spatial_mapping_folds(cells, config$mapping_folds, config$seed)
-  truth <- primary$cell_labels[, c("cell_id", "reference_label"), drop = FALSE]
-  mappings <- list()
-  for (fold in seq_len(as.integer(config$mapping_folds))) {
-    test_ids <- folds$cell_id[folds$calibration_fold == fold]
-    train_ids <- setdiff(primary$cell_labels$cell_id, test_ids)
-    training_cells <- bundle$cell_metadata[match(train_ids, bundle$cell_metadata$cell_id), , drop = FALSE]
-    reference <- build_seurat_reference(
-      bundle$counts, training_cells, primary$feature_names, config,
-      role = paste0("REGION3_CALIBRATION_FOLD_", fold), seed = config$seed + fold
-    )
-    reference$reference_label <- truth$reference_label[match(colnames(reference), truth$cell_id)]
-    test_bundle <- bundle
-    test_bundle$cell_metadata$calibration_test <- test_bundle$cell_metadata$cell_id %in% test_ids
-    query <- prepare_seurat_query(test_bundle, "calibration_test", primary$feature_names, config, paste0("REGION3_QUERY_FOLD_", fold))
-    mapped <- map_query_to_frozen_reference(reference, query, primary$feature_names, config)
-    mapped$calibration_fold <- fold
-    mapped$anchor_label <- truth$reference_label[match(mapped$cell_id, truth$cell_id)]
-    mapped$label_reproducible <- mapped$predicted_label == mapped$anchor_label
-    mappings[[fold]] <- mapped
-  }
-  mapping <- do.call(rbind, mappings)
-  thresholds <- calibrate_mapping_thresholds(mapping, config)
-  mapping <- classify_mapping_uncertainty(mapping, thresholds)
-  list(
-    folds = folds, mapping = mapping, thresholds = thresholds,
-    summary = data.frame(
-      cells = nrow(mapping), label_reproducibility = mean(mapping$label_reproducible),
-      mapped_fraction = mean(mapping$mapping_status == "Mapped"),
-      interpretation = "INTERNAL_REPRODUCIBILITY_NOT_BIOLOGICAL_ACCURACY",
-      stringsAsFactors = FALSE
-    )
-  )
-}
-
-write_mapping_calibration_artifacts <- function(project_root, output_root, calibration) {
-  assert_path_within(project_root, output_root); dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
-  write_tsv(calibration$folds, file.path(output_root, "region3_mapping_folds.tsv"), project_root)
-  write_tsv(calibration$mapping, file.path(output_root, "region3_mapping_calibration.tsv"), project_root)
-  write_tsv(calibration$thresholds, file.path(output_root, "mapping_thresholds.tsv"), project_root)
-  write_tsv(calibration$summary, file.path(output_root, "mapping_calibration_summary.tsv"), project_root)
-  saveRDS(calibration, file.path(output_root, "mapping_calibration.rds"), compress = FALSE)
-  validate_stage_files(
-    output_root,
-    c("region3_mapping_folds.tsv", "region3_mapping_calibration.tsv", "mapping_thresholds.tsv",
-      "mapping_calibration_summary.tsv", "mapping_calibration.rds"),
-    "mapping_calibration.rds", TRUE
-  )
-}
-
-assess_mapped_marker_coherence <- function(query, mapping, marker_config, config) {
-  data <- get_seurat_normalized_data(query, "RNA")
-  mapped <- mapping[mapping$mapping_status == "Mapped", , drop = FALSE]
-  if (!nrow(mapped)) return(data.frame(label = character(), cells = integer(), coherent = logical()))
-  rows <- lapply(sort(unique(mapped$predicted_label)), function(label) {
-    ids <- mapped$cell_id[mapped$predicted_label == label]
-    genes <- marker_config$gene[
-      marker_config$cell_type == label & marker_config$use_policy == "PRIMARY_SUPPORT"
-    ]
-    genes <- intersect(genes, rownames(data))
-    detected <- if (length(genes)) Matrix::rowMeans(data[genes, ids, drop = FALSE] > 0) else numeric()
-    supported <- sum(detected >= config$marker_detection_min)
-    data.frame(
-      label = label, cells = length(ids), available_markers = length(genes),
-      supported_markers = supported, coherent = supported >= 2L,
-      stringsAsFactors = FALSE
-    )
-  })
-  do.call(rbind, rows)
-}
-
-evaluate_section_admission <- function(region_id, primary_mapping, strict_mapping,
-                                       conservative_mapping, marker_coherence, config) {
-  shared_strict <- merge(
-    primary_mapping[, c("cell_id", "predicted_label")],
-    strict_mapping[, c("cell_id", "predicted_label")], by = "cell_id", suffixes = c("_primary", "_strict")
-  )
-  shared_conservative <- merge(
-    primary_mapping[, c("cell_id", "predicted_label")],
-    conservative_mapping[, c("cell_id", "predicted_label")], by = "cell_id", suffixes = c("_245", "_67")
-  )
-  accepted <- mean(primary_mapping$mapping_status == "Mapped")
-  unrepresented <- mean(primary_mapping$mapping_status == "Potentially_unrepresented")
-  strict_agreement <- if (nrow(shared_strict)) mean(shared_strict$predicted_label_primary == shared_strict$predicted_label_strict) else NA_real_
-  conservative_agreement <- if (nrow(shared_conservative)) mean(shared_conservative$predicted_label_245 == shared_conservative$predicted_label_67) else NA_real_
-  marker_fraction <- if (nrow(marker_coherence)) {
-    sum(marker_coherence$cells * marker_coherence$coherent) / sum(marker_coherence$cells)
-  } else 0
-  gates <- data.frame(
-    gate_id = c("mapping_coverage", "canonical_marker_coherence", "primary_strict_mapping_stability", "gene245_vs_gene67_mapping"),
-    observed = c(accepted, marker_fraction, strict_agreement, conservative_agreement),
-    threshold = c(config$mapping_accepted_fraction_min, config$mapping_marker_coherence_min,
-                  config$mapping_label_stability_min, config$gene_sensitivity_concordance_min),
-    stringsAsFactors = FALSE
-  )
-  gates$gate_status <- ifelse(!is.na(gates$observed) & gates$observed >= gates$threshold, "PASS", "STOP")
-  review_novel <- unrepresented >= config$mapping_unrepresented_fraction_review
-  decision <- if (any(gates$gate_status == "STOP")) {
-    "SENSITIVITY_ONLY"
-  } else if (review_novel) {
-    "REVIEW_POTENTIALLY_UNREPRESENTED"
-  } else {
-    "ADMITTED_TO_CONSENSUS"
-  }
-  list(
-    region_id = region_id, decision = decision, gates = gates,
-    summary = data.frame(
-      region_id = region_id, decision = decision, mapped_fraction = accepted,
-      potentially_unrepresented_fraction = unrepresented,
-      marker_coherence_fraction = marker_fraction,
-      strict_label_agreement = strict_agreement,
-      conservative_label_agreement = conservative_agreement,
-      interpretation = "Poor mapping may be technical or biologically unrepresented; review coherent out-of-reference cells",
-      stringsAsFactors = FALSE
-    )
-  )
-}
-
-map_and_evaluate_conditional_region <- function(bundle, anchor, calibration,
-                                                marker_config, config) {
-  if (!bundle$region_id %in% c("Region_1", "Region_2")) stop("Only Region 1 or 2 can enter conditional admission.", call. = FALSE)
-  primary_reference <- anchor$branches$primary_245$object
-  conservative_reference <- anchor$branches$conservative_67$object
-  primary_query <- prepare_seurat_query(bundle, "primary_include", anchor$branches$primary_245$feature_names, config, paste0(bundle$region_id, "_PRIMARY_QUERY"))
-  strict_query <- prepare_seurat_query(bundle, "strict_include", anchor$branches$primary_245$feature_names, config, paste0(bundle$region_id, "_STRICT_QUERY"))
-  conservative_query <- prepare_seurat_query(bundle, "primary_include", anchor$branches$conservative_67$feature_names, config, paste0(bundle$region_id, "_CONSERVATIVE_QUERY"))
-  primary_mapping <- map_query_to_frozen_reference(primary_reference, primary_query, anchor$branches$primary_245$feature_names, config, calibration$thresholds)
-  strict_mapping <- map_query_to_frozen_reference(primary_reference, strict_query, anchor$branches$primary_245$feature_names, config, calibration$thresholds)
-  conservative_mapping <- map_query_to_frozen_reference(conservative_reference, conservative_query, anchor$branches$conservative_67$feature_names, config)
-  coherence <- assess_mapped_marker_coherence(primary_query, primary_mapping, marker_config, config)
-  admission <- evaluate_section_admission(bundle$region_id, primary_mapping, strict_mapping, conservative_mapping, coherence, config)
-  list(
-    region_id = bundle$region_id, primary_query = primary_query,
-    primary_mapping = primary_mapping, strict_mapping = strict_mapping,
-    conservative_mapping = conservative_mapping, marker_coherence = coherence,
-    admission = admission
-  )
-}
-
-write_region_admission_artifacts <- function(project_root, output_root, result) {
-  assert_path_within(project_root, output_root); dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
-  write_tsv(result$primary_mapping, file.path(output_root, "primary_mapping.tsv"), project_root)
-  write_tsv(result$strict_mapping, file.path(output_root, "strict_mapping.tsv"), project_root)
-  write_tsv(result$conservative_mapping, file.path(output_root, "conservative_mapping.tsv"), project_root)
-  write_tsv(result$marker_coherence, file.path(output_root, "marker_coherence.tsv"), project_root)
-  write_tsv(result$admission$gates, file.path(output_root, "admission_gates.tsv"), project_root)
-  write_tsv(result$admission$summary, file.path(output_root, "admission_summary.tsv"), project_root)
-  lightweight <- result
-  lightweight$primary_query <- NULL
-  for (name in c("primary_mapping", "strict_mapping", "conservative_mapping")) {
-    attr(lightweight[[name]], "anchors") <- NULL
-    attr(lightweight[[name]], "mapped_query") <- NULL
-  }
-  saveRDS(lightweight, file.path(output_root, "admission_result.rds"), compress = FALSE)
-  validate_stage_files(
-    output_root,
-    c("primary_mapping.tsv", "strict_mapping.tsv", "conservative_mapping.tsv",
-      "marker_coherence.tsv", "admission_gates.tsv", "admission_summary.tsv", "admission_result.rds"),
-    "admission_result.rds", TRUE
-  )
-}
-
-apply_manual_admission_review <- function(admissions, review_path = NULL) {
-  if (is.null(review_path) || !nzchar(review_path)) return(admissions)
-  if (!file.exists(review_path)) stop(sprintf("Missing manual admission review: %s", review_path), call. = FALSE)
-  review <- utils::read.delim(review_path, check.names = FALSE, stringsAsFactors = FALSE)
-  required <- c("region_id", "review_decision", "reviewer", "reviewed_utc", "rationale")
-  if (length(setdiff(required, names(review))) || anyDuplicated(review$region_id)) {
-    stop("Manual admission review requires unique region_id, review_decision, reviewer, reviewed_utc, and rationale.", call. = FALSE)
-  }
-  allowed <- c("ADMIT_AFTER_MARKER_MORPHOLOGY_REVIEW", "KEEP_SENSITIVITY_ONLY")
-  if (any(!review$review_decision %in% allowed)) stop("Manual admission review contains an unsupported decision.", call. = FALSE)
-  if (any(!nzchar(review$reviewer)) || any(!nzchar(review$reviewed_utc)) || any(!nzchar(review$rationale))) {
-    stop("Manual admission review requires non-empty reviewer, reviewed_utc, and rationale.", call. = FALSE)
-  }
-  for (region in intersect(names(admissions), review$region_id)) {
-    row <- review[review$region_id == region, , drop = FALSE]
-    original <- admissions[[region]]$admission$decision
-    if (row$review_decision == "ADMIT_AFTER_MARKER_MORPHOLOGY_REVIEW") {
-      if (!identical(original, "REVIEW_POTENTIALLY_UNREPRESENTED")) {
-        stop(sprintf("%s cannot be manually admitted from status %s.", region, original), call. = FALSE)
-      }
-      admissions[[region]]$admission$decision <- "ADMITTED_TO_CONSENSUS"
-      admissions[[region]]$admission$summary$decision <- "ADMITTED_TO_CONSENSUS"
-      admissions[[region]]$admission$summary$manual_review <- paste(row$reviewer, row$reviewed_utc, row$rationale, sep = "|")
-    }
-  }
-  attr(admissions, "manual_review") <- review
-  admissions
-}
-
-build_eligible_consensus <- function(handoff, anchor, admissions, marker_config, config) {
-  admitted <- names(admissions)[vapply(admissions, function(x) identical(x$admission$decision, "ADMITTED_TO_CONSENSUS"), logical(1))]
-  eligible <- c("Region_3", admitted)
-  primary_genes <- handoff$regions$Region_3$gene_sets$provisional_primary_features
-  region_parts <- lapply(eligible, function(region) {
-    bundle <- handoff$regions[[region]]
-    cells <- bundle$cell_metadata[bundle$cell_metadata$primary_include, , drop = FALSE]
-    list(counts = bundle$counts[, cells$cell_id, drop = FALSE], cells = cells)
-  })
-  counts <- do.call(cbind, lapply(region_parts, `[[`, "counts"))
-  cells <- do.call(rbind, lapply(region_parts, `[[`, "cells"))
-  consensus <- build_seurat_reference(counts, cells, primary_genes, config, "ELIGIBLE_UNCORRECTED_CONSENSUS", config$seed)
-  annotation <- annotate_seurat_clusters(consensus, marker_config, config)
-  consensus <- annotation$object
-  consensus@misc$primary_reduction_policy <- "UNCORRECTED_PCA_PRIMARY"
-  harmony_status <- "NOT_RUN_REGION3_ONLY"
-  if (length(eligible) > 1L) {
-    dims <- seq_len(min(config$n_pcs, ncol(Seurat::Embeddings(consensus, "pca"))))
-    consensus <- harmony::RunHarmony(
-      consensus, group.by.vars = "region_id", reduction.use = "pca", dims.use = dims,
-      theta = config$harmony_theta, lambda = config$harmony_lambda, sigma = config$harmony_sigma,
-      max.iter.harmony = config$harmony_max_iter, reference_values = config$harmony_reference_region,
-      reduction.save = "harmony_sensitivity", verbose = FALSE
-    )
-    consensus@misc$harmony_policy <- "HARMONY_SENSITIVITY_ONLY"
-    harmony_status <- "HARMONY_SENSITIVITY_ONLY"
-  }
-  expected_labels <- anchor$branches$primary_245$cell_labels
-  observed <- data.frame(cell_id = colnames(consensus), consensus_label = as.character(consensus$reference_label))
-  anchor_compare <- merge(expected_labels[, c("cell_id", "reference_label")], observed, by = "cell_id")
-  anchor_agreement <- mean(anchor_compare$reference_label == anchor_compare$consensus_label)
-  cluster_region <- table(consensus$seurat_clusters, consensus$region_id)
-  dominant_fraction <- apply(cluster_region, 1L, function(x) max(x) / sum(x))
-  cluster_size <- rowSums(cluster_region)
-  dominant_review <- dominant_fraction >= config$section_cluster_dominance & cluster_size >= config$section_cluster_min_cells
-  gates <- data.frame(
-    gate_id = c("region3_label_preservation", "section_dominant_cluster_review"),
-    observed = c(anchor_agreement, sum(dominant_review)),
-    threshold = c(config$consensus_label_stability_min, 0),
-    gate_status = c(
-      if (anchor_agreement >= config$consensus_label_stability_min) "PASS" else "STOP",
-      if (any(dominant_review)) "REVIEW_MORPHOLOGY_AND_MARKERS" else "PASS"
-    ), stringsAsFactors = FALSE
-  )
-  hard_stop <- any(gates$gate_status == "STOP")
-  final_reference <- if (hard_stop) anchor$branches$primary_245$object else consensus
-  decision <- if (hard_stop) "FALLBACK_TO_REGION3" else if (any(grepl("REVIEW", gates$gate_status))) "CONSENSUS_REVIEW" else "CONSENSUS_PASS"
-  list(
-    eligible_regions = eligible, admitted_regions = admitted,
-    consensus_object = consensus, final_reference = final_reference,
-    decision = decision, gates = gates, marker_support = annotation$marker_support,
-    harmony_status = harmony_status,
-    interpretation = "Section dominance is reviewed, not assumed technical; Harmony is sensitivity-only"
-  )
-}
-
-write_consensus_artifacts <- function(project_root, output_root, consensus) {
-  assert_path_within(project_root, output_root); dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
-  saveRDS(consensus$consensus_object, file.path(output_root, "eligible_consensus_object.rds"), compress = FALSE)
-  saveRDS(consensus$final_reference, file.path(output_root, "final_frozen_reference.rds"), compress = FALSE)
-  write_tsv(consensus$gates, file.path(output_root, "consensus_gates.tsv"), project_root)
-  write_tsv(consensus$marker_support, file.path(output_root, "consensus_marker_support.tsv"), project_root)
-  write_tsv(data.frame(
-    decision = consensus$decision, eligible_regions = paste(consensus$eligible_regions, collapse = ";"),
-    admitted_regions = paste(consensus$admitted_regions, collapse = ";"),
-    primary_reduction = "UNCORRECTED_PCA_PRIMARY", harmony = consensus$harmony_status,
-    interpretation = consensus$interpretation, stringsAsFactors = FALSE
-  ), file.path(output_root, "consensus_summary.tsv"), project_root)
-  validate_stage_files(
-    output_root,
-    c("eligible_consensus_object.rds", "final_frozen_reference.rds", "consensus_gates.tsv",
-      "consensus_marker_support.tsv", "consensus_summary.tsv"),
-    c("eligible_consensus_object.rds", "final_frozen_reference.rds"), TRUE
-  )
-}
-
-map_region4_sensitivity <- function(bundle, frozen_reference, features, thresholds,
-                                    marker_config, config) {
-  if (!identical(bundle$region_id, "Region_4") ||
-      !identical(bundle$downstream_contract, "MAP_TO_REGION_1_3_REFERENCE_WITH_UNCERTAIN")) {
-    stop("Region 4 mapping-only bundle is required.", call. = FALSE)
-  }
-  query <- prepare_seurat_query(bundle, "primary_include", features, config, "REGION4_MAPPING_ONLY_QUERY")
-  mapping <- map_query_to_frozen_reference(frozen_reference, query, features, config, thresholds)
-  coherence <- assess_mapped_marker_coherence(query, mapping, marker_config, config)
-  mapped_fraction <- mean(mapping$mapping_status == "Mapped")
-  gate <- data.frame(
-    gate_id = "region4_mapping_quality", observed = mapped_fraction,
-    threshold = config$mapping_accepted_fraction_min,
-    gate_status = if (mapped_fraction >= config$mapping_accepted_fraction_min) "PASS_SENSITIVITY" else "STOP_SENSITIVITY",
-    interpretation = "Region 4 never trained or altered the frozen reference",
-    stringsAsFactors = FALSE
-  )
-  list(query = query, mapping = mapping, marker_coherence = coherence, gate = gate)
-}
-
-score_standardized_gene_set <- function(data, genes, minimum_detected) {
-  genes <- intersect(genes, rownames(data))
-  if (!length(genes)) return(rep(NA_real_, ncol(data)))
-  values <- as.matrix(data[genes, , drop = FALSE])
-  standardized <- t(scale(t(values)))
-  standardized[!is.finite(standardized)] <- 0
-  detected <- colSums(values > 0)
-  score <- colMeans(standardized)
-  score[detected < as.integer(minimum_detected)] <- NA_real_
-  score
-}
-
-identify_eosinophils_independently <- function(reference, marker_config, config) {
-  data <- get_seurat_normalized_data(reference, "RNA")
-  eos_genes <- marker_config$gene[
-    marker_config$cell_type == "Eosinophil" & marker_config$use_policy == "PRIMARY_SUPPORT"
-  ]
-  eos_genes <- intersect(unique(eos_genes), rownames(data))
-  exclusion_types <- c("Macrophage", "Neutrophil", "Mast_cell")
-  exclusion <- marker_config$gene[
-    marker_config$cell_type %in% exclusion_types & marker_config$use_policy == "PRIMARY_SUPPORT"
-  ]
-  exclusion <- intersect(unique(exclusion), rownames(data))
-  if (!length(eos_genes)) stop("No eosinophil identity markers are available in the frozen panel.", call. = FALSE)
-  eos_count <- Matrix::colSums(data[eos_genes, , drop = FALSE] > 0)
-  exclusion_count <- if (length(exclusion)) Matrix::colSums(data[exclusion, , drop = FALSE] > 0) else rep(0, ncol(data))
-  eos_fraction <- as.numeric(eos_count) / length(eos_genes)
-  exclusion_fraction <- if (length(exclusion)) as.numeric(exclusion_count) / length(exclusion) else rep(0, ncol(data))
-  label <- as.character(reference$reference_label)
-  validated <- label == "Eosinophil" &
-    eos_count >= as.integer(config$eos_identity_min_markers) &
-    eos_fraction >= as.numeric(config$eos_identity_detection_min) &
-    exclusion_fraction < eos_fraction
-  data.frame(
-    cell_id = colnames(reference), reference_label = label,
-    eos_identity_marker_count = as.integer(eos_count),
-    eos_identity_marker_fraction = eos_fraction,
-    exclusion_marker_count = as.integer(exclusion_count),
-    exclusion_marker_fraction = exclusion_fraction,
-    validated_eosinophil = validated,
-    eos_identity_rule = paste0(
-      "Reference-label confirmation using canonical eosinophil identity markers; requires >=",
-      as.integer(config$eos_identity_min_markers), " detected markers, eosinophil marker fraction >=",
-      as.numeric(config$eos_identity_detection_min),
-      ", and eosinophil marker fraction greater than pooled macrophage/neutrophil/mast exclusion fraction; state genes not used for selection"
-    ),
-    stringsAsFactors = FALSE
-  )
-}
-
-run_eosinophil_robustness <- function(reference, eos_decision, marker_config, config) {
-  identity <- identify_eosinophils_independently(reference, marker_config, config)
-  eos_ids <- identity$cell_id[identity$validated_eosinophil]
-  if (length(eos_ids) < 10L) {
-    return(list(
-      identity = identity, scores = data.frame(), stability = data.frame(
-        gate_id = "eos_cell_count", observed = length(eos_ids), threshold = 10L,
-        gate_status = "STOP_EOS", interpretation = "Too few independently validated Eosinophils", stringsAsFactors = FALSE
-      ), gene_coherence = data.frame(), leave_one_gene_out = data.frame(),
-      mask_stability = data.frame(), sensitivity_method_status = data.frame(),
-      complexity_diagnostics = data.frame()
-    ))
-  }
-  data <- get_seurat_normalized_data(reference, "RNA")[, eos_ids, drop = FALSE]
-  set_for <- function(set, retained = NULL) {
-    rows <- eos_decision$gene_set == set
-    if (!is.null(retained)) rows <- rows & eos_decision[[retained]]
-    as.character(eos_decision$gene[rows])
-  }
-  short53 <- set_for("short_lived", "retained_provisional")
-  long53 <- set_for("long_lived", "retained_provisional")
-  short100 <- set_for("short_lived")
-  long100 <- set_for("long_lived")
-  short_nonrib <- short100[!grepl("^Rp[sl]", short100)]
-  scores <- data.frame(
-    cell_id = eos_ids,
-    short_primary_53 = score_standardized_gene_set(data, short53, config$eos_state_min_genes_detected),
-    long_primary_53 = score_standardized_gene_set(data, long53, config$eos_state_min_genes_detected),
-    short_complete_100 = score_standardized_gene_set(data, short100, config$eos_state_min_genes_detected),
-    long_complete_100 = score_standardized_gene_set(data, long100, config$eos_state_min_genes_detected),
-    short_nonribosomal = score_standardized_gene_set(data, short_nonrib, config$eos_state_min_genes_detected),
-    stringsAsFactors = FALSE
-  )
-  scores$state_primary <- ifelse(
-    is.na(scores$short_primary_53) | is.na(scores$long_primary_53), "Unresolved",
-    ifelse(scores$short_primary_53 > scores$long_primary_53, "AT_short_like", "AT_long_like")
-  )
-  eos_metadata <- reference@meta.data[match(eos_ids, rownames(reference@meta.data)), , drop = FALSE]
-  for (column in intersect(c("region_id", "mouse_id", "strict_include", "hotspot_sensitivity_include", "nCount_RNA", "nFeature_RNA"), names(eos_metadata))) {
-    scores[[column]] <- eos_metadata[[column]]
-  }
-  gene_coherence_for <- function(genes, composite, state_name) {
-    genes <- intersect(genes, rownames(data))
-    if (!length(genes)) return(data.frame())
-    data.frame(
-      state = state_name, gene = genes,
-      detected_fraction = Matrix::rowMeans(data[genes, , drop = FALSE] > 0),
-      spearman_with_composite = vapply(genes, function(gene) {
-        suppressWarnings(stats::cor(as.numeric(data[gene, ]), composite, method = "spearman", use = "pairwise.complete.obs"))
-      }, numeric(1)), stringsAsFactors = FALSE
-    )
-  }
-  gene_coherence <- rbind(
-    gene_coherence_for(short53, scores$short_primary_53, "short_primary_53"),
-    gene_coherence_for(long53, scores$long_primary_53, "long_primary_53")
-  )
-  leave_one_out_for <- function(genes, full_score, state_name) {
-    genes <- intersect(genes, rownames(data))
-    if (length(genes) < 2L) return(data.frame())
-    do.call(rbind, lapply(genes, function(omitted) {
-      loo <- score_standardized_gene_set(data, setdiff(genes, omitted), max(1L, config$eos_state_min_genes_detected - 1L))
-      data.frame(
-        state = state_name, omitted_gene = omitted,
-        spearman_with_full = suppressWarnings(stats::cor(loo, full_score, method = "spearman", use = "pairwise.complete.obs")),
-        stringsAsFactors = FALSE
-      )
-    }))
-  }
-  leave_one_gene_out <- rbind(
-    leave_one_out_for(short53, scores$short_primary_53, "short_primary_53"),
-    leave_one_out_for(long53, scores$long_primary_53, "long_primary_53")
-  )
-  identity_set <- identity$cell_id[identity$validated_eosinophil]
-  jaccard_subset <- function(mask_name) {
-    if (!mask_name %in% names(reference@meta.data)) return(NA_real_)
-    kept <- rownames(reference@meta.data)[as.logical(reference@meta.data[[mask_name]])]
-    length(intersect(identity_set, kept)) / length(union(identity_set, intersect(identity_set, kept)))
-  }
-  mask_stability <- data.frame(
-    comparison = c("primary_vs_strict_eos_assignment", "primary_vs_hotspot_sensitivity_eos_assignment"),
-    jaccard = c(jaccard_subset("strict_include"), jaccard_subset("hotspot_sensitivity_include")),
-    threshold = config$eos_assignment_jaccard_min, stringsAsFactors = FALSE
-  )
-  mask_stability$gate_status <- ifelse(
-    is.na(mask_stability$jaccard), "NOT_ESTIMABLE",
-    ifelse(mask_stability$jaccard >= mask_stability$threshold, "PASS_EOS", "STOP_EOS")
-  )
-  sensitivity_method_status <- data.frame(
-    method = c("GENEWISE_STANDARDIZED_MEAN", "ADDMODULESCORE_TARGETED_PANEL", "UCELL_TARGETED_PANEL"),
-    scientific_role = c("PRIMARY", "SENSITIVITY_ONLY", "SENSITIVITY_ONLY"),
-    status = c("COMPUTED", "NOT_COMPUTED", "NOT_COMPUTED"), stringsAsFactors = FALSE
-  )
-  module_object <- reference[, eos_ids]
-  module_result <- tryCatch({
-    x <- Seurat::AddModuleScore(
-      module_object, features = list(intersect(short53, rownames(module_object))),
-      nbin = as.integer(config$eos_module_nbin), ctrl = as.integer(config$eos_module_ctrl),
-      name = "short_targeted_module", seed = as.integer(config$seed)
-    )
-    x <- Seurat::AddModuleScore(
-      x, features = list(intersect(long53, rownames(x))),
-      nbin = as.integer(config$eos_module_nbin), ctrl = as.integer(config$eos_module_ctrl),
-      name = "long_targeted_module", seed = as.integer(config$seed)
-    )
-    x
-  }, error = identity)
-  if (!inherits(module_result, "error")) {
-    module_object <- module_result
-    scores$short_addmodule_sensitivity <- module_object$short_targeted_module1[match(scores$cell_id, colnames(module_object))]
-    scores$long_addmodule_sensitivity <- module_object$long_targeted_module1[match(scores$cell_id, colnames(module_object))]
-    sensitivity_method_status$status[sensitivity_method_status$method == "ADDMODULESCORE_TARGETED_PANEL"] <- "COMPUTED_SENSITIVITY_ONLY"
-  } else {
-    scores$short_addmodule_sensitivity <- NA_real_
-    scores$long_addmodule_sensitivity <- NA_real_
-    sensitivity_method_status$status[sensitivity_method_status$method == "ADDMODULESCORE_TARGETED_PANEL"] <- "FAILED_NONBLOCKING_TARGETED_CONTROLS"
-  }
-  if (requireNamespace("UCell", quietly = TRUE)) {
-    ucell_result <- tryCatch(
-      UCell::AddModuleScore_UCell(
-        reference[, eos_ids], features = list(short_ucell = short53, long_ucell = long53),
-        assay = "RNA", name = NULL
-      ), error = identity
-    )
-    if (!inherits(ucell_result, "error")) {
-      short_column <- grep("^short_ucell.*UCell$", names(ucell_result@meta.data), value = TRUE)[1]
-      long_column <- grep("^long_ucell.*UCell$", names(ucell_result@meta.data), value = TRUE)[1]
-      if (!is.na(short_column) && !is.na(long_column)) {
-        scores$short_ucell_sensitivity <- ucell_result@meta.data[[short_column]][match(scores$cell_id, rownames(ucell_result@meta.data))]
-        scores$long_ucell_sensitivity <- ucell_result@meta.data[[long_column]][match(scores$cell_id, rownames(ucell_result@meta.data))]
-        sensitivity_method_status$status[sensitivity_method_status$method == "UCELL_TARGETED_PANEL"] <- "COMPUTED_SENSITIVITY_ONLY"
-      } else {
-        scores$short_ucell_sensitivity <- NA_real_
-        scores$long_ucell_sensitivity <- NA_real_
-        sensitivity_method_status$status[sensitivity_method_status$method == "UCELL_TARGETED_PANEL"] <- "FAILED_NONBLOCKING_OUTPUT_SCHEMA"
-      }
-    } else {
-      scores$short_ucell_sensitivity <- NA_real_
-      scores$long_ucell_sensitivity <- NA_real_
-      sensitivity_method_status$status[sensitivity_method_status$method == "UCELL_TARGETED_PANEL"] <- "FAILED_NONBLOCKING"
-    }
-  } else {
-    scores$short_ucell_sensitivity <- NA_real_
-    scores$long_ucell_sensitivity <- NA_real_
-    sensitivity_method_status$status[sensitivity_method_status$method == "UCELL_TARGETED_PANEL"] <- "PACKAGE_UNAVAILABLE_NONBLOCKING"
-  }
-  complexity_diagnostics <- data.frame()
-  if (all(c("nCount_RNA", "nFeature_RNA") %in% names(scores))) {
-    complexity_diagnostics <- data.frame(
-      score = c("short_primary_53", "long_primary_53"),
-      spearman_nCount = c(
-        suppressWarnings(stats::cor(scores$short_primary_53, scores$nCount_RNA, method = "spearman", use = "pairwise.complete.obs")),
-        suppressWarnings(stats::cor(scores$long_primary_53, scores$nCount_RNA, method = "spearman", use = "pairwise.complete.obs"))
-      ),
-      spearman_nFeature = c(
-        suppressWarnings(stats::cor(scores$short_primary_53, scores$nFeature_RNA, method = "spearman", use = "pairwise.complete.obs")),
-        suppressWarnings(stats::cor(scores$long_primary_53, scores$nFeature_RNA, method = "spearman", use = "pairwise.complete.obs"))
-      ),
-      interpretation = "Diagnostic only; region and mouse are not regressed from biological scores",
-      stringsAsFactors = FALSE
-    )
-  }
-  correlation <- function(x, y) suppressWarnings(stats::cor(x, y, method = "spearman", use = "pairwise.complete.obs"))
-  stability <- data.frame(
-    gate_id = c("short53_vs_short100", "long53_vs_long100", "short100_vs_nonribosomal"),
-    observed = c(
-      correlation(scores$short_primary_53, scores$short_complete_100),
-      correlation(scores$long_primary_53, scores$long_complete_100),
-      correlation(scores$short_complete_100, scores$short_nonribosomal)
-    ),
-    threshold = config$eos_score_spearman_min, stringsAsFactors = FALSE
-  )
-  stability$gate_status <- ifelse(
-    !is.na(stability$observed) & stability$observed >= stability$threshold, "PASS_EOS", "STOP_EOS"
-  )
-  stability$interpretation <- "Gene-wise standardized mean is primary; targeted-panel module scores are sensitivity only"
-  stability <- rbind(
-    stability,
-    data.frame(
-      gate_id = paste0("mask_", mask_stability$comparison),
-      observed = mask_stability$jaccard, threshold = mask_stability$threshold,
-      gate_status = mask_stability$gate_status,
-      interpretation = "Eosinophil identity must remain stable across QC masks",
-      stringsAsFactors = FALSE
-    )
-  )
-  list(
-    identity = identity, scores = scores, stability = stability,
-    gene_coherence = gene_coherence, leave_one_gene_out = leave_one_gene_out,
-    mask_stability = mask_stability, sensitivity_method_status = sensitivity_method_status,
-    complexity_diagnostics = complexity_diagnostics
-  )
-}
-
-finalize_downstream_release <- function(anchor_validation, consensus, eos_result,
-                                        region4_result, admissions, morphology_gate = NULL) {
-  primary_hard_pass <- anchor_validation$decision != "STOP_ANCHOR" &&
-    consensus$decision != "FALLBACK_TO_REGION3"
-  primary_status <- if (primary_hard_pass) {
-    if (anchor_validation$decision == "REVIEW_ANCHOR" || consensus$decision == "CONSENSUS_REVIEW") "REVIEW" else "PASS"
-  } else if (anchor_validation$decision != "STOP_ANCHOR" && consensus$decision == "FALLBACK_TO_REGION3") {
-    "PASS_REGION3_FALLBACK"
-  } else {
-    "STOP"
-  }
-  if (!is.null(morphology_gate) && any(grepl("PENDING", morphology_gate$gate_status)) &&
-      primary_status != "STOP") primary_status <- "REVIEW"
-  eos_status <- if (nrow(eos_result$stability) && all(eos_result$stability$gate_status == "PASS_EOS")) "PASS" else "STOP"
-  region4_status <- if (all(region4_result$gate$gate_status == "PASS_SENSITIVITY")) "PASS" else "STOP"
-  data.frame(
-    release_domain = c(
-      "PRIMARY_EXPLORATORY_REFERENCE_RELEASE",
-      "EOS_DESCRIPTIVE_ANALYSIS_RELEASE",
-      "REGION4_SENSITIVITY_RELEASE"
-    ),
-    release_status = c(primary_status, eos_status, region4_status),
-    evidence = c(
-      paste("anchor=", anchor_validation$decision, ";consensus=", consensus$decision, sep = ""),
-      paste(eos_result$stability$gate_id, eos_result$stability$gate_status, collapse = ";"),
-      paste(region4_result$gate$gate_id, region4_result$gate$gate_status, collapse = ";")
-    ),
-    inference_scope = c(
-      "Exploratory broad-cell reference; one clean anchor section and two biological mice",
-      "Descriptive Eosinophil identity/state only; no population-level inference",
-      "Sensitivity-only mapped labels; Region 4 never contributes to reference fitting"
-    ),
-    generated_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
-    stringsAsFactors = FALSE
-  )
-}
-
+# Purpose: Region bundle to spatial seurat.
+# Inputs: required: region_data; optional/defaulted: xenium_dir, mask, genes, project, assay, fov, include_cell_segmentation, include_nucleus_segmentation.
+# Output: Returns the derived R object described by the function name; no files are written unless an explicit output path is an input.
 region_bundle_to_spatial_seurat <- function(
     region_data,
     xenium_dir = NULL,
@@ -4441,560 +3294,9 @@ region_bundle_to_spatial_seurat <- function(
   object
 }
 
-plot_spatial_discrete_overlay <- function(
-    object,
-    group.by,
-    fov = NULL,
-    highlight = NULL,
-    background_col = "#D9D9D9",
-    highlight_cols = NULL,
-    base_size = 0.25,
-    highlight_size = 0.9,
-    base_alpha = 0.7,
-    highlight_alpha = 1,
-    flip_xy = FALSE,
-    dark.background = FALSE,
-    axes = FALSE,
-    title = NULL,
-    subtitle = NULL
-) {
-
-  # ============================================================
-  # 1. Validate object and metadata
-  # ============================================================
-
-  if (!inherits(object, "Seurat")) {
-    stop("object must be a Seurat object.", call. = FALSE)
-  }
-
-  if (!group.by %in% colnames(object@meta.data)) {
-    stop(
-      "Metadata variable not found: ",
-      group.by,
-      call. = FALSE
-    )
-  }
-
-  if (is.null(fov)) {
-    fov <- SeuratObject::DefaultFOV(object)
-  }
-
-  if (!fov %in% Seurat::Images(object)) {
-    stop(
-      "FOV not found: ",
-      fov,
-      call. = FALSE
-    )
-  }
-
-
-  # ============================================================
-  # 2. Prepare metadata
-  # ============================================================
-
-  meta <- object@meta.data
-  meta$cell <- rownames(meta)
-
-  values <- meta[[group.by]]
-
-  if (is.logical(values)) {
-    values <- factor(
-      values,
-      levels = c(TRUE, FALSE)
-    )
-  } else {
-    values <- factor(values)
-  }
-
-  meta[[group.by]] <- values
-  levels_use <- levels(values)
-
-
-  # ============================================================
-  # 3. Validate highlight groups
-  # ============================================================
-
-  if (is.null(highlight)) {
-    highlight <- character()
-  }
-
-  highlight <- as.character(highlight)
-
-  unknown_highlight <- setdiff(
-    highlight,
-    levels_use
-  )
-
-  if (length(unknown_highlight)) {
-    stop(
-      "Highlight values not present in ",
-      group.by,
-      ": ",
-      paste(unknown_highlight, collapse = ", "),
-      call. = FALSE
-    )
-  }
-
-
-  # ============================================================
-  # 4. Base ImageDimPlot colors
-  #
-  # Draw every category grey first. Selected categories are
-  # redrawn later as separate layers.
-  # ============================================================
-
-  base_cols <- stats::setNames(
-    rep(
-      background_col,
-      length(levels_use)
-    ),
-    levels_use
-  )
-
-
-  # ============================================================
-  # 5. Highlight colors
-  # ============================================================
-
-  if (length(highlight)) {
-
-    if (is.null(highlight_cols)) {
-
-      default_cols <- c(
-        "#D73027",
-        "#0072B2",
-        "#009E73",
-        "#CC79A7",
-        "#E69F00",
-        "#56B4E9"
-      )
-
-      highlight_cols <- stats::setNames(
-        rep(
-          default_cols,
-          length.out = length(highlight)
-        ),
-        highlight
-      )
-
-    } else if (is.null(names(highlight_cols))) {
-
-      if (length(highlight_cols) != length(highlight)) {
-        stop(
-          "Unnamed highlight_cols must match highlight length.",
-          call. = FALSE
-        )
-      }
-
-      highlight_cols <- stats::setNames(
-        highlight_cols,
-        highlight
-      )
-
-    } else {
-
-      missing_cols <- setdiff(
-        highlight,
-        names(highlight_cols)
-      )
-
-      if (length(missing_cols)) {
-        stop(
-          "Missing highlight colors for: ",
-          paste(missing_cols, collapse = ", "),
-          call. = FALSE
-        )
-      }
-
-      highlight_cols <- highlight_cols[
-        highlight
-      ]
-    }
-  }
-
-
-  # ============================================================
-  # 6. Base ImageDimPlot
-  # ============================================================
-
-  p <- Seurat::ImageDimPlot(
-    object,
-    fov = fov,
-    group.by = group.by,
-    cols = unname(base_cols),
-    size = base_size,
-    alpha = base_alpha,
-    flip_xy = flip_xy,
-    dark.background = dark.background,
-    axes = axes
-  )
-
-
-  # ============================================================
-  # 7. Get centroid coordinates from the FOV
-  # ============================================================
-
-  coords <- SeuratObject::GetTissueCoordinates(
-    object[[fov]],
-    which = "centroids"
-  )
-
-  if (!"cell" %in% names(coords)) {
-    coords$cell <- rownames(coords)
-  }
-
-  if (!all(c("x", "y") %in% names(coords))) {
-    stop(
-      "Centroid coordinates do not contain x/y columns.",
-      call. = FALSE
-    )
-  }
-
-
-  # ============================================================
-  # 8. Align metadata without merge reordering
-  # ============================================================
-
-  coords[[group.by]] <- meta[
-    match(coords$cell, meta$cell),
-    group.by
-  ]
-
-
-  # ============================================================
-  # 9. Convert tissue coordinates to ImageDimPlot plot coordinates
-  #
-  # Important:
-  # Seurat's SingleImagePlot internally maps:
-  #
-  #       plot x <- tissue y
-  #       plot y <- tissue x
-  #
-  # and then flip_xy controls whether coord_flip() is applied.
-  #
-  # Therefore:
-  #
-  # flip_xy = TRUE:
-  #     ggplot layer coordinates = (y, x)
-  #
-  # flip_xy = FALSE:
-  #     coord_flip() effectively displays them as (x, y)
-  #
-  # For added ggplot layers we need to supply coordinates in the
-  # coordinate system expected BEFORE coord_flip().
-  # ============================================================
-
-  if (isTRUE(flip_xy)) {
-
-    coords$plot_x <- coords$y
-    coords$plot_y <- coords$x
-
-  } else {
-
-    # ImageDimPlot will apply coord_flip(), so the custom layer
-    # must also enter as x=y, y=x.
-    coords$plot_x <- coords$y
-    coords$plot_y <- coords$x
-  }
-
-
-  # ============================================================
-  # 10. Overlay highlighted groups
-  # ============================================================
-
-  if (length(highlight)) {
-
-    for (group_value in highlight) {
-
-      tmp <- coords[
-        !is.na(coords[[group.by]]) &
-          as.character(coords[[group.by]]) == group_value,
-        ,
-        drop = FALSE
-      ]
-
-      if (!nrow(tmp)) {
-        next
-      }
-
-      p <- p +
-        ggplot2::geom_point(
-          data = tmp,
-          ggplot2::aes(
-            x = plot_x,
-            y = plot_y
-          ),
-          inherit.aes = FALSE,
-          colour = unname(
-            highlight_cols[group_value]
-          ),
-          size = highlight_size,
-          alpha = highlight_alpha
-        )
-    }
-  }
-
-
-  # ============================================================
-  # 11. Labels
-  # ============================================================
-
-  p <- p +
-    ggplot2::labs(
-      title = title,
-      subtitle = subtitle
-    )
-
-
-  # ============================================================
-  # 12. Return
-  # ============================================================
-
-  p
-}
-
-plot_annotation_overlap_heatmap <- function(
-    object,
-    row_var,
-    col_var,
-    normalize = c("row", "column", "none"),
-    min_label = 5,
-    cluster_rows = FALSE,
-    cluster_columns = FALSE,
-    row_order = NULL,
-    col_order = NULL,
-    legend_title = "Cells (%)",
-    row_title = "Current annotation",
-    column_title = "Reference annotation",
-    show_values = TRUE,
-    digits = 0
-) {
-
-  requireNamespace("ComplexHeatmap")
-  requireNamespace("circlize")
-  requireNamespace("grid")
-
-  normalize <- match.arg(normalize)
-
-  ## ----------------------------
-  ## 1. Extract metadata
-  ## ----------------------------
-  meta <- object[[]]
-
-  if (!row_var %in% colnames(meta)) {
-    stop("row_var not found in object metadata: ", row_var)
-  }
-
-  if (!col_var %in% colnames(meta)) {
-    stop("col_var not found in object metadata: ", col_var)
-  }
-
-  df <- meta[, c(row_var, col_var), drop = FALSE]
-
-  # Remove NA annotations
-  df <- df[
-    !is.na(df[[row_var]]) &
-      !is.na(df[[col_var]]),
-    ,
-    drop = FALSE
-  ]
-
-  ## ----------------------------
-  ## 2. Build contingency table
-  ## ----------------------------
-  count_mat <- table(
-    df[[row_var]],
-    df[[col_var]]
-  )
-
-  ## ----------------------------
-  ## 3. Convert to percentages
-  ## ----------------------------
-  if (normalize == "row") {
-
-    prop_mat <- prop.table(
-      count_mat,
-      margin = 1
-    ) * 100
-
-  } else if (normalize == "column") {
-
-    prop_mat <- prop.table(
-      count_mat,
-      margin = 2
-    ) * 100
-
-  } else {
-
-    prop_mat <- count_mat / sum(count_mat) * 100
-  }
-
-  prop_mat <- as.matrix(prop_mat)
-
-  # Remove empty rows/columns
-  prop_mat <- prop_mat[
-    rowSums(prop_mat) > 0,
-    colSums(prop_mat) > 0,
-    drop = FALSE
-  ]
-
-  ## ----------------------------
-  ## 4. Optional manual ordering
-  ## ----------------------------
-  if (!is.null(row_order)) {
-
-    row_order <- intersect(
-      row_order,
-      rownames(prop_mat)
-    )
-
-    remaining_rows <- setdiff(
-      rownames(prop_mat),
-      row_order
-    )
-
-    prop_mat <- prop_mat[
-      c(row_order, remaining_rows),
-      ,
-      drop = FALSE
-    ]
-  }
-
-  if (!is.null(col_order)) {
-
-    col_order <- intersect(
-      col_order,
-      colnames(prop_mat)
-    )
-
-    remaining_cols <- setdiff(
-      colnames(prop_mat),
-      col_order
-    )
-
-    prop_mat <- prop_mat[
-      ,
-      c(col_order, remaining_cols),
-      drop = FALSE
-    ]
-  }
-
-  ## ----------------------------
-  ## 5. Cell-style color scale
-  ## ----------------------------
-  col_fun <- circlize::colorRamp2(
-    c(0, 25, 50, 75, 100),
-    c(
-      "#FFFFFF",
-      "#FDE0DD",
-      "#FCAE91",
-      "#FB6A4A",
-      "#CB181D"
-    )
-  )
-
-  ## ----------------------------
-  ## 6. Heatmap
-  ## ----------------------------
-  ht <- ComplexHeatmap::Heatmap(
-    prop_mat,
-
-    name = "cell_percentage",
-    col = col_fun,
-
-    cluster_rows = cluster_rows,
-    cluster_columns = cluster_columns,
-
-    row_title = row_title,
-    column_title = column_title,
-
-    row_names_side = "left",
-
-    row_names_gp = grid::gpar(
-      fontsize = 10
-    ),
-
-    column_names_gp = grid::gpar(
-      fontsize = 10
-    ),
-
-    column_names_rot = 45,
-
-    rect_gp = grid::gpar(
-      col = "white",
-      lwd = 1
-    ),
-
-    border = TRUE,
-
-    cell_fun = if (show_values) {
-
-      function(j, i, x, y, width, height, fill) {
-
-        val <- prop_mat[i, j]
-
-        if (!is.na(val) && val >= min_label) {
-
-          grid::grid.text(
-            sprintf(
-              paste0("%.", digits, "f"),
-              val
-            ),
-            x,
-            y,
-            gp = grid::gpar(
-              fontsize = 8,
-              fontface = ifelse(
-                val >= 50,
-                "bold",
-                "plain"
-              ),
-              col = ifelse(
-                val >= 60,
-                "white",
-                "black"
-              )
-            )
-          )
-        }
-      }
-
-    } else {
-      NULL
-    },
-
-    heatmap_legend_param = list(
-      title = legend_title,
-      at = c(0, 25, 50, 75, 100),
-      labels = c("0", "25", "50", "75", "100"),
-      legend_height = grid::unit(3.5, "cm"),
-      title_gp = grid::gpar(
-        fontsize = 10,
-        fontface = "bold"
-      ),
-      labels_gp = grid::gpar(
-        fontsize = 9
-      )
-    )
-  )
-
-  ## ----------------------------
-  ## 7. Draw
-  ## ----------------------------
-  ComplexHeatmap::draw(
-    ht,
-    heatmap_legend_side = "right"
-  )
-
-  invisible(
-    list(
-      heatmap = ht,
-      percentage_matrix = prop_mat,
-      count_matrix = count_mat
-    )
-  )
-}
-
+# Purpose: Calculate marker scores.
+# Inputs: required: object, marker_df, group_col; optional/defaulted: assay, layer, prefix, z_cap.
+# Output: Returns computed QC evidence as a vector, data frame, or named summary list; it does not modify raw input files.
 calculate_marker_scores <- function(
   object,
   marker_df,
@@ -5137,6 +3439,9 @@ calculate_marker_scores <- function(
   )
 }
 
+# Purpose: Score marker groups by cluster.
+# Inputs: required: object, marker_df, group_col; optional/defaulted: cluster_col, assay, layer, score_prefix, detect_prefix, label_prefix, z_cap.
+# Output: Returns scores or refined annotations aligned to the supplied cells/features; raw counts are unchanged.
 score_marker_groups_by_cluster <- function(
   object,
   marker_df,
@@ -5456,6 +3761,9 @@ score_marker_groups_by_cluster <- function(
   )
 }
 
+# Purpose: Refine xenium celltypes.
+# Inputs: required: object; optional/defaulted: reduction, dims, k, self_weight, wang_prefix, cluster_main_col, cluster_subtype_col, ontology_gap_max_immune_prob, wang_main_review_score, wang_main_review_margin, wang_subtype_review_margin, xenium_subtype_review_margin, verbose.
+# Output: Returns scores or refined annotations aligned to the supplied cells/features; raw counts are unchanged.
 refine_xenium_celltypes <- function(
   object,
   reduction = "pca",
@@ -7075,6 +5383,20 @@ refine_xenium_celltypes <- function(
   )
 }
 
+# KNOWN INVALID NOTEBOOK-LOCAL NEAREST-CELL ANALYSIS
+# The zero-distance Eos error is not produced by a function in this source file.
+# It occurs in notebooks/B1_Region3_primary_479.ipynb after rescued Eos are
+# assigned through Final_CellType_subtype_refined, while the later non-Eos
+# reference pool is filtered with the older Final_CellType_subtype column.
+# Rescued Eos can therefore occur in both the Eos query and non-Eos reference
+# pools, and FNN::get.knnx() returns zero-distance self-matches. Those legacy
+# nearest-cell and neighbourhood outputs are not presently valid. A corrected
+# analysis must freeze one refined label for both pools and verify
+# length(intersect(eos_cell_ids, reference_cell_ids)) == 0 before any kNN call.
+
+# Purpose: Refine eosinophil identity.
+# Inputs: required: object; optional/defaulted: assay, reduction, dims, k, self_weight, wang_main_eos_col, wang_subtype_eos_col, wang_subtype_prefix, xenium_eos_score_col, eos_core_genes, eos_support_genes, competitor_score_cols, wang_high, wang_support, min_core_high, min_core_probable, xenium_margin_high, verbose.
+# Output: Returns scores or refined annotations aligned to the supplied cells/features; raw counts are unchanged.
 refine_eosinophil_identity <- function(
   object,
 
@@ -8218,6 +6540,9 @@ refine_eosinophil_identity <- function(
   )
 }
 
+# Purpose: Score eosinophil likeness.
+# Inputs: required: reference, query; optional/defaulted: reference_group_col, eos_label, reference_sample_col, reference_assay, query_assay, core_markers, support_markers, tier3_marker, context_markers, reference_immune_labels, query_main_col, query_immune_labels, wang_predicted_col, wang_eos_score_col, min_core_eos_cells, min_core_eos_pct, min_pair_eos_cells, min_pair_eos_pct, min_competitor_cells, smoothing, allow_nonimmune_rescue, verbose.
+# Output: Returns scores or refined annotations aligned to the supplied cells/features; raw counts are unchanged.
 score_eosinophil_likeness <- function(
 
   reference,
@@ -10162,6 +8487,9 @@ score_eosinophil_likeness <- function(
   )
 }
 
+# Purpose: Plot eos with celltypes.
+# Inputs: required: object, celltypes; optional/defaulted: subtype_col, eos_label, fov, eos_col, other_cols, background_col, background_size, other_size, eos_size, background_alpha, highlight_alpha, flip_xy.
+# Output: Returns a ggplot object or named list of plots; plotting does not mutate the input object.
 plot_eos_with_celltypes <- function(
   object,
   celltypes,

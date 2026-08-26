@@ -1,0 +1,5 @@
+metric	bound	value	inclusive	purpose
+nFeature_Xenium	lower	5	FALSE	Primary inclusion lower bound
+nFeature_Xenium	upper	200	FALSE	Primary inclusion upper bound
+nCount_Xenium	lower	10	FALSE	Primary inclusion lower bound
+nCount_Xenium	upper	1000	FALSE	Primary inclusion upper bound
