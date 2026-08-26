@@ -14,10 +14,13 @@ sys.source(source_path, envir = active_environment)
 required_active_functions <- c(
   "read_fixed_cell_qc_thresholds", "apply_fixed_primary_bounds",
   "calculate_xenium_cell_qc", "build_cell_downstream_masks",
-  "write_section_artifacts", "summarise_slide_qc",
+  "expected_scwat_regions", "write_scwat_region_qc_bundle",
+  "validate_scwat_region_qc_bundle", "read_scwat_slide_qc_outputs",
+  "summarise_slide_qc", "summarise_scwat_mouse_sections",
+  "write_scwat_slide_qc_bundle", "validate_scwat_slide_qc_bundle",
   "region_bundle_to_spatial_seurat", "refine_eosinophil_identity",
   "score_eosinophil_likeness", "plot_eos_with_celltypes",
-  "summarise_transcript_quality_table", "validate_runtime_paths"
+  "validate_runtime_paths"
 )
 stopifnot(all(vapply(
   required_active_functions,
@@ -31,7 +34,8 @@ stopifnot(all(vapply(
 archived_functions <- c(
   "fit_region3_anchor_branches", "map_and_evaluate_conditional_region",
   "build_eligible_consensus", "map_region4_sensitivity",
-  "finalize_downstream_release"
+  "finalize_downstream_release", "write_section_artifacts",
+  "write_extended_section_artifacts", "write_evidence_only_qc_artifacts"
 )
 stopifnot(!any(vapply(
   archived_functions,
@@ -52,5 +56,20 @@ stopifnot(all(vapply(
   mode = "function",
   inherits = FALSE
 )))
+
+# Every active public/helper function must carry an immediately adjacent
+# roxygen block that states its return contract. This catches regression to the
+# former generic Purpose/Inputs/Output comments.
+source_lines <- readLines(source_path, warn = FALSE)
+definition_lines <- grep("^[A-Za-z][A-Za-z0-9._]*[[:space:]]*<-[[:space:]]*function", source_lines)
+documentation_ok <- vapply(definition_lines, function(line_number) {
+  cursor <- line_number - 1L
+  while (cursor > 0L && !nzchar(trimws(source_lines[[cursor]]))) cursor <- cursor - 1L
+  end <- cursor
+  while (cursor > 0L && grepl("^[[:space:]]*#'", source_lines[[cursor]])) cursor <- cursor - 1L
+  block <- if (end >= cursor + 1L) source_lines[(cursor + 1L):end] else character()
+  length(block) > 0L && any(grepl("@return", block, fixed = TRUE))
+}, logical(1))
+stopifnot(all(documentation_ok))
 
 cat("Active and archival source contracts passed.\n")
