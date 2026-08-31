@@ -202,3 +202,9 @@
 - Confirmed the user requires all 479 genes, `primary_include_revised`, PCs 1–30, clustering-stability assessment, marker plus Wang-reference annotation, and an inclusive Eos definition consisting of annotation Eos plus Tier 1/2 calls.
 - Identified correctness risks to address in a new notebook: out-of-order execution, row-order mask recomputation, misleading PC12 names for PC1–30 analysis, forced Eos relabelling without provenance, circular cell-level Eos comparisons, overlapping spatial query/reference pools, and overinterpretation of ligand–receptor expression products.
 - Wrote the proposed design to `docs/superpowers/specs/2026-09-01-region3-complete479-stepwise-review-design.md`. No implementation files or executed B1 outputs were changed at this checkpoint.
+
+### 2026-09-01 — Approved design converted to implementation plan
+
+- User approved the complete-479 design and required every valid B1 statistic, plot and analysis to be retained, with invalid methods corrected and commented at the point of use.
+- Added a test-first, eight-task implementation plan at `docs/superpowers/plans/2026-09-01-region3-complete479-stepwise-review.md`.
+- The plan preserves B1 as immutable provenance, adds a formal B1-to-B2 method audit, extracts reusable R functions, builds a deterministic B2 notebook, performs bounded D:-only subset tests, and leaves full-data execution to HPC.
