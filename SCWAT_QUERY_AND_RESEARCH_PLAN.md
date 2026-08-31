@@ -195,3 +195,10 @@
 - Full-data execution is still required on HPC before using the initial-QC readiness results for downstream admission decisions.
 - Committed the implementation as `565edcd` and merged it locally into `codex/notebook-qc-pipeline` as `b43ec07`; the complete post-merge suite passed.
 - Two non-force GitHub push attempts failed because the current session could not connect to `github.com:443`. The local target branch remains clean and ahead of its remote; no force operation was attempted.
+
+### 2026-09-01 — Region 3 complete-panel notebook review design
+
+- Audited the executed `B1_Region3_primary_479.ipynb`, current `R/source.R`, September 1 HPC-returned QC tables and Region 3 downstream artifact inventory without changing them.
+- Confirmed the user requires all 479 genes, `primary_include_revised`, PCs 1–30, clustering-stability assessment, marker plus Wang-reference annotation, and an inclusive Eos definition consisting of annotation Eos plus Tier 1/2 calls.
+- Identified correctness risks to address in a new notebook: out-of-order execution, row-order mask recomputation, misleading PC12 names for PC1–30 analysis, forced Eos relabelling without provenance, circular cell-level Eos comparisons, overlapping spatial query/reference pools, and overinterpretation of ligand–receptor expression products.
+- Wrote the proposed design to `docs/superpowers/specs/2026-09-01-region3-complete479-stepwise-review-design.md`. No implementation files or executed B1 outputs were changed at this checkpoint.
