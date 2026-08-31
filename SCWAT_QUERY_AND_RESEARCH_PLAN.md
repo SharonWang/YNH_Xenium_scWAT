@@ -208,3 +208,10 @@
 - User approved the complete-479 design and required every valid B1 statistic, plot and analysis to be retained, with invalid methods corrected and commented at the point of use.
 - Added a test-first, eight-task implementation plan at `docs/superpowers/plans/2026-09-01-region3-complete479-stepwise-review.md`.
 - The plan preserves B1 as immutable provenance, adds a formal B1-to-B2 method audit, extracts reusable R functions, builds a deterministic B2 notebook, performs bounded D:-only subset tests, and leaves full-data execution to HPC.
+
+### 2026-09-01 — September HPC baseline audit checkpoint
+
+- Captured B1 SHA-256 `739BD6648CF48057E14699694556D33AD24E09110D0FDF31A6DD6109214D1037` and `R/source.R` SHA-256 `1A2AE63697CF87424A0570F6DA3DEF29928BD3B16FAE6822AFEC5A845E5F5E21` before new implementation.
+- Added `docs/validation/2026-09-01-b1-region3-method-audit.md`, mapping every unique B1 analysis to `RETAIN`, `RETAIN_WITH_CAVEAT`, or `CORRECT` and specifying its B2 treatment.
+- JSON parsing passed for all four HPC-returned QC notebooks, the slide summary and B1; none contains a stored Jupyter error object. `git diff --check` also passed.
+- Local R 4.6.1 did not finish even a source-parse startup within 60 seconds when user/site startup files were disabled and all temporary paths were redirected to D:. The process was terminated and this is recorded as a local-environment validation gap; no alternative R installation was used.

@@ -680,10 +680,38 @@ plot_section_qc <- function(cell_metadata, region_id) {
     counts = common_hist("nCount_Xenium", "Gene-expression transcripts per cell", "Transcript-count distribution"),
     features = common_hist("nFeature_Xenium", "Genes detected per cell", "Detected-feature distribution"),
     area = common_hist("cell_area", expression("Cell area ("*mu*"m"^2*")"), "Cell-area distribution"),
-    spatial = ggplot2::ggplot(spatial_data, ggplot2::aes(x = x_centroid, y = y_centroid, colour = QC_status)) +
-      ggplot2::geom_point(size = 0.35, alpha = 0.75) +
-      ggplot2::scale_colour_manual(values = c(Pass = "#BDBDBD", Review = "#D73027"), drop = FALSE) +
-      ggplot2::coord_fixed() + ggplot2::labs(title = "Spatial QC review map", subtitle = region_id, x = "X centroid", y = "Y centroid", colour = "QC") + cell_style_theme()
+    spatial = ggplot2::ggplot(
+  spatial_data,
+  ggplot2::aes(x = x_centroid, y = y_centroid)
+) +
+  ggplot2::geom_point(
+    data = spatial_data[spatial_data$QC_status == "Pass", ],
+    ggplot2::aes(colour = QC_status),
+    size = 0.35,
+    alpha = 0.75
+  ) +
+  ggplot2::geom_point(
+    data = spatial_data[spatial_data$QC_status == "Review", ],
+    ggplot2::aes(colour = QC_status),
+    size = 0.35,
+    alpha = 0.9
+  ) +
+  ggplot2::scale_colour_manual(
+    values = c(
+      Pass = "#BDBDBD",
+      Review = "#D73027"
+    ),
+    drop = FALSE
+  ) +
+  ggplot2::coord_fixed() +
+  ggplot2::labs(
+    title = "Spatial QC review map",
+    subtitle = region_id,
+    x = "X centroid",
+    y = "Y centroid",
+    colour = "QC"
+  ) +
+  cell_style_theme()
   )
 }
 
@@ -733,7 +761,7 @@ write_gz_tsv <- function(x, path, project_root) {
 #'
 #' @param project_root Absolute Xenium project root. Every output path must be
 #'   below this directory.
-#' @param output_dir Region output directory below `adipose_analysis`.
+#' @param output_dir Region output directory below `adipose_analysis_B2`.
 #' @param region_id One value from [expected_scwat_regions()].
 #' @param run_label Non-empty identifier shared by all four regions.
 #' @param execution_mode Either `FULL_HPC` or `LOCAL_SUBSET`.
@@ -754,8 +782,8 @@ write_scwat_region_qc_bundle <- function(project_root, output_dir, region_id, ru
   require_package("Matrix")
   assert_path_within(project_root, output_dir)
   normalized_output <- canonical_path(output_dir)
-  if (!grepl("/adipose_analysis/", normalized_output, fixed = TRUE)) {
-    stop("scWAT QC outputs must be below adipose_analysis.", call. = FALSE)
+  if (!grepl("/adipose_analysis_B2/", normalized_output, fixed = TRUE)) {
+    stop("scWAT QC outputs must be below adipose_analysis_B2.", call. = FALSE)
   }
   if (grepl("colon_analysis", normalized_output, fixed = TRUE)) {
     stop("scWAT QC outputs cannot use colon_analysis.", call. = FALSE)
@@ -946,7 +974,7 @@ read_scwat_slide_qc_outputs <- function(run_root, expected_regions = expected_sc
 #' Write the reloadable four-region scWAT slide QC summary bundle.
 #'
 #' @param project_root Absolute Xenium project root.
-#' @param output_dir Slide-summary directory below `adipose_analysis`.
+#' @param output_dir Slide-summary directory below `adipose_analysis_B2`.
 #' @param run_label Run label shared by the four section bundles.
 #' @param execution_mode Execution mode shared by the four section bundles.
 #' @param slide_data Result from [read_scwat_slide_qc_outputs()].
@@ -959,8 +987,8 @@ read_scwat_slide_qc_outputs <- function(run_root, expected_regions = expected_sc
 write_scwat_slide_qc_bundle <- function(project_root, output_dir, run_label, execution_mode,
                                         slide_data, slide_summary, mouse_summary) {
   assert_path_within(project_root, output_dir)
-  if (!grepl("/adipose_analysis/", canonical_path(output_dir), fixed = TRUE)) {
-    stop("scWAT slide output must be below adipose_analysis.", call. = FALSE)
+  if (!grepl("/adipose_analysis_B2/", canonical_path(output_dir), fixed = TRUE)) {
+    stop("scWAT slide output must be below adipose_analysis_B2.", call. = FALSE)
   }
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   write_tsv(slide_data$coverage, file.path(output_dir, "section_coverage.tsv"), project_root)
@@ -7600,4 +7628,1028 @@ plot_eos_with_celltypes <- function(
     )
 
   p
+}
+
+create_spatial_seurat_from_xenium <- function(
+    xenium_dir,
+    genes = NULL,
+    cells = NULL,
+    project = NULL,
+    assay = "Xenium",
+    fov = "fov",
+    include_cell_segmentation = TRUE,
+    include_nucleus_segmentation = TRUE
+) {
+
+  # ============================================================
+  # 0. Basic checks
+  # ============================================================
+
+  if (!dir.exists(xenium_dir)) {
+    stop(
+      "xenium_dir does not exist: ",
+      xenium_dir,
+      call. = FALSE
+    )
+  }
+
+  if (is.null(project)) {
+    project <- basename(
+      normalizePath(
+        xenium_dir,
+        winslash = "/",
+        mustWork = TRUE
+      )
+    )
+  }
+
+  message("Reading Xenium output directly from:")
+  message("  ", xenium_dir)
+
+
+  # ============================================================
+  # 1. Read native Xenium count matrix
+  # ============================================================
+
+  h5_path <- file.path(
+    xenium_dir,
+    "cell_feature_matrix.h5"
+  )
+
+  matrix_dir <- file.path(
+    xenium_dir,
+    "cell_feature_matrix"
+  )
+
+  if (file.exists(h5_path)) {
+
+    message("Reading cell_feature_matrix.h5 ...")
+
+    counts_raw <- Seurat::Read10X_h5(
+      filename = h5_path,
+      use.names = TRUE,
+      unique.features = TRUE
+    )
+
+  } else if (dir.exists(matrix_dir)) {
+
+    message("Reading cell_feature_matrix/ directory ...")
+
+    counts_raw <- Seurat::Read10X(
+      data.dir = matrix_dir,
+      gene.column = 2
+    )
+
+  } else {
+
+    stop(
+      paste0(
+        "Could not find either:\n",
+        "  cell_feature_matrix.h5\n",
+        "or\n",
+        "  cell_feature_matrix/\n",
+        "inside:\n",
+        xenium_dir
+      ),
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 2. Handle feature-type list if Read10X returns one
+  # ============================================================
+
+  if (is.list(counts_raw)) {
+
+    message(
+      "Read10X returned feature types: ",
+      paste(
+        names(counts_raw),
+        collapse = ", "
+      )
+    )
+
+    if ("Gene Expression" %in% names(counts_raw)) {
+
+      counts <- counts_raw[["Gene Expression"]]
+
+    } else if ("GeneExpression" %in% names(counts_raw)) {
+
+      counts <- counts_raw[["GeneExpression"]]
+
+    } else {
+
+      # Show available names rather than silently guessing
+      stop(
+        "Could not identify Gene Expression matrix. ",
+        "Available entries: ",
+        paste(
+          names(counts_raw),
+          collapse = ", "
+        ),
+        call. = FALSE
+      )
+    }
+
+  } else {
+
+    counts <- counts_raw
+  }
+
+  rm(counts_raw)
+  invisible(gc())
+
+
+  if (!inherits(counts, "sparseMatrix")) {
+    counts <- methods::as(
+      counts,
+      "dgCMatrix"
+    )
+  }
+
+  if (is.null(rownames(counts)) ||
+      is.null(colnames(counts))) {
+
+    stop(
+      "Xenium count matrix lacks gene/cell names.",
+      call. = FALSE
+    )
+  }
+
+
+  message(
+    "Native matrix: ",
+    format(nrow(counts), big.mark = ","),
+    " features × ",
+    format(ncol(counts), big.mark = ","),
+    " cells"
+  )
+
+
+  # ============================================================
+  # 3. Read native Xenium cell metadata
+  # ============================================================
+
+  cells_parquet <- file.path(
+    xenium_dir,
+    "cells.parquet"
+  )
+
+  cells_csv <- file.path(
+    xenium_dir,
+    "cells.csv.gz"
+  )
+
+  if (file.exists(cells_parquet)) {
+
+    if (!requireNamespace(
+      "arrow",
+      quietly = TRUE
+    )) {
+      stop(
+        "Package 'arrow' is required to read cells.parquet.",
+        call. = FALSE
+      )
+    }
+
+    message("Reading cells.parquet ...")
+
+    metadata <- arrow::read_parquet(
+      cells_parquet,
+      as_data_frame = TRUE
+    )
+
+  } else if (file.exists(cells_csv)) {
+
+    message("Reading cells.csv.gz ...")
+
+    metadata <- read.csv(
+      cells_csv,
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+
+  } else {
+
+    stop(
+      "Neither cells.parquet nor cells.csv.gz was found.",
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 4. Validate native metadata
+  # ============================================================
+
+  required_meta <- c(
+    "cell_id",
+    "x_centroid",
+    "y_centroid"
+  )
+
+  missing_meta <- setdiff(
+    required_meta,
+    colnames(metadata)
+  )
+
+  if (length(missing_meta)) {
+    stop(
+      "Missing required Xenium cell columns: ",
+      paste(
+        missing_meta,
+        collapse = ", "
+      ),
+      call. = FALSE
+    )
+  }
+
+  metadata$cell_id <- as.character(
+    metadata$cell_id
+  )
+
+  if (anyDuplicated(metadata$cell_id)) {
+    stop(
+      "Duplicated cell IDs in Xenium metadata.",
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 5. Align native matrix and metadata
+  # ============================================================
+
+  common_cells <- intersect(
+    colnames(counts),
+    metadata$cell_id
+  )
+
+  message(
+    "Matrix/metadata overlapping cells: ",
+    format(
+      length(common_cells),
+      big.mark = ","
+    )
+  )
+
+  if (!length(common_cells)) {
+
+    stop(
+      paste0(
+        "No overlapping cell IDs between ",
+        "cell_feature_matrix and cells metadata.\n",
+        "First matrix cell: ",
+        head(colnames(counts), 1),
+        "\nFirst metadata cell: ",
+        head(metadata$cell_id, 1)
+      ),
+      call. = FALSE
+    )
+  }
+
+
+  # Optional explicit cell subset
+  if (!is.null(cells)) {
+
+    cells <- unique(
+      as.character(cells)
+    )
+
+    common_cells <- intersect(
+      common_cells,
+      cells
+    )
+
+    if (!length(common_cells)) {
+      stop(
+        "No requested cells remain.",
+        call. = FALSE
+      )
+    }
+  }
+
+
+  counts <- counts[
+    ,
+    common_cells,
+    drop = FALSE
+  ]
+
+  metadata <- metadata[
+    match(
+      common_cells,
+      metadata$cell_id
+    ),
+    ,
+    drop = FALSE
+  ]
+
+  rownames(metadata) <- metadata$cell_id
+
+
+  stopifnot(
+    identical(
+      colnames(counts),
+      rownames(metadata)
+    )
+  )
+
+
+  # ============================================================
+  # 6. Optional gene subset
+  # ============================================================
+
+  if (!is.null(genes)) {
+
+    genes <- unique(
+      as.character(genes)
+    )
+
+    genes_present <- intersect(
+      genes,
+      rownames(counts)
+    )
+
+    genes_missing <- setdiff(
+      genes,
+      rownames(counts)
+    )
+
+    message(
+      "Requested genes present: ",
+      length(genes_present),
+      "/",
+      length(genes)
+    )
+
+    if (length(genes_missing)) {
+
+      message(
+        "Missing genes: ",
+        paste(
+          head(genes_missing, 20),
+          collapse = ", "
+        )
+      )
+    }
+
+    if (!length(genes_present)) {
+      stop(
+        "None of the requested genes are present.",
+        call. = FALSE
+      )
+    }
+
+    counts <- counts[
+      genes_present,
+      ,
+      drop = FALSE
+    ]
+  }
+
+
+  # ============================================================
+  # 7. Create Seurat object
+  # ============================================================
+
+  object <- Seurat::CreateSeuratObject(
+    counts = counts,
+    meta.data = metadata,
+    assay = assay,
+    project = project,
+    min.cells = 0,
+    min.features = 0
+  )
+
+
+  # ============================================================
+  # 8. Add Xenium centroids
+  # ============================================================
+
+  centroids <- data.frame(
+    x = as.numeric(metadata$x_centroid),
+    y = as.numeric(metadata$y_centroid),
+    row.names = metadata$cell_id,
+    check.names = FALSE
+  )
+
+  spatial_centroids <-
+    SeuratObject::CreateCentroids(
+      coords = centroids
+    )
+
+  spatial_fov <-
+    SeuratObject::CreateFOV(
+      coords = spatial_centroids,
+      type = "centroids",
+      molecules = NULL,
+      assay = assay,
+      key = paste0(fov, "_")
+    )
+
+  object[[fov]] <- spatial_fov
+
+
+  # ============================================================
+  # 9. Helper to read native Xenium boundaries
+  # ============================================================
+
+  read_xenium_boundary <- function(
+      path,
+      selected_cells
+  ) {
+
+    if (!file.exists(path)) {
+      return(NULL)
+    }
+
+    if (!requireNamespace(
+      "arrow",
+      quietly = TRUE
+    )) {
+      stop(
+        "Package 'arrow' required for Xenium polygons.",
+        call. = FALSE
+      )
+    }
+
+    boundary <- arrow::read_parquet(
+      path,
+      as_data_frame = TRUE
+    )
+
+    if (!"cell_id" %in% colnames(boundary)) {
+      stop(
+        "Boundary file lacks cell_id: ",
+        basename(path),
+        call. = FALSE
+      )
+    }
+
+
+    # Xenium versions can differ slightly
+    x_candidates <- c(
+      "vertex_x",
+      "x",
+      "x_location",
+      "x_centroid"
+    )
+
+    y_candidates <- c(
+      "vertex_y",
+      "y",
+      "y_location",
+      "y_centroid"
+    )
+
+    x_col <- intersect(
+      x_candidates,
+      colnames(boundary)
+    )
+
+    y_col <- intersect(
+      y_candidates,
+      colnames(boundary)
+    )
+
+    if (!length(x_col) ||
+        !length(y_col)) {
+
+      stop(
+        "Cannot identify x/y polygon columns in ",
+        basename(path),
+        call. = FALSE
+      )
+    }
+
+    x_col <- x_col[[1]]
+    y_col <- y_col[[1]]
+
+
+    boundary <- boundary[
+      as.character(boundary$cell_id) %in%
+        selected_cells,
+      ,
+      drop = FALSE
+    ]
+
+
+    polygon <- data.frame(
+      x = as.numeric(
+        boundary[[x_col]]
+      ),
+      y = as.numeric(
+        boundary[[y_col]]
+      ),
+      cell = as.character(
+        boundary$cell_id
+      ),
+      stringsAsFactors = FALSE
+    )
+
+
+    polygon <- polygon[
+      is.finite(polygon$x) &
+      is.finite(polygon$y) &
+      !is.na(polygon$cell) &
+      nzchar(polygon$cell),
+      ,
+      drop = FALSE
+    ]
+
+    polygon
+  }
+
+
+  # ============================================================
+  # 10. Native cell segmentation
+  # ============================================================
+
+  segmentation_loaded <- character()
+
+  if (isTRUE(
+    include_cell_segmentation
+  )) {
+
+    cell_boundary_path <- file.path(
+      xenium_dir,
+      "cell_boundaries.parquet"
+    )
+
+    if (file.exists(cell_boundary_path)) {
+
+      cell_polygon <- read_xenium_boundary(
+        cell_boundary_path,
+        selected_cells = colnames(object)
+      )
+
+      message(
+        "Creating cell segmentation: ",
+        format(
+          nrow(cell_polygon),
+          big.mark = ","
+        ),
+        " vertices"
+      )
+
+      cell_segmentation <-
+        SeuratObject::CreateSegmentation(
+          coords = cell_polygon,
+          compact = TRUE
+        )
+
+      object[[fov]][["segmentation"]] <-
+        cell_segmentation
+
+      segmentation_loaded <- c(
+        segmentation_loaded,
+        "segmentation"
+      )
+
+      rm(
+        cell_polygon,
+        cell_segmentation
+      )
+
+      invisible(gc())
+
+    } else {
+
+      warning(
+        "cell_boundaries.parquet not found.",
+        call. = FALSE
+      )
+    }
+  }
+
+
+  # ============================================================
+  # 11. Native nucleus segmentation
+  # ============================================================
+
+  if (isTRUE(
+    include_nucleus_segmentation
+  )) {
+
+    nucleus_boundary_path <- file.path(
+      xenium_dir,
+      "nucleus_boundaries.parquet"
+    )
+
+    if (file.exists(
+      nucleus_boundary_path
+    )) {
+
+      nucleus_polygon <- read_xenium_boundary(
+        nucleus_boundary_path,
+        selected_cells = colnames(object)
+      )
+
+      message(
+        "Creating nucleus segmentation: ",
+        format(
+          nrow(nucleus_polygon),
+          big.mark = ","
+        ),
+        " vertices"
+      )
+
+      nucleus_segmentation <-
+        SeuratObject::CreateSegmentation(
+          coords = nucleus_polygon,
+          compact = TRUE
+        )
+
+      object[[fov]][["nucleus_segmentation"]] <-
+        nucleus_segmentation
+
+      segmentation_loaded <- c(
+        segmentation_loaded,
+        "nucleus_segmentation"
+      )
+
+      rm(
+        nucleus_polygon,
+        nucleus_segmentation
+      )
+
+      invisible(gc())
+
+    } else {
+
+      warning(
+        "nucleus_boundaries.parquet not found.",
+        call. = FALSE
+      )
+    }
+  }
+
+
+  # ============================================================
+  # 12. FOV defaults
+  # ============================================================
+
+  SeuratObject::DefaultFOV(object) <- fov
+
+  available_boundaries <-
+    SeuratObject::Boundaries(
+      object[[fov]]
+    )
+
+  if ("centroids" %in%
+      available_boundaries) {
+
+    SeuratObject::DefaultBoundary(
+      object[[fov]]
+    ) <- "centroids"
+  }
+
+
+  # ============================================================
+  # 13. Provenance
+  # ============================================================
+
+  object@misc$xenium_import <- list(
+
+    source =
+      "NATIVE_XENIUM_OUTPUT",
+
+    xenium_dir =
+      normalizePath(
+        xenium_dir,
+        winslash = "/",
+        mustWork = TRUE
+      ),
+
+    expression_source =
+      if (file.exists(h5_path)) {
+        "cell_feature_matrix.h5"
+      } else {
+        "cell_feature_matrix/"
+      },
+
+    metadata_source =
+      if (file.exists(cells_parquet)) {
+        "cells.parquet"
+      } else {
+        "cells.csv.gz"
+      },
+
+    genes =
+      rownames(object),
+
+    n_genes =
+      nrow(object),
+
+    n_cells =
+      ncol(object),
+
+    spatial_boundaries =
+      available_boundaries,
+
+    segmentation_loaded =
+      segmentation_loaded
+  )
+
+
+  # ============================================================
+  # 14. Final validation
+  # ============================================================
+
+  if (!identical(
+    colnames(object),
+    rownames(object@meta.data)
+  )) {
+    stop(
+      "Final Seurat/metadata alignment failed.",
+      call. = FALSE
+    )
+  }
+
+
+  spatial_cells <- Cells(
+    object[[fov]]
+  )
+
+  missing_spatial <- setdiff(
+    colnames(object),
+    spatial_cells
+  )
+
+  if (length(missing_spatial)) {
+    stop(
+      length(missing_spatial),
+      " Seurat cells missing from FOV.",
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 15. Summary
+  # ============================================================
+
+  message("")
+  message(
+    "Created native Xenium spatial Seurat object: ",
+    project
+  )
+
+  message(
+    "  Cells: ",
+    format(
+      ncol(object),
+      big.mark = ","
+    )
+  )
+
+  message(
+    "  Genes: ",
+    format(
+      nrow(object),
+      big.mark = ","
+    )
+  )
+
+  message(
+    "  FOV: ",
+    fov
+  )
+
+  message(
+    "  Boundaries: ",
+    paste(
+      available_boundaries,
+      collapse = ", "
+    )
+  )
+
+  return(object)
+}
+
+
+add_masks_to_seurat <- function(
+    object,
+    masks,
+    cell_id_col = "cell_id",
+    cols = NULL,
+    overwrite = FALSE,
+    require_complete_match = FALSE
+) {
+
+  # ============================================================
+  # 1. Validate inputs
+  # ============================================================
+
+  if (!inherits(object, "Seurat")) {
+    stop("object must be a Seurat object.", call. = FALSE)
+  }
+
+  if (!cell_id_col %in% colnames(masks)) {
+    stop(
+      "masks does not contain cell ID column: ",
+      cell_id_col,
+      call. = FALSE
+    )
+  }
+
+  masks <- as.data.frame(
+    masks,
+    stringsAsFactors = FALSE
+  )
+
+  masks[[cell_id_col]] <- as.character(
+    masks[[cell_id_col]]
+  )
+
+  if (anyDuplicated(masks[[cell_id_col]])) {
+    stop(
+      "Duplicated cell IDs detected in masks.",
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 2. Match masks to Seurat cells
+  # ============================================================
+
+  object_cells <- colnames(object)
+
+  idx <- match(
+    object_cells,
+    masks[[cell_id_col]]
+  )
+
+  n_matched <- sum(!is.na(idx))
+  n_missing <- sum(is.na(idx))
+
+  message(
+    "Seurat cells: ",
+    format(length(object_cells), big.mark = ",")
+  )
+
+  message(
+    "Matched to masks: ",
+    format(n_matched, big.mark = ",")
+  )
+
+  message(
+    "Unmatched Seurat cells: ",
+    format(n_missing, big.mark = ",")
+  )
+
+
+  if (require_complete_match && n_missing > 0) {
+
+    missing_cells <- object_cells[
+      is.na(idx)
+    ]
+
+    stop(
+      n_missing,
+      " Seurat cells were not found in masks. Examples: ",
+      paste(
+        head(missing_cells, 10),
+        collapse = ", "
+      ),
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 3. Decide which columns to transfer
+  # ============================================================
+
+  if (is.null(cols)) {
+
+    cols <- setdiff(
+      colnames(masks),
+      cell_id_col
+    )
+
+  } else {
+
+    missing_cols <- setdiff(
+      cols,
+      colnames(masks)
+    )
+
+    if (length(missing_cols)) {
+      warning(
+        "Columns not present in masks: ",
+        paste(missing_cols, collapse = ", "),
+        call. = FALSE
+      )
+    }
+
+    cols <- intersect(
+      cols,
+      colnames(masks)
+    )
+
+    cols <- setdiff(
+      cols,
+      cell_id_col
+    )
+  }
+
+
+  # ============================================================
+  # 4. Handle columns already present in Seurat metadata
+  # ============================================================
+
+  existing_cols <- intersect(
+    cols,
+    colnames(object@meta.data)
+  )
+
+  if (length(existing_cols) && !overwrite) {
+
+    message(
+      "Skipping existing metadata columns: ",
+      paste(existing_cols, collapse = ", ")
+    )
+
+    cols <- setdiff(
+      cols,
+      existing_cols
+    )
+  }
+
+  if (!length(cols)) {
+    message("No new columns to add.")
+    return(object)
+  }
+
+
+  # ============================================================
+  # 5. Add columns in EXACT Seurat cell order
+  # ============================================================
+
+  for (v in cols) {
+
+    x <- masks[[v]][idx]
+
+    # Protect against problematic list columns
+    if (is.list(x)) {
+      warning(
+        "Column '", v,
+        "' is a list column; converting to character.",
+        call. = FALSE
+      )
+
+      x <- vapply(
+        x,
+        function(z) {
+          if (length(z) == 0 || all(is.na(z))) {
+            NA_character_
+          } else {
+            paste(z, collapse = ";")
+          }
+        },
+        character(1)
+      )
+    }
+
+    object@meta.data[[v]] <- x
+  }
+
+
+  # ============================================================
+  # 6. Verify alignment
+  # ============================================================
+
+  if (!identical(
+    rownames(object@meta.data),
+    colnames(object)
+  )) {
+    stop(
+      "Seurat metadata/cell alignment changed unexpectedly.",
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 7. Summary
+  # ============================================================
+
+  message(
+    "Added ",
+    length(cols),
+    " metadata columns."
+  )
+
+  message(
+    "Metadata dimensions: ",
+    nrow(object@meta.data),
+    " × ",
+    ncol(object@meta.data)
+  )
+
+  return(object)
 }
