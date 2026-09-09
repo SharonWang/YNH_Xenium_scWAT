@@ -8653,3 +8653,1030 @@ add_masks_to_seurat <- function(
 
   return(object)
 }
+
+run_wang_transfer <- function(
+  reference,
+  query,
+  annotation_genes,
+  main_col = "Wang_main",
+  subtype_col = "Wang_subtype_harmonized",
+  prefix
+) {
+
+  DefaultAssay(reference) <- "RNA"
+
+  # Restrict features to genes present in BOTH objects
+  features_use <- Reduce(
+    intersect,
+    list(
+      annotation_genes,
+      rownames(reference),
+      rownames(query)
+    )
+  )
+
+  message(
+    prefix,
+    ": using ",
+    length(features_use),
+    " shared annotation genes"
+  )
+
+  reference <- NormalizeData(
+    reference,
+    assay = "RNA",
+    verbose = FALSE
+  )
+
+  reference <- ScaleData(
+    reference,
+    assay = "RNA",
+    features = features_use,
+    verbose = FALSE
+  )
+
+  reference <- RunPCA(
+    reference,
+    assay = "RNA",
+    features = features_use,
+    npcs = 30,
+    seed.use = 1234,
+    verbose = FALSE
+  )
+
+  anchors <- FindTransferAnchors(
+    reference = reference,
+    query = query,
+    reference.assay = "RNA",
+    query.assay = "Xenium",
+    normalization.method = "LogNormalize",
+    reduction = "pcaproject",
+    features = features_use,
+    dims = 1:30,
+    verbose = FALSE
+  )
+
+  pred_main <- TransferData(
+    anchorset = anchors,
+    refdata = reference[[main_col]][, 1],
+    dims = 1:30,
+    verbose = FALSE
+  )
+
+  pred_subtype <- TransferData(
+    anchorset = anchors,
+    refdata = reference[[subtype_col]][, 1],
+    dims = 1:30,
+    verbose = FALSE
+  )
+
+  # Rename output columns so 2.5m / 12m / all can coexist
+  colnames(pred_main) <- paste0(
+    prefix,
+    "_main_",
+    colnames(pred_main)
+  )
+
+  colnames(pred_subtype) <- paste0(
+    prefix,
+    "_subtype_",
+    colnames(pred_subtype)
+  )
+
+  list(
+    main = pred_main,
+    subtype = pred_subtype,
+    anchors = anchors,
+    features = features_use
+  )
+}
+
+plot_eos_call_by_subtype <- function(
+    object,
+    subtype_col = "Final_CellType_subtype",
+    eos_call_col = "EosRef_call",
+    eos_first = "Eosinophil",
+    title = "Eosinophil marker evidence across Xenium cell types",
+    base_size = 11,
+    show_n = TRUE,
+    return_data = FALSE
+) {
+
+  # ============================================================
+  # Packages
+  # ============================================================
+
+  requireNamespace("dplyr")
+  requireNamespace("tidyr")
+  requireNamespace("ggplot2")
+  requireNamespace("scales")
+
+
+  # ============================================================
+  # 1. Check metadata columns
+  # ============================================================
+
+  md <- object@meta.data
+
+  required_cols <- c(
+    subtype_col,
+    eos_call_col
+  )
+
+  missing_cols <- setdiff(
+    required_cols,
+    colnames(md)
+  )
+
+  if (length(missing_cols)) {
+    stop(
+      "Missing metadata columns: ",
+      paste(missing_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 2. Eos call order / colours / labels
+  # ============================================================
+
+  call_order <- c(
+    "REF_EOS_TIER1",
+    "REF_EOS_TIER2",
+    "REF_EOS_TIER3",
+    "REF_EOS_TIER4",
+    "REF_EOS_REST",
+    "REVIEW_NONIMMUNE_EOS_RESCUE",
+    "OUTSIDE_IMMUNE"
+  )
+
+  call_cols <- c(
+    "REF_EOS_TIER1"               = "#E89A8F",
+    "REF_EOS_TIER2"               = "#F4C6C3",
+    "REF_EOS_TIER3"               = "#F4D6A0",
+    "REF_EOS_TIER4"               = "#BFDCC8",
+    "REF_EOS_REST"                = "#D9E5DF",
+    "REVIEW_NONIMMUNE_EOS_RESCUE" = "#B9B3D7",
+    "OUTSIDE_IMMUNE"              = "#E8E8E8"
+  )
+
+  call_labels <- c(
+    "REF_EOS_TIER1"               = "Tier 1",
+    "REF_EOS_TIER2"               = "Tier 2",
+    "REF_EOS_TIER3"               = "Tier 3",
+    "REF_EOS_TIER4"               = "Tier 4",
+    "REF_EOS_REST"                = "Rest",
+    "REVIEW_NONIMMUNE_EOS_RESCUE" = "Non-immune review",
+    "OUTSIDE_IMMUNE"              = "Outside immune"
+  )
+
+
+  # ============================================================
+  # 3. Prepare / summarise metadata
+  # ============================================================
+
+  plot_df <- md %>%
+    dplyr::filter(
+      !is.na(.data[[subtype_col]]),
+      !is.na(.data[[eos_call_col]])
+    ) %>%
+
+    dplyr::transmute(
+      subtype = as.character(
+        .data[[subtype_col]]
+      ),
+
+      eos_call = factor(
+        as.character(
+          .data[[eos_call_col]]
+        ),
+        levels = call_order
+      )
+    ) %>%
+
+    dplyr::count(
+      subtype,
+      eos_call,
+      name = "n"
+    ) %>%
+
+    tidyr::complete(
+      subtype,
+      eos_call = factor(
+        call_order,
+        levels = call_order
+      ),
+      fill = list(
+        n = 0
+      )
+    ) %>%
+
+    dplyr::group_by(
+      subtype
+    ) %>%
+
+    dplyr::mutate(
+      n_total = sum(n),
+
+      fraction = dplyr::if_else(
+        n_total > 0,
+        n / n_total,
+        0
+      ),
+
+      percent = 100 * fraction
+    ) %>%
+
+    dplyr::ungroup()
+
+
+  # ============================================================
+  # 4. Order cell types
+  #
+  # Eosinophil first, then all other subtypes by cumulative
+  # Tier 1-4 evidence.
+  # ============================================================
+
+  subtype_order <- plot_df %>%
+    dplyr::group_by(
+      subtype
+    ) %>%
+
+    dplyr::summarise(
+      eos_evidence_pct = sum(
+        percent[
+          eos_call %in% c(
+            "REF_EOS_TIER1",
+            "REF_EOS_TIER2",
+            "REF_EOS_TIER3",
+            "REF_EOS_TIER4"
+          )
+        ],
+        na.rm = TRUE
+      ),
+
+      .groups = "drop"
+    ) %>%
+
+    dplyr::mutate(
+      eos_first_order = dplyr::if_else(
+        subtype == eos_first,
+        0L,
+        1L
+      )
+    ) %>%
+
+    dplyr::arrange(
+      eos_first_order,
+      dplyr::desc(
+        eos_evidence_pct
+      )
+    ) %>%
+
+    dplyr::pull(
+      subtype
+    )
+
+
+  # coord_flip() places the last factor level at the top,
+  # so reverse the desired top-to-bottom ordering.
+  plot_df <- plot_df %>%
+    dplyr::mutate(
+      subtype = factor(
+        subtype,
+        levels = rev(
+          subtype_order
+        )
+      )
+    )
+
+
+  # ============================================================
+  # 5. Add cell numbers to subtype labels
+  # ============================================================
+
+  subtype_labels <- plot_df %>%
+    dplyr::distinct(
+      subtype,
+      n_total
+    ) %>%
+
+    dplyr::mutate(
+      subtype_chr =
+        as.character(subtype),
+
+      label = if (show_n) {
+
+        paste0(
+          subtype_chr,
+          "  (n=",
+          scales::comma(n_total),
+          ")"
+        )
+
+      } else {
+
+        subtype_chr
+      }
+    )
+
+
+  subtype_label_vec <- stats::setNames(
+    subtype_labels$label,
+    subtype_labels$subtype_chr
+  )
+
+
+  # ============================================================
+  # 6. Plot
+  # ============================================================
+
+  p <- ggplot2::ggplot(
+    plot_df,
+    ggplot2::aes(
+      x = subtype,
+      y = fraction,
+      fill = eos_call
+    )
+  ) +
+
+    ggplot2::geom_col(
+      position =
+        ggplot2::position_stack(
+          reverse = TRUE
+        ),
+      width = 0.78,
+      colour = "black",
+      linewidth = 0.25
+    ) +
+
+    ggplot2::coord_flip() +
+
+    ggplot2::scale_fill_manual(
+      values = call_cols,
+      breaks = call_order,
+      labels = call_labels,
+      drop = FALSE
+    ) +
+
+    ggplot2::scale_x_discrete(
+      labels = subtype_label_vec
+    ) +
+
+    ggplot2::scale_y_continuous(
+      labels =
+        scales::percent_format(
+          accuracy = 1
+        ),
+      breaks =
+        seq(
+          0,
+          1,
+          by = 0.2
+        ),
+      limits = c(
+        0,
+        1
+      ),
+      expand = c(
+        0,
+        0
+      )
+    ) +
+
+    ggplot2::labs(
+      title = title,
+      x = NULL,
+      y = "Cells within subtype (%)",
+      fill = "Eosinophil\nevidence"
+    ) +
+
+    theme_cell(
+      base_size = base_size
+    ) +
+
+    ggplot2::theme(
+      legend.position = "right",
+
+      axis.text.y =
+        ggplot2::element_text(
+          size = 9,
+          colour = "black"
+        ),
+
+      plot.title =
+        ggplot2::element_text(
+          face = "bold",
+          size = 13
+        )
+    )
+
+
+  # ============================================================
+  # 7. Return
+  # ============================================================
+
+  if (return_data) {
+
+    return(
+      list(
+        plot = p,
+        plot_data = plot_df,
+        subtype_order = subtype_order,
+        subtype_labels = subtype_labels
+      )
+    )
+  }
+
+  p
+}
+
+plot_eos_state_heatmap <- function(
+    eos_obj,
+    eos_gene_sets,
+    state_col = "EosState_extreme",
+    balance_col = "EosState_balance",
+    assay = "Xenium",
+    layer = "data",
+    remove_short_ribosomal = TRUE,
+    z_cap = 2.5,
+    cluster_rows = TRUE,
+    clustering_distance_rows = "pearson",
+    clustering_method_rows = "ward.D2",
+    column_title = "Eosinophils ordered from short-lived-like to long-lived-like",
+    show_row_names = TRUE,
+    row_name_size = 7,
+    draw_heatmap = TRUE,
+    return_data = FALSE
+) {
+
+  # ============================================================
+  # Packages
+  # ============================================================
+
+  if (!requireNamespace("ComplexHeatmap", quietly = TRUE)) {
+    stop("Package 'ComplexHeatmap' is required.", call. = FALSE)
+  }
+
+  if (!requireNamespace("circlize", quietly = TRUE)) {
+    stop("Package 'circlize' is required.", call. = FALSE)
+  }
+
+  if (!requireNamespace("grid", quietly = TRUE)) {
+    stop("Package 'grid' is required.", call. = FALSE)
+  }
+
+
+  # ============================================================
+  # 1. Validate inputs
+  # ============================================================
+
+  if (!inherits(eos_obj, "Seurat")) {
+    stop("eos_obj must be a Seurat object.", call. = FALSE)
+  }
+
+  required_gene_cols <- c(
+    "gene",
+    "gene_set"
+  )
+
+  missing_gene_cols <- setdiff(
+    required_gene_cols,
+    colnames(eos_gene_sets)
+  )
+
+  if (length(missing_gene_cols)) {
+    stop(
+      "eos_gene_sets missing columns: ",
+      paste(missing_gene_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  required_meta <- c(
+    state_col,
+    balance_col
+  )
+
+  missing_meta <- setdiff(
+    required_meta,
+    colnames(eos_obj@meta.data)
+  )
+
+  if (length(missing_meta)) {
+    stop(
+      "eos_obj metadata missing columns: ",
+      paste(missing_meta, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  if (!assay %in% names(eos_obj@assays)) {
+    stop(
+      "Assay not found: ",
+      assay,
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 2. Define short- and long-lived signatures
+  # ============================================================
+
+  short_genes <- unique(
+    as.character(
+      eos_gene_sets$gene[
+        eos_gene_sets$gene_set == "short_lived"
+      ]
+    )
+  )
+
+  long_genes <- unique(
+    as.character(
+      eos_gene_sets$gene[
+        eos_gene_sets$gene_set == "long_lived"
+      ]
+    )
+  )
+
+  short_use <- intersect(
+    short_genes,
+    rownames(eos_obj[[assay]])
+  )
+
+  long_use <- intersect(
+    long_genes,
+    rownames(eos_obj[[assay]])
+  )
+
+
+  if (remove_short_ribosomal) {
+
+    short_primary <- short_use[
+      !grepl(
+        "^Rp[ls]",
+        short_use
+      )
+    ]
+
+  } else {
+
+    short_primary <- short_use
+  }
+
+
+  state_genes_primary <- unique(
+    c(
+      short_primary,
+      long_use
+    )
+  )
+
+
+  message(
+    "Short-lived genes available: ",
+    length(short_use),
+    " / ",
+    length(short_genes)
+  )
+
+  message(
+    "Short-lived genes used: ",
+    length(short_primary)
+  )
+
+  message(
+    "Long-lived genes available: ",
+    length(long_use),
+    " / ",
+    length(long_genes)
+  )
+
+  message(
+    "Total heatmap genes: ",
+    length(state_genes_primary)
+  )
+
+
+  if (!length(state_genes_primary)) {
+    stop(
+      "No state genes are present in the object.",
+      call. = FALSE
+    )
+  }
+
+
+  # ============================================================
+  # 3. Extract normalized expression
+  # ============================================================
+
+  expr <- SeuratObject::GetAssayData(
+    eos_obj,
+    assay = assay,
+    layer = layer
+  )
+
+  expr <- as.matrix(
+    expr[
+      state_genes_primary,
+      ,
+      drop = FALSE
+    ]
+  )
+
+
+  # ============================================================
+  # 4. Row z-score
+  # ============================================================
+
+  expr_z <- t(
+    scale(
+      t(expr)
+    )
+  )
+
+
+  # Remove zero-variance / non-finite genes
+  keep_gene <- apply(
+    expr_z,
+    1,
+    function(x) {
+      all(is.finite(x))
+    }
+  )
+
+  removed_zero_variance <- rownames(expr_z)[
+    !keep_gene
+  ]
+
+  if (length(removed_zero_variance)) {
+    message(
+      "Removed ",
+      length(removed_zero_variance),
+      " zero-variance/non-finite genes."
+    )
+  }
+
+  expr_z <- expr_z[
+    keep_gene,
+    ,
+    drop = FALSE
+  ]
+
+
+  # Cap extreme z-scores
+  expr_z[
+    expr_z > z_cap
+  ] <- z_cap
+
+  expr_z[
+    expr_z < -z_cap
+  ] <- -z_cap
+
+
+  # ============================================================
+  # 5. Order cells by continuous Eos state balance
+  # ============================================================
+
+  md <- eos_obj@meta.data
+
+
+  # Only retain cells with a valid balance score
+  valid_cells <- rownames(md)[
+    is.finite(
+      md[[balance_col]]
+    )
+  ]
+
+
+  cell_order_state <- valid_cells[
+    order(
+      md[
+        valid_cells,
+        balance_col
+      ],
+      decreasing = FALSE
+    )
+  ]
+
+
+  # Ensure cells actually exist in expression matrix
+  cell_order_state <- intersect(
+    cell_order_state,
+    colnames(expr_z)
+  )
+
+
+  expr_z <- expr_z[
+    ,
+    cell_order_state,
+    drop = FALSE
+  ]
+
+
+  message(
+    "Cells shown in heatmap: ",
+    ncol(expr_z)
+  )
+
+
+  # ============================================================
+  # 6. Column annotations
+  # ============================================================
+
+  state_annotation <- as.character(
+    md[
+      cell_order_state,
+      state_col
+    ]
+  )
+
+  state_annotation <- factor(
+    state_annotation,
+    levels = c(
+      "Short-lived-like",
+      "Intermediate",
+      "Long-lived-like"
+    )
+  )
+
+
+  balance_annotation <- as.numeric(
+    md[
+      cell_order_state,
+      balance_col
+    ]
+  )
+
+
+  state_cols <- c(
+    "Short-lived-like" = "#7E9AD9",
+    "Intermediate"     = "#D9D9D9",
+    "Long-lived-like"  = "#E89A8F"
+  )
+
+
+  balance_lim <- max(
+    abs(balance_annotation),
+    na.rm = TRUE
+  )
+
+
+  if (!is.finite(balance_lim) ||
+      balance_lim == 0) {
+
+    balance_lim <- 1
+  }
+
+
+  balance_fun <- circlize::colorRamp2(
+    c(
+      -balance_lim,
+      0,
+      balance_lim
+    ),
+    c(
+      "#7E9AD9",
+      "#F7F7F7",
+      "#E89A8F"
+    )
+  )
+
+
+  ha_top <- ComplexHeatmap::HeatmapAnnotation(
+
+    State = state_annotation,
+
+    Balance = ComplexHeatmap::anno_simple(
+      balance_annotation,
+      col = balance_fun,
+      border = FALSE
+    ),
+
+    col = list(
+      State = state_cols
+    ),
+
+    annotation_name_gp = grid::gpar(
+      fontsize = 9,
+      fontface = "bold"
+    ),
+
+    annotation_legend_param = list(
+      State = list(
+        title = "Eosinophil state"
+      )
+    )
+  )
+
+
+  # ============================================================
+  # 7. Row / gene-set annotation
+  # ============================================================
+
+  gene_state <- ifelse(
+    rownames(expr_z) %in%
+      short_primary,
+    "Short-lived signature",
+    "Long-lived signature"
+  )
+
+
+  gene_state <- factor(
+    gene_state,
+    levels = c(
+      "Short-lived signature",
+      "Long-lived signature"
+    )
+  )
+
+
+  gene_set_cols <- c(
+    "Short-lived signature" = "#7E9AD9",
+    "Long-lived signature"  = "#E89A8F"
+  )
+
+
+  ha_row <- ComplexHeatmap::rowAnnotation(
+
+    Signature = gene_state,
+
+    col = list(
+      Signature = gene_set_cols
+    ),
+
+    show_annotation_name = FALSE
+  )
+
+
+  # ============================================================
+  # 8. Expression colour scale
+  # ============================================================
+
+  expr_col_fun <- circlize::colorRamp2(
+    c(
+      -z_cap,
+      0,
+      z_cap
+    ),
+    c(
+      "#5B7DB1",
+      "#F7F7F7",
+      "#D77A72"
+    )
+  )
+
+
+  # ============================================================
+  # 9. Heatmap
+  # ============================================================
+
+  ht <- ha_row +
+
+    ComplexHeatmap::Heatmap(
+
+      expr_z,
+
+      name = "Row z-score",
+
+      col = expr_col_fun,
+
+      top_annotation = ha_top,
+
+
+      # --------------------------------------------------------
+      # Cells remain ordered continuously by balance
+      # --------------------------------------------------------
+
+      cluster_columns = FALSE,
+
+
+      # --------------------------------------------------------
+      # Genes split into Short / Long signatures
+      # --------------------------------------------------------
+
+      row_split = gene_state,
+
+      cluster_rows = cluster_rows,
+
+      clustering_distance_rows =
+        clustering_distance_rows,
+
+      clustering_method_rows =
+        clustering_method_rows,
+
+
+      # --------------------------------------------------------
+      # Appearance
+      # --------------------------------------------------------
+
+      show_column_names = FALSE,
+
+      show_row_names = show_row_names,
+
+      row_names_gp = grid::gpar(
+        fontsize = row_name_size
+      ),
+
+      row_names_side = "left",
+
+      column_title = column_title,
+
+      column_title_gp = grid::gpar(
+        fontsize = 12,
+        fontface = "bold"
+      ),
+
+      row_title_gp = grid::gpar(
+        fontsize = 10,
+        fontface = "bold"
+      ),
+
+      row_gap = grid::unit(
+        2,
+        "mm"
+      ),
+
+      border = FALSE,
+
+      rect_gp = grid::gpar(
+        col = NA
+      ),
+
+      heatmap_legend_param = list(
+
+        title = "Expression\n(z-score)",
+
+        at = c(
+          -2,
+          0,
+          2
+        )
+      )
+    )
+
+
+  # ============================================================
+  # 10. Draw
+  # ============================================================
+
+  ht_drawn <- NULL
+
+  if (draw_heatmap) {
+
+    ht_drawn <- ComplexHeatmap::draw(
+
+      ht,
+
+      heatmap_legend_side = "right",
+
+      annotation_legend_side = "right",
+
+      merge_legends = TRUE
+    )
+  }
+
+
+  # ============================================================
+  # 11. Return
+  # ============================================================
+
+  if (return_data) {
+
+    return(
+      list(
+
+        heatmap = ht,
+
+        heatmap_drawn = ht_drawn,
+
+        expression_z = expr_z,
+
+        cell_order = cell_order_state,
+
+        gene_state = gene_state,
+
+        short_genes = short_primary,
+
+        long_genes = long_use,
+
+        removed_genes = removed_zero_variance,
+
+        state_annotation = state_annotation,
+
+        balance_annotation = balance_annotation
+      )
+    )
+  }
+
+
+  if (draw_heatmap) {
+    return(
+      invisible(ht_drawn)
+    )
+  }
+
+  ht
+}
