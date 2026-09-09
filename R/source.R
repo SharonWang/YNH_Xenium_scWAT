@@ -9512,7 +9512,7 @@ plot_eos_call_by_subtype <- function(
       fill = "Eosinophil\nevidence"
     ) +
 
-    theme_cell(
+    cell_style_theme(
       base_size = base_size
     ) +
 

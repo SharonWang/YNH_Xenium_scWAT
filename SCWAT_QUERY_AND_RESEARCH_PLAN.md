@@ -232,3 +232,11 @@
 - Hardened two clean-kernel edge cases found during validation: optional diagnostic packages now yield typed skipped outputs, and path containment is validated before the first output/temp directory is created.
 - Added reload-validated Seurat checkpoints with unique stage filenames for branch input, PCA, annotation, and final objects; each manifest records dimensions, feature/cell identity validation, byte size and MD5.
 - Harmony is explicitly deferred: a single-section notebook has no defensible batch factor. It will be used only in the later admitted-region consensus, with section as technical batch and mouse retained as biological replicate.
+
+### 2026-09-09 — Eosinophil composition-plot regression fix
+
+- Reproduced the reported `could not find function "theme_cell"` failure in a fresh D:-local R 4.6.1 test using a real minimal Seurat object and the split-notebook package context.
+- Root cause: `plot_eos_call_by_subtype()` retained one dependency on the legacy notebook-local `theme_cell()` helper after the reusable plotting theme had been standardized as `cell_style_theme()` in `R/source.R`.
+- Replaced only that hidden theme dependency with `cell_style_theme(base_size = base_size)`; the plot's data preparation, ordering, labels, colours and return contract are unchanged.
+- Added a regression test requiring a valid ggplot, the complete 3-subtype by 7-call plotting grid, and Eosinophil-first ordering without defining `theme_cell()`.
+- The focused test now passes. The test also showed that this legacy helper uses the attached `%>%` operator; current split notebooks satisfy that declared setup dependency by attaching dplyr. Broader pipe refactoring was deliberately kept outside this targeted bug fix.

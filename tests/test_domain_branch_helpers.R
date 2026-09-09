@@ -78,6 +78,27 @@ pc_qc <- summarise_pca_qc_correlations(embeddings, qc_metadata)
 stopifnot(pc_qc$rho[pc_qc$pc == "PC_1" & pc_qc$qc_metric == "nCount_Xenium"] == 1)
 stopifnot(pc_qc$rho[pc_qc$pc == "PC_1" & pc_qc$qc_metric == "nFeature_Xenium"] == -1)
 
+# Break caught: the reusable Eosinophil composition plot depends on a
+# notebook-local `theme_cell()` helper instead of functions sourced from
+# R/source.R. The split notebooks attach dplyr during setup, so reproduce that
+# execution context while deliberately leaving `theme_cell()` undefined.
+suppressPackageStartupMessages(library(dplyr))
+plot_counts <- Matrix::Matrix(
+  matrix(c(2, 0, 1, 0, 3, 1), nrow = 2L),
+  sparse = TRUE
+)
+rownames(plot_counts) <- c("Siglecf", "Adgre1")
+colnames(plot_counts) <- c("eos1", "mac1", "other1")
+plot_object <- Seurat::CreateSeuratObject(counts = plot_counts, assay = "Xenium")
+plot_object$Final_CellType_subtype <- c("Eosinophil", "Macrophage", "Stromal")
+plot_object$EosRef_call <- c("REF_EOS_TIER1", "REF_EOS_REST", "OUTSIDE_IMMUNE")
+eos_composition <- plot_eos_call_by_subtype(plot_object, return_data = TRUE)
+stopifnot(
+  inherits(eos_composition$plot, "ggplot"),
+  nrow(eos_composition$plot_data) == 21L,
+  identical(eos_composition$subtype_order[[1L]], "Eosinophil")
+)
+
 # Break caught: a lymph-node domain is forced from isolated lymphoid calls or
 # a tissue boundary is silently unstable across reasonable parameters.
 ln_fixture <- data.frame(
