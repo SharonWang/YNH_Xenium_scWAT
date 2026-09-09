@@ -105,6 +105,14 @@ stopifnot(
   pools$gate$n_overlap_ids == 0L,
   pools$gate$n_duplicate_coordinate_pairs == 0L
 )
+empty_eos_fixture <- spatial_fixture
+empty_eos_fixture$Eos_inclusive <- FALSE
+empty_pools <- build_eos_spatial_pools(empty_eos_fixture, coordinate_fixture)
+stopifnot(
+  empty_pools$status == "SKIPPED_EMPTY_EOS_OR_REFERENCE_POOL",
+  nrow(empty_pools$query) == 0L,
+  nrow(empty_pools$reference) == nrow(empty_eos_fixture)
+)
 edges <- calculate_eos_knn_edges(pools, k_values = c(1L, 3L))
 stopifnot(
   nrow(edges$k1) == 2L,

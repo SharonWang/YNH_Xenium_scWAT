@@ -253,3 +253,16 @@
 - Converted the approved design into seven independently testable tasks in `docs/superpowers/plans/2026-09-09-eos-spatial-wang-integration.md`.
 - The plan sequences the namespace-safe mclust wrapper, cell/macaron ordering and plot contracts, four-stage Eosinophil KNN analysis, gated spatial CellChat adapter, Wang–Xenium integration diagnostics, deterministic regeneration of all 12 B2 notebooks, and bounded local/HPC verification.
 - Each behavior change begins with a failing test and ends with a focused commit. Full-data CellChat and Wang integration remain HPC checkpoints rather than unverified local claims.
+
+### 2026-09-09 — Extended Eosinophil/Wang notebook implementation checkpoint
+
+- Implemented and tested a namespace-safe `mclust` diagnostic wrapper. It supplies the `mclustBIC` binding expected by `Mclust()` and returns typed `PASS`, skipped or runtime-failure evidence instead of terminating a notebook.
+- Added shared scWAT biological label ordering, stable macaron palettes, cell-style ggplot formatting and marker-block ordering. `Final_CellType_subtype_with_uncertain` is retained for annotation review, while `Final_CellType_subtype` is explicitly used for downstream grouping and plots.
+- Rebuilt spatial analysis as four visible stages: disjoint Eos/reference pools; k=1 and k=15 neighbour composition; distance to every adequately represented reference cell type; and continuous-state KNN association with deterministic top-three short-like and long-like neighbour types.
+- Added a spatial CellChat adapter using normalized Xenium expression, aligned centroids and a physical scale derived from cell area. The lower and upper 30% of continuous Eos state define adequately sized CellChat groups; raw p<0.05 and BH FDR<0.10 are reported as exploratory within-section results only.
+- Added an optional subtype-balanced 2.5-month Wang–Xenium Seurat CCA integration using shared panel genes and PCs 1–30. Label transfer remains primary; the joint embedding, cluster composition and cross-dataset Eos-neighbour diagnostics are supporting concordance evidence only.
+- Regenerated all 12 Region 1–4 all-QC/adipose/LN notebooks deterministically. Structural contracts passed for every notebook and every R code cell parsed successfully.
+- The D:-local Region 1 smoke test passed with 475 revised-primary cells, all 479 genes, 30 PCs and median three-seed clustering ARI=1. The observed maximum absolute PC–QC correlation was 0.900 and therefore remains a required visual review item, not an automatically regressed covariate.
+- Local `mclust` and CellChat packages are unavailable, so package-gated skip behavior was verified locally. Full CellChat and Wang–Xenium integration, plots and output tables require HPC execution before scientific interpretation.
+- Added a regression-tested non-fatal empty-pool gate so a small adipose/LN branch with no Eosinophils can finish and report `SKIPPED_EMPTY_EOS_OR_REFERENCE_POOL`; ID overlap, duplicate cross-pool coordinates and zero/negative neighbour distances remain hard failures.
+- Final feature verification passed deterministic two-run notebook generation, 4 Python notebook contracts, R parsing of every generated code cell, seven focused/source/QC R suites, the D:-local subset smoke test and `git diff --check`.

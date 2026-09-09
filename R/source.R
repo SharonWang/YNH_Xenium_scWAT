@@ -7955,8 +7955,10 @@ validate_neighbour_distances <- function(distances, zero_tolerance = 0) {
 #' @param state_col Continuous Eosinophil-state field.
 #' @param extreme_col Optional descriptive Eosinophil-tail field.
 #'
-#' @return A list with aligned `all`, `query`, and `reference` tables plus the
-#'   disjoint-pool validation result.
+#' @return A typed list with aligned `all`, `query`, and `reference` tables plus
+#'   the disjoint-pool validation result. An empty query or reference pool is a
+#'   non-fatal `SKIPPED_EMPTY_EOS_OR_REFERENCE_POOL` result so small tissue
+#'   branches can complete their audit outputs.
 build_eos_spatial_pools <- function(
     cell_metadata,
     coordinates,
@@ -8011,12 +8013,28 @@ build_eos_spatial_pools <- function(
   }
   query <- all_cells[all_cells$Eos_inclusive, , drop = FALSE]
   reference <- all_cells[!all_cells$Eos_inclusive, , drop = FALSE]
+  if (!nrow(query) || !nrow(reference)) {
+    return(list(
+      status = "SKIPPED_EMPTY_EOS_OR_REFERENCE_POOL",
+      message = "Spatial query and reference pools must both be non-empty.",
+      all = all_cells, query = query, reference = reference,
+      gate = list(
+        status = "SKIPPED_EMPTY_EOS_OR_REFERENCE_POOL",
+        n_query = nrow(query), n_reference = nrow(reference),
+        n_overlap_ids = 0L, n_duplicate_coordinate_pairs = 0L
+      )
+    ))
+  }
   gate <- validate_disjoint_spatial_pools(
     query$cell_id, reference$cell_id,
     query[, c("cell_id", "x", "y"), drop = FALSE],
     reference[, c("cell_id", "x", "y"), drop = FALSE]
   )
-  list(all = all_cells, query = query, reference = reference, gate = gate)
+  list(
+    status = "PASS",
+    message = "Spatial Eosinophil and reference pools are non-empty and disjoint.",
+    all = all_cells, query = query, reference = reference, gate = gate
+  )
 }
 
 #' Calculate Eosinophil-to-reference K-nearest-neighbour edge tables
