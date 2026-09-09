@@ -240,3 +240,10 @@
 - Replaced only that hidden theme dependency with `cell_style_theme(base_size = base_size)`; the plot's data preparation, ordering, labels, colours and return contract are unchanged.
 - Added a regression test requiring a valid ggplot, the complete 3-subtype by 7-call plotting grid, and Eosinophil-first ordering without defining `theme_cell()`.
 - The focused test now passes. The test also showed that this legacy helper uses the attached `%>%` operator; current split notebooks satisfy that declared setup dependency by attaching dplyr. Broader pipe refactoring was deliberately kept outside this targeted bug fix.
+
+### 2026-09-09 — Eos spatial, CellChat and Wang-integration design
+
+- User approved an architectural extension covering the mclust runtime error, consistent cell/macaron plots, downstream use of `Final_CellType_subtype`, biological cell-type/marker ordering, four explicit Eosinophil spatial-neighbour steps, spatial CellChat inference for top KNN-associated cell types, and a joint Wang–Xenium embedding.
+- Added `docs/superpowers/specs/2026-09-09-eos-spatial-wang-integration-design.md` with explicit inputs, thresholds, statistical interpretation, outputs, skip/failure gates and local-versus-HPC verification boundaries.
+- The design keeps CellChat group-based: continuous `EosState_balance` drives KNN association and prespecified state-enriched tails, while CellChat evaluates those groups. Section-level permutation results are not labelled mouse-level inference.
+- Existing Wang label transfer remains primary annotation evidence; the new joint embedding is a supporting cross-modality concordance diagnostic and cannot overwrite Xenium labels or allow Region 4 to define the primary reference.
