@@ -8551,6 +8551,323 @@ filter_eos_cellchat_interactions <- function(
   list(all = communication, significant = significant)
 }
 
+#' Deterministically sample cell IDs within annotation groups
+#'
+#' @param ids Unique cell identifiers.
+#' @param groups Group label for every identifier.
+#' @param max_per_group Maximum retained cells per group.
+#' @param seed Random seed.
+#'
+#' @return Character vector of sampled IDs in original input order.
+sample_ids_by_group <- function(ids, groups, max_per_group = 1000L, seed = 1234L) {
+  ids <- as.character(ids)
+  groups <- as.character(groups)
+  if (length(ids) != length(groups) || !length(ids)) {
+    stop("ids and groups must have equal positive length.", call. = FALSE)
+  }
+  if (anyNA(ids) || anyNA(groups) || anyDuplicated(ids)) {
+    stop("Sampling requires unique IDs and complete group labels.", call. = FALSE)
+  }
+  max_per_group <- as.integer(max_per_group)
+  if (!is.finite(max_per_group) || max_per_group < 1L) {
+    stop("max_per_group must be a positive integer.", call. = FALSE)
+  }
+  set.seed(as.integer(seed))
+  selected <- unlist(lapply(unique(groups), function(group_name) {
+    candidates <- ids[groups == group_name]
+    if (length(candidates) <= max_per_group) candidates else sample(candidates, max_per_group)
+  }), use.names = FALSE)
+  ids[ids %in% selected]
+}
+
+#' Balance a Wang Seurat reference by harmonized subtype
+#'
+#' @param reference Wang Seurat reference object.
+#' @param subtype_col Metadata column defining reference subtypes.
+#' @param max_per_subtype Maximum cells retained per subtype.
+#' @param seed Random seed.
+#'
+#' @return A cell-subset Seurat object with deterministic subtype balancing.
+sample_wang_reference <- function(
+    reference,
+    subtype_col = "Wang_subtype_harmonized",
+    max_per_subtype = 1000L,
+    seed = 1234L
+) {
+  if (!inherits(reference, "Seurat")) stop("reference must be a Seurat object.", call. = FALSE)
+  if (!subtype_col %in% colnames(reference@meta.data)) {
+    stop("Wang reference metadata missing: ", subtype_col, call. = FALSE)
+  }
+  selected <- sample_ids_by_group(
+    colnames(reference), reference@meta.data[[subtype_col]],
+    max_per_group = max_per_subtype, seed = seed
+  )
+  subset(reference, cells = selected)
+}
+
+#' Prefix all Seurat cell IDs before cross-dataset integration
+#'
+#' @param object Seurat object.
+#' @param prefix Non-empty dataset prefix without a trailing separator.
+#'
+#' @return A renamed Seurat object whose cell IDs are `<prefix>_<old_id>`.
+prefix_seurat_cell_ids <- function(object, prefix) {
+  if (!inherits(object, "Seurat")) stop("object must be a Seurat object.", call. = FALSE)
+  prefix <- as.character(prefix)[[1L]]
+  if (is.na(prefix) || !nzchar(prefix)) stop("prefix must be non-empty.", call. = FALSE)
+  new_ids <- paste0(prefix, "_", colnames(object))
+  if (anyDuplicated(new_ids)) stop("Prefixed Seurat IDs are not unique.", call. = FALSE)
+  SeuratObject::RenameCells(object, new.names = new_ids)
+}
+
+#' Validate the Wang–Xenium shared feature set against the fixed panel
+#'
+#' @param reference_genes Genes present in the Wang reference assay.
+#' @param query_genes Genes present in the Xenium query assay.
+#' @param panel_genes Ordered complete Xenium panel genes.
+#' @param min_shared Minimum shared genes required for integration.
+#'
+#' @return A list with typed status, ordered shared features and a per-panel-gene
+#'   presence manifest.
+validate_shared_feature_set <- function(
+    reference_genes,
+    query_genes,
+    panel_genes,
+    min_shared = 100L
+) {
+  panel <- unique(as.character(panel_genes))
+  reference <- unique(as.character(reference_genes))
+  query <- unique(as.character(query_genes))
+  manifest <- data.frame(
+    gene = panel,
+    reference_present = panel %in% reference,
+    query_present = panel %in% query,
+    stringsAsFactors = FALSE
+  )
+  manifest$shared <- manifest$reference_present & manifest$query_present
+  features <- manifest$gene[manifest$shared]
+  status <- if (length(features) >= as.integer(min_shared)) {
+    "PASS"
+  } else {
+    "SKIPPED_INSUFFICIENT_SHARED_GENES"
+  }
+  list(
+    status = status,
+    message = sprintf("%d of %d panel genes are shared; minimum required is %d.", length(features), length(panel), as.integer(min_shared)),
+    features = features,
+    manifest = manifest
+  )
+}
+
+#' Run an exploratory Seurat CCA integration of Wang and Xenium
+#'
+#' @param reference Wang Seurat object.
+#' @param query Xenium Seurat object.
+#' @param features Explicit ordered shared feature vector.
+#' @param dims Integration/PCA dimensions; defaults to PCs 1–30.
+#' @param seed Random seed.
+#' @param reference_assay Wang expression assay.
+#' @param query_assay Xenium expression assay.
+#' @param min_shared Minimum shared features required before fitting.
+#' @param resolution Exploratory joint-clustering resolution.
+#'
+#' @return A typed result with stage, message, optional integrated Seurat object,
+#'   anchors and parameter table. Original objects are not modified.
+run_wang_xenium_integration <- function(
+    reference,
+    query,
+    features,
+    dims = 1:30,
+    seed = 1234L,
+    reference_assay = "RNA",
+    query_assay = "Xenium",
+    min_shared = 100L,
+    resolution = 0.8
+) {
+  if (!inherits(reference, "Seurat") || !inherits(query, "Seurat")) {
+    stop("reference and query must be Seurat objects.", call. = FALSE)
+  }
+  features <- unique(as.character(features))
+  features <- features[
+    features %in% rownames(reference[[reference_assay]]) &
+      features %in% rownames(query[[query_assay]])
+  ]
+  parameters <- data.frame(
+    method = "SEURAT_CCA_LOGNORMALIZE",
+    n_shared_features = length(features),
+    dims = paste(range(as.integer(dims)), collapse = "-"),
+    seed = as.integer(seed),
+    resolution = as.numeric(resolution),
+    analysis_scope = "EXPLORATORY_WANG_XENIUM_CONCORDANCE",
+    stringsAsFactors = FALSE
+  )
+  if (length(features) < as.integer(min_shared)) {
+    return(list(
+      status = "SKIPPED_INSUFFICIENT_SHARED_GENES",
+      message = sprintf("Need at least %d shared genes; found %d.", as.integer(min_shared), length(features)),
+      stage = "SHARED_GENE_GATE", object = NULL, anchors = NULL,
+      parameters = parameters
+    ))
+  }
+  stage <- "PREFIX_IDS"
+  output <- tryCatch({
+    reference_use <- prefix_seurat_cell_ids(reference, "WANG")
+    query_use <- prefix_seurat_cell_ids(query, "XENIUM")
+    reference_use$integration_dataset <- "WANG"
+    query_use$integration_dataset <- "XENIUM"
+    SeuratObject::DefaultAssay(reference_use) <- reference_assay
+    SeuratObject::DefaultAssay(query_use) <- query_assay
+    stage <- "NORMALIZE"
+    reference_use <- Seurat::NormalizeData(reference_use, assay = reference_assay, verbose = FALSE)
+    query_use <- Seurat::NormalizeData(query_use, assay = query_assay, verbose = FALSE)
+    stage <- "FIND_ANCHORS"
+    anchors <- Seurat::FindIntegrationAnchors(
+      object.list = list(reference_use, query_use),
+      assay = c(reference_assay, query_assay),
+      anchor.features = features,
+      normalization.method = "LogNormalize",
+      reduction = "cca",
+      dims = as.integer(dims),
+      verbose = FALSE
+    )
+    stage <- "INTEGRATE_DATA"
+    integrated <- Seurat::IntegrateData(
+      anchorset = anchors,
+      normalization.method = "LogNormalize",
+      dims = as.integer(dims),
+      features.to.integrate = features,
+      verbose = FALSE
+    )
+    SeuratObject::DefaultAssay(integrated) <- "integrated"
+    stage <- "PCA_UMAP_CLUSTER"
+    integrated <- Seurat::ScaleData(integrated, features = features, verbose = FALSE)
+    integrated <- Seurat::RunPCA(
+      integrated, features = features, npcs = max(as.integer(dims)),
+      seed.use = as.integer(seed), verbose = FALSE
+    )
+    integrated <- Seurat::FindNeighbors(integrated, reduction = "pca", dims = as.integer(dims), verbose = FALSE)
+    integrated <- Seurat::FindClusters(
+      integrated, resolution = resolution, random.seed = as.integer(seed),
+      cluster.name = "wang_xenium_cluster", verbose = FALSE
+    )
+    integrated <- Seurat::RunUMAP(
+      integrated, reduction = "pca", dims = as.integer(dims),
+      reduction.name = "wang_xenium_umap", seed.use = as.integer(seed),
+      verbose = FALSE
+    )
+    list(object = integrated, anchors = anchors)
+  }, error = identity)
+  if (inherits(output, "error")) {
+    return(list(
+      status = "FAILED_WANG_XENIUM_INTEGRATION",
+      message = conditionMessage(output), stage = stage,
+      object = NULL, anchors = NULL, parameters = parameters
+    ))
+  }
+  list(
+    status = "PASS",
+    message = "Exploratory Wang–Xenium joint embedding completed.",
+    stage = "COMPLETE", object = output$object, anchors = output$anchors,
+    parameters = parameters
+  )
+}
+
+#' Summarize cross-dataset Eosinophil neighbourhood concordance
+#'
+#' @param embeddings Numeric cell-by-dimension matrix with unique row names.
+#' @param metadata Cell metadata aligned by row name.
+#' @param dataset_col Two-level dataset label.
+#' @param eos_col Complete logical Eosinophil indicator.
+#' @param cluster_col Optional integrated-cluster field.
+#' @param k Cross-dataset neighbour count.
+#'
+#' @return A list with per-cell cross-dataset distances/Eosinophil fractions,
+#'   dataset-level summaries and dataset-by-cluster composition/enrichment.
+summarise_cross_dataset_eos_neighbours <- function(
+    embeddings,
+    metadata,
+    dataset_col = "dataset",
+    eos_col = "is_eosinophil",
+    cluster_col = "integrated_cluster",
+    k = 15L
+) {
+  require_package("FNN")
+  embedding <- as.matrix(embeddings)
+  metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
+  if (is.null(rownames(embedding)) || anyDuplicated(rownames(embedding))) {
+    stop("embeddings require unique cell row names.", call. = FALSE)
+  }
+  missing <- setdiff(c(dataset_col, eos_col), names(metadata))
+  if (length(missing)) stop("Cross-dataset metadata missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  index <- match(rownames(embedding), rownames(metadata))
+  if (anyNA(index)) stop("Metadata does not cover every embedding cell.", call. = FALSE)
+  metadata <- metadata[index, , drop = FALSE]
+  dataset <- as.character(metadata[[dataset_col]])
+  datasets <- unique(dataset)
+  if (length(datasets) != 2L) stop("Exactly two integration datasets are required.", call. = FALSE)
+  is_eos <- as.logical(metadata[[eos_col]])
+  if (anyNA(is_eos)) stop(eos_col, " must be complete and logical.", call. = FALSE)
+  per_dataset <- lapply(datasets, function(query_dataset) {
+    query_index <- which(dataset == query_dataset)
+    reference_index <- which(dataset != query_dataset)
+    k_actual <- min(as.integer(k), length(reference_index))
+    fit <- FNN::get.knnx(embedding[reference_index, , drop = FALSE], embedding[query_index, , drop = FALSE], k = k_actual)
+    validate_neighbour_distances(fit$nn.dist)
+    neighbour_index <- matrix(reference_index[fit$nn.index], nrow = nrow(fit$nn.index), ncol = ncol(fit$nn.index))
+    data.frame(
+      cell_id = rownames(embedding)[query_index],
+      dataset = query_dataset,
+      is_eosinophil = is_eos[query_index],
+      k_actual = k_actual,
+      minimum_cross_dataset_distance = fit$nn.dist[, 1L],
+      eos_neighbour_fraction = rowMeans(matrix(is_eos[neighbour_index], nrow = nrow(neighbour_index))),
+      stringsAsFactors = FALSE
+    )
+  })
+  per_cell <- do.call(rbind, per_dataset)
+  rownames(per_cell) <- NULL
+  dataset_summary <- do.call(rbind, lapply(split(per_cell, per_cell$dataset), function(x) {
+    data.frame(
+      dataset = x$dataset[[1L]], n_cells = nrow(x),
+      n_eosinophil = sum(x$is_eosinophil),
+      mean_eos_neighbour_fraction_all = mean(x$eos_neighbour_fraction),
+      mean_eos_neighbour_fraction_eos = if (any(x$is_eosinophil)) mean(x$eos_neighbour_fraction[x$is_eosinophil]) else NA_real_,
+      median_cross_dataset_distance = stats::median(x$minimum_cross_dataset_distance),
+      stringsAsFactors = FALSE
+    )
+  }))
+  if (cluster_col %in% names(metadata)) {
+    cluster_enrichment <- as.data.frame(table(
+      dataset = dataset,
+      integrated_cluster = as.character(metadata[[cluster_col]])
+    ), stringsAsFactors = FALSE)
+    names(cluster_enrichment)[names(cluster_enrichment) == "Freq"] <- "n_cells"
+    eos_counts <- aggregate(
+      as.integer(is_eos),
+      by = list(dataset = dataset, integrated_cluster = as.character(metadata[[cluster_col]])),
+      FUN = sum
+    )
+    names(eos_counts)[[3L]] <- "n_eosinophil"
+    cluster_enrichment <- merge(
+      cluster_enrichment, eos_counts,
+      by = c("dataset", "integrated_cluster"), all.x = TRUE, sort = FALSE
+    )
+    cluster_enrichment$n_eosinophil[is.na(cluster_enrichment$n_eosinophil)] <- 0L
+    cluster_enrichment$eosinophil_fraction <- ifelse(
+      cluster_enrichment$n_cells > 0,
+      cluster_enrichment$n_eosinophil / cluster_enrichment$n_cells,
+      NA_real_
+    )
+  } else {
+    cluster_enrichment <- data.frame()
+  }
+  list(
+    per_cell = per_cell,
+    dataset_summary = dataset_summary,
+    cluster_enrichment = cluster_enrichment
+  )
+}
+
 #' Calculate the adjusted Rand index for two cluster assignments
 #'
 #' @param labels_a,labels_b Equal-length complete cluster-label vectors.

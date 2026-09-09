@@ -200,4 +200,70 @@ stopifnot(
 cellchat_skip <- run_eos_spatial_cellchat(list(status = "SKIPPED_TEST_INPUT"))
 stopifnot(cellchat_skip$status == "SKIPPED_TEST_INPUT")
 
+# Break caught: Wang sampling is unbalanced/non-deterministic, cell IDs collide
+# after merge, or shared-feature and cross-dataset Eosinophil concordance gates
+# are bypassed.
+sampled_ids <- sample_ids_by_group(
+  ids = paste0("w", seq_len(12L)),
+  groups = rep(c("Eosinophil", "ASC"), each = 6L),
+  max_per_group = 3L,
+  seed = 5L
+)
+stopifnot(
+  length(sampled_ids) == 6L,
+  identical(
+    sampled_ids,
+    sample_ids_by_group(
+      paste0("w", seq_len(12L)),
+      rep(c("Eosinophil", "ASC"), each = 6L),
+      max_per_group = 3L,
+      seed = 5L
+    )
+  )
+)
+
+shared <- validate_shared_feature_set(
+  reference_genes = c("A", "B", "C"),
+  query_genes = c("B", "C", "D"),
+  panel_genes = c("A", "B", "C", "D"),
+  min_shared = 2L
+)
+stopifnot(shared$status == "PASS", identical(shared$features, c("B", "C")))
+shared_fail <- validate_shared_feature_set(c("A"), c("A"), c("A"), min_shared = 2L)
+stopifnot(shared_fail$status == "SKIPPED_INSUFFICIENT_SHARED_GENES")
+
+prefixed_object <- prefix_seurat_cell_ids(cellchat_object[, 1:3], "WANG")
+stopifnot(identical(colnames(prefixed_object), paste0("WANG_", colnames(cellchat_object)[1:3])))
+
+cross_embeddings <- rbind(
+  WANG_eos = c(0, 0), WANG_asc = c(10, 0),
+  XENIUM_eos = c(0.2, 0), XENIUM_asc = c(10.2, 0)
+)
+colnames(cross_embeddings) <- c("PC_1", "PC_2")
+cross_metadata <- data.frame(
+  dataset = c("WANG", "WANG", "XENIUM", "XENIUM"),
+  is_eosinophil = c(TRUE, FALSE, TRUE, FALSE),
+  integrated_cluster = c("0", "1", "0", "1"),
+  row.names = rownames(cross_embeddings),
+  stringsAsFactors = FALSE
+)
+cross_summary <- summarise_cross_dataset_eos_neighbours(
+  cross_embeddings, cross_metadata, k = 1L
+)
+stopifnot(
+  identical(cross_summary$per_cell$eos_neighbour_fraction, c(1, 0, 1, 0)),
+  all(cross_summary$per_cell$minimum_cross_dataset_distance > 0),
+  nrow(cross_summary$cluster_enrichment) == 4L
+)
+
+integration_gate <- run_wang_xenium_integration(
+  reference = cellchat_object[, 1:10],
+  query = cellchat_object[, 11:20],
+  features = c("A", "B"),
+  reference_assay = "Xenium",
+  query_assay = "Xenium",
+  min_shared = 10L
+)
+stopifnot(integration_gate$status == "SKIPPED_INSUFFICIENT_SHARED_GENES")
+
 cat("Extended Eosinophil helper tests passed.\n")
