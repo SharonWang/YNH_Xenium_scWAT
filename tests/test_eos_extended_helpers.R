@@ -46,4 +46,38 @@ if (requireNamespace("mclust", quietly = TRUE)) {
   stopifnot(small$status == "SKIPPED_PACKAGE_UNAVAILABLE")
 }
 
+# Break caught: plots silently fall back to alphabetical ordering or assign
+# unstable colours when a section contains a previously unseen subtype.
+labels <- c("T", "Adipocyte", "Eosinophil", "Capillary_EC", "new_type")
+ordered_labels <- apply_scwat_cell_type_order(labels)
+stopifnot(
+  identical(
+    levels(ordered_labels),
+    c("Adipocyte", "Capillary_EC", "Eosinophil", "T", "new_type")
+  ),
+  identical(as.character(ordered_labels), labels)
+)
+palette <- cell_macaron_palette(labels)
+stopifnot(
+  setequal(names(palette), unique(labels)),
+  all(grepl("^#[0-9A-Fa-f]{6}$", unname(palette)))
+)
+stopifnot(identical(palette, cell_macaron_palette(labels)))
+
+markers <- data.frame(
+  Gene_Symbol = c("Cd3d", "Pck1", "Siglecf", "Kdr"),
+  CellType_subtype = c("T", "Adipocyte", "Eosinophil", "Capillary_EC"),
+  stringsAsFactors = FALSE
+)
+marker_order <- order_marker_features(markers, available_genes = markers$Gene_Symbol)
+stopifnot(
+  identical(marker_order$marker_table$Gene_Symbol, c("Pck1", "Kdr", "Siglecf", "Cd3d")),
+  identical(names(marker_order$feature_groups), c("Adipocyte", "Capillary_EC", "Eosinophil", "T"))
+)
+
+plain_plot <- ggplot2::ggplot(data.frame(x = 1:3, y = 1:3), ggplot2::aes(x, y)) +
+  ggplot2::geom_point()
+styled_plot <- style_cell_plot(plain_plot)
+stopifnot(inherits(styled_plot, "ggplot"))
+
 cat("Extended Eosinophil helper tests passed.\n")

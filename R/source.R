@@ -660,6 +660,138 @@ cell_style_theme <- function(base_size = 14) {
     )
 }
 
+#' Return the biological display order used for scWAT cell types
+#'
+#' @param labels Optional observed labels. When supplied, only observed known
+#'   labels are returned and previously unseen labels are appended in their
+#'   first-observed order.
+#'
+#' @return A character vector of cell-type labels in biological display order.
+scwat_cell_type_order <- function(labels = NULL) {
+  canonical <- c(
+    "Adipocyte", "MatureAdip",
+    "ASC", "APC", "Fibroblast", "Stromal_Fibroblast",
+    "VSMC", "Pericyte", "Mural",
+    "Capillary_EC", "Venous_EC", "Lymphatic_EC", "Endothelial",
+    "Schwann", "Neural", "Mesothelial", "Epithelial",
+    "LYVE1_resident_Mac", "Scavenging_macrophage", "Inflammatory_Mac",
+    "TREM2_LAM", "Macrophage", "Monocyte", "Myeloid",
+    "DC", "cDC", "cDC1", "cDC2", "CCR7_migratory_DC", "Neutrophil",
+    "Eosinophil", "Mast cell",
+    "ILC", "ILC2", "NK", "T", "γδ T", "T cell", "B", "B cell",
+    "Plasma", "Uncertain"
+  )
+  if (is.null(labels)) {
+    return(canonical)
+  }
+  observed <- unique(as.character(labels[!is.na(labels) & nzchar(as.character(labels))]))
+  c(intersect(canonical, observed), setdiff(observed, canonical))
+}
+
+#' Apply the scWAT biological order without changing label values
+#'
+#' @param labels Character or factor cell-type labels.
+#'
+#' @return A factor containing the original values and biologically ordered
+#'   levels. Missing values remain missing.
+apply_scwat_cell_type_order <- function(labels) {
+  factor(as.character(labels), levels = scwat_cell_type_order(labels))
+}
+
+#' Return stable macaron colours for scWAT categories
+#'
+#' @param labels Optional observed labels. If omitted, colours for the complete
+#'   canonical scWAT order are returned. Unknown labels receive deterministic
+#'   fallback colours after the canonical palette.
+#'
+#' @return A named character vector of six-digit hexadecimal colours.
+cell_macaron_palette <- function(labels = NULL) {
+  canonical <- scwat_cell_type_order()
+  roots <- c(
+    "#F2B8A2", "#F6D7A7", "#E7C6A5", "#D7BDE2", "#C9B4D9",
+    "#B9CDE5", "#AFC6E9", "#A9D6C8", "#BFD8A8", "#D7E8B2",
+    "#B7DDD2", "#9FD3C7", "#A8DADC", "#B8D8E8", "#C7C5E8",
+    "#D8C4E6", "#E6C7D5", "#E8B4B8", "#D99C9C", "#E7AAA2",
+    "#D6A59A", "#E3B7A0", "#D8B58A", "#DCC98F", "#C6D59B",
+    "#B3D1A4", "#A6CDB4", "#A4CEC6", "#B7D9D0", "#F2C48D",
+    "#E89A8F", "#E5B2C5", "#C9B6DF", "#B7BEE0", "#A9C5E6",
+    "#9FC8D8", "#B5D6C6", "#C7DDAF", "#D9DEA8", "#E7D2A8",
+    "#E6C2A5", "#D8D8D8"
+  )
+  names(roots) <- canonical
+  if (is.null(labels)) {
+    return(roots)
+  }
+  observed <- unique(as.character(labels[!is.na(labels) & nzchar(as.character(labels))]))
+  output <- roots[intersect(canonical, observed)]
+  unknown <- setdiff(observed, canonical)
+  if (length(unknown)) {
+    fallback <- grDevices::hcl.colors(length(unknown), palette = "Pastel 1")
+    names(fallback) <- unknown
+    output <- c(output, fallback)
+  }
+  output[observed]
+}
+
+#' Apply the shared cell-style theme to a ggplot-compatible object
+#'
+#' @param plot A ggplot or patchwork-compatible plot object.
+#' @param base_size Base font size.
+#' @param legend_position ggplot legend-position setting.
+#'
+#' @return The styled plot object; the input data are not modified.
+style_cell_plot <- function(plot, base_size = 12, legend_position = "right") {
+  require_package("ggplot2")
+  plot +
+    cell_style_theme(base_size = base_size) +
+    ggplot2::theme(
+      legend.position = legend_position,
+      plot.margin = ggplot2::margin(8, 12, 8, 8)
+    )
+}
+
+#' Order canonical-marker rows and build matching DotPlot feature groups
+#'
+#' @param marker_df Data frame containing `Gene_Symbol` and
+#'   `CellType_subtype`.
+#' @param available_genes Character vector of genes present in the assay.
+#'
+#' @return A list containing the ordered marker table, a named feature list and
+#'   the observed biological cell-type order.
+order_marker_features <- function(marker_df, available_genes) {
+  required <- c("Gene_Symbol", "CellType_subtype")
+  missing <- setdiff(required, names(marker_df))
+  if (length(missing)) {
+    stop("marker_df missing columns: ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+  marker_table <- as.data.frame(marker_df, stringsAsFactors = FALSE)
+  marker_table <- marker_table[
+    marker_table$Gene_Symbol %in% as.character(available_genes),
+    , drop = FALSE
+  ]
+  marker_table <- marker_table[!duplicated(marker_table$Gene_Symbol), , drop = FALSE]
+  subtype_order <- scwat_cell_type_order(marker_table$CellType_subtype)
+  marker_table$CellType_subtype <- factor(
+    as.character(marker_table$CellType_subtype),
+    levels = subtype_order
+  )
+  marker_table <- marker_table[
+    order(marker_table$CellType_subtype, seq_len(nrow(marker_table))),
+    , drop = FALSE
+  ]
+  rownames(marker_table) <- NULL
+  feature_groups <- split(
+    as.character(marker_table$Gene_Symbol),
+    factor(as.character(marker_table$CellType_subtype), levels = subtype_order),
+    drop = TRUE
+  )
+  list(
+    marker_table = marker_table,
+    feature_groups = feature_groups,
+    cell_type_order = subtype_order
+  )
+}
+
 #' Plot section qc.
 #'
 #' @param cell_metadata Required `cell_metadata` input; validated before computation.
