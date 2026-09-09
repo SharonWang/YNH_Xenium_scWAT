@@ -9198,6 +9198,128 @@ run_wang_transfer <- function(
   )
 }
 
+#' Invoke an mclust-style fitter with its BIC function in the caller frame
+#'
+#' `mclust::Mclust()` rewrites its call to the unqualified symbol
+#' `mclustBIC` and evaluates that call in its caller. This small adapter makes
+#' that dependency explicit without attaching the package to the search path.
+#'
+#' @param data Finite numeric observations supplied to the mixture fitter.
+#' @param G Integer candidate component counts.
+#' @param mclust_fun Function with the public `Mclust()` calling contract.
+#' @param mclust_bic_fun Function with the public `mclustBIC()` contract.
+#' @param verbose Whether the fitter may print progress.
+#'
+#' @return The fitted object returned by `mclust_fun`.
+run_mclust_with_binding <- function(
+    data,
+    G,
+    mclust_fun,
+    mclust_bic_fun,
+    verbose = FALSE
+) {
+  mclustBIC <- mclust_bic_fun
+  mclust_fun(data = data, G = G, verbose = verbose)
+}
+
+#' Run a namespace-safe Gaussian-mixture diagnostic for an Eosinophil score
+#'
+#' This optional diagnostic never creates biological state labels. Runtime and
+#' sample-size failures are returned as typed statuses so they cannot terminate
+#' an otherwise valid 479-gene notebook.
+#'
+#' @param x Numeric state-score vector. Non-finite entries are excluded and
+#'   counted.
+#' @param G Integer candidate component counts.
+#' @param seed Random seed used by mclust.
+#' @param min_n Minimum finite observations required to attempt fitting.
+#' @param min_per_component Minimum observations required per candidate
+#'   component; candidates exceeding this support are removed.
+#'
+#' @return A list containing status, message, package version, input/finite
+#'   counts, selected model information, the optional fitted object and a BIC
+#'   table.
+run_mclust_diagnostic <- function(
+    x,
+    G = 1:3,
+    seed = 1234L,
+    min_n = 20L,
+    min_per_component = 5L
+) {
+  x <- as.numeric(x)
+  x_use <- x[is.finite(x)]
+  available <- requireNamespace("mclust", quietly = TRUE)
+  result <- list(
+    status = NA_character_,
+    message = NA_character_,
+    package_version = if (available) {
+      as.character(utils::packageVersion("mclust"))
+    } else {
+      NA_character_
+    },
+    n_input = length(x),
+    n_finite = length(x_use),
+    selected_G = NA_integer_,
+    model_name = NA_character_,
+    fit = NULL,
+    bic_table = data.frame()
+  )
+
+  if (!available) {
+    result$status <- "SKIPPED_PACKAGE_UNAVAILABLE"
+    result$message <- "Optional package 'mclust' is unavailable."
+    return(result)
+  }
+
+  if (length(x_use) < as.integer(min_n)) {
+    result$status <- "SKIPPED_INSUFFICIENT_DATA"
+    result$message <- sprintf(
+      "Need at least %d finite observations; found %d.",
+      as.integer(min_n), length(x_use)
+    )
+    return(result)
+  }
+
+  G_use <- sort(unique(as.integer(G)))
+  G_use <- G_use[
+    is.finite(G_use) & G_use >= 1L &
+      G_use * as.integer(min_per_component) <= length(x_use)
+  ]
+  if (!length(G_use)) {
+    result$status <- "SKIPPED_INSUFFICIENT_DATA"
+    result$message <- "No requested component count has adequate observations."
+    return(result)
+  }
+
+  set.seed(as.integer(seed))
+  fit_or_error <- tryCatch(
+    run_mclust_with_binding(
+      data = x_use,
+      G = G_use,
+      mclust_fun = getExportedValue("mclust", "Mclust"),
+      mclust_bic_fun = getExportedValue("mclust", "mclustBIC"),
+      verbose = FALSE
+    ),
+    error = identity
+  )
+  if (inherits(fit_or_error, "error")) {
+    result$status <- "FAILED_MCLUST_RUNTIME"
+    result$message <- conditionMessage(fit_or_error)
+    return(result)
+  }
+
+  result$status <- "PASS"
+  result$message <- paste(
+    "Gaussian-mixture diagnostic completed;",
+    "the fitted components are not biological state assignments."
+  )
+  result$selected_G <- as.integer(fit_or_error$G)
+  result$model_name <- as.character(fit_or_error$modelName)
+  result$fit <- fit_or_error
+  result$bic_table <- as.data.frame(fit_or_error$BIC)
+  result
+}
+
 #' Plot Eosinophil evidence-call composition within annotated subtypes
 #'
 #' @param object Seurat object containing subtype and Eosinophil-call metadata.
