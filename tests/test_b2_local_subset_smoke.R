@@ -67,11 +67,47 @@ checkpoint <- write_validated_seurat_checkpoint(
   project_root = tempdir(),
   stage = "LOCAL_SUBSET_PCA"
 )
+
+# Exercise the complete-panel notebook's ordering and corrected spatial safety
+# contracts without pretending that this subset has biological annotations.
+synthetic_labels <- rep(c("T", "Adipocyte", "Eosinophil", "Macrophage"), length.out = ncol(object))
+ordered_labels <- apply_scwat_cell_type_order(synthetic_labels)
+stopifnot(
+  identical(levels(ordered_labels), c("Adipocyte", "Macrophage", "Eosinophil", "T")),
+  identical(as.character(ordered_labels), synthetic_labels)
+)
+coordinates <- Seurat::GetTissueCoordinates(object[["fov"]], which = "centroids") |> as.data.frame()
+if (!"cell" %in% colnames(coordinates)) coordinates$cell <- rownames(coordinates)
+spatial_metadata <- data.frame(
+  cell_id = colnames(object),
+  Eos_inclusive = colnames(object) %in% head(colnames(object), 20L),
+  Final_CellType_subtype = ifelse(
+    colnames(object) %in% head(colnames(object), 20L),
+    "Eosinophil", rep(c("Adipocyte", "Macrophage"), length.out = ncol(object))
+  ),
+  EosState_balance = seq(-1, 1, length.out = ncol(object)),
+  EosState_extreme = NA_character_,
+  stringsAsFactors = FALSE
+)
+spatial_pools <- build_eos_spatial_pools(
+  spatial_metadata,
+  data.frame(cell_id = coordinates$cell, x = coordinates$x, y = coordinates$y),
+  cell_type_col = "Final_CellType_subtype"
+)
+spatial_edges <- calculate_eos_knn_edges(spatial_pools, k_values = c(1L, 15L))
+optional_mclust <- run_mclust_diagnostic(1:10, min_n = 20L)
+optional_cellchat <- run_eos_spatial_cellchat(list(status = "SKIPPED_LOCAL_SUBSET"))
 stopifnot(
   checkpoint$validation_status == "PASS",
   checkpoint$n_cells == ncol(object),
   checkpoint$n_features == nrow(object),
-  nzchar(checkpoint$md5)
+  nzchar(checkpoint$md5),
+  spatial_pools$status == "PASS",
+  nrow(spatial_edges$k1) == 20L,
+  nrow(spatial_edges$k15) == 300L,
+  all(spatial_edges$k15$distance > 0),
+  optional_mclust$status %in% c("SKIPPED_PACKAGE_UNAVAILABLE", "SKIPPED_INSUFFICIENT_DATA"),
+  optional_cellchat$status == "SKIPPED_LOCAL_SUBSET"
 )
 cat(
   "LOCAL_SMOKE_PASS cells=", ncol(object),

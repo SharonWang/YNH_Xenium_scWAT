@@ -62,6 +62,12 @@ class SplitB2NotebookContracts(unittest.TestCase):
                 self.assertIn("CELLCHAT_STATE_PROPORTION <- 0.30", text)
                 self.assertIn("cellchat_significant_interactions", text)
                 self.assertIn("wang_xenium_integration_status", text)
+                self.assertIn("optional_package_versions.tsv", text)
+                self.assertIn("save_cell_plot", text)
+                self.assertIn("wang_xenium_subtype_umap", text)
+                self.assertIn("step10_1_eos_reference_pools", text)
+                self.assertIn("step10_4_knn_state_association", text)
+                self.assertIn("eos_spatial_cellchat_significant_dotplot", text)
                 self.assertIn("wang_xenium_shared_gene_manifest.tsv", text)
                 self.assertIn("wang_xenium_cross_dataset_neighbours.tsv", text)
                 self.assertIn("eos_knn_k1_edges.tsv", text)
@@ -69,7 +75,11 @@ class SplitB2NotebookContracts(unittest.TestCase):
                 self.assertIn("eos_knn_state_association.tsv", text)
                 self.assertIn("eos_spatial_cellchat_status.tsv", text)
                 self.assertIn("eos_spatial_cellchat_significant.tsv", text)
+                self.assertIn("eos_state_mclust_status.tsv", text)
+                self.assertIn("eos_state_mclust_bic.tsv", text)
                 self.assertNotIn("EXPLORATORY_SPATIAL_COEXPRESSION_NOT_CELLCHAT_INFERENCE", text)
+                spatial_text = text.split("## 10.1", 1)[1].split("Save branch-specific audit outputs", 1)[0]
+                self.assertNotIn("Final_CellType_subtype_with_uncertain", spatial_text)
                 self.assertIn("write_validated_seurat_checkpoint", text)
                 self.assertLess(
                     text.index("validate_runtime_paths"),

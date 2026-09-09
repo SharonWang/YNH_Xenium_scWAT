@@ -750,6 +750,43 @@ style_cell_plot <- function(plot, base_size = 12, legend_position = "right") {
     )
 }
 
+#' Save a cell-style plot as matched PNG and PDF artifacts
+#'
+#' @param plot A ggplot or patchwork-compatible plot object.
+#' @param stem Filename stem without an extension.
+#' @param output_dir Existing or creatable output directory below
+#'   `project_root`.
+#' @param project_root Absolute project root used for path-safety validation.
+#' @param width,height Plot dimensions in inches.
+#' @param dpi PNG resolution in dots per inch.
+#'
+#' @return A named character vector containing the validated PNG and PDF paths.
+#'   The supplied plot and analysis objects are not modified.
+save_cell_plot <- function(
+    plot,
+    stem,
+    output_dir,
+    project_root,
+    width = 12,
+    height = 7,
+    dpi = 300
+) {
+  require_package("ggplot2")
+  stem <- as.character(stem)[[1L]]
+  if (is.na(stem) || !grepl("^[A-Za-z0-9_.-]+$", stem)) {
+    stop("stem must contain only letters, numbers, dot, underscore or hyphen.", call. = FALSE)
+  }
+  paths <- c(
+    png = file.path(output_dir, paste0(stem, ".png")),
+    pdf = file.path(output_dir, paste0(stem, ".pdf"))
+  )
+  invisible(lapply(paths, function(path) assert_path_within(project_root, path)))
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  ggplot2::ggsave(paths[["png"]], plot = plot, width = width, height = height, dpi = dpi, bg = "white")
+  ggplot2::ggsave(paths[["pdf"]], plot = plot, width = width, height = height, device = grDevices::cairo_pdf, bg = "white")
+  paths
+}
+
 #' Order canonical-marker rows and build matching DotPlot feature groups
 #'
 #' @param marker_df Data frame containing `Gene_Symbol` and

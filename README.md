@@ -30,7 +30,7 @@ Run the three notebooks in that order for each region. The 12 notebooks are gene
 
 `${PROJECT_ROOT}/adipose_analysis_B2/scwat_downstream_outputs/<RUN_LABEL>/<REGION_ID>/`
 
-The default clustering algorithm is Seurat Louvain algorithm 1. Set `SCWAT_CLUSTER_ALGORITHM=4` only when the controlled HPC R library contains `leidenbase`; the selected algorithm is written to provenance. `diptest`, `mclust`, and `CellChat` are optional diagnostics and are explicitly reported as skipped when unavailable. Ligand-receptor output is labelled exploratory spatial co-expression, not CellChat inference.
+The default clustering algorithm is Seurat Louvain algorithm 1. Set `SCWAT_CLUSTER_ALGORITHM=4` only when the controlled HPC R library contains `leidenbase`; the selected algorithm is written to provenance. `diptest`, `mclust`, and `CellChat` are optional diagnostics and are explicitly reported as skipped when unavailable. Spatial CellChat uses normalized Xenium expression, aligned centroids and cell-area-derived scale factors for the KNN-selected neighbour types; it is labelled exploratory within-section inference, not mouse-level evidence or proof of signalling. Wang label transfer remains the annotation evidence, while the optional Wang–Xenium CCA embedding is a concordance diagnostic only.
 
 Harmony is intentionally not run inside a single-region branch because one physical section has no valid batch factor. Harmony is reserved for the later Region 3 anchor/eligible-consensus workflow, using section as the technical batch only after section admission has been decided and retaining mouse as the biological replicate.
 
@@ -48,6 +48,9 @@ export SCWAT_QC_RUN_ROOT="${SCWAT_PROJECT_ROOT}/adipose_analysis_B2/scwat_qc_out
 export SCWAT_B2_OUTPUT_ROOT="${SCWAT_PROJECT_ROOT}/adipose_analysis_B2/scwat_downstream_outputs/full_panel_branch_v1"
 export SCWAT_B2_RUN_LABEL=full_panel_branch_v1
 export SCWAT_CLUSTER_ALGORITHM=1
+export SCWAT_RUN_WANG_INTEGRATION=TRUE
+export SCWAT_WANG_MAX_PER_SUBTYPE=1000
+export SCWAT_RUN_CELLCHAT=TRUE
 export R_LIBS_USER="${SCWAT_PROJECT_ROOT}/adipose_analysis_B2/R_libs"
 export TMPDIR="${SCWAT_PROJECT_ROOT}/adipose_analysis_B2/tmp/full_panel_branch_v1"
 export TMP="${TMPDIR}"
@@ -79,6 +82,8 @@ For Regions 2–4, update `SCWAT_QC_RUN_ROOT` to the matching region and substit
 ```bash
 jupyter lab --notebook-dir="${SCWAT_PIPELINE_REPO}/notebooks"
 ```
+
+After each notebook finishes, download its executed notebook plus the complete matching branch directory. In particular retain `optional_package_versions.tsv`, the `wang_xenium_*.tsv` tables, `eos_knn_*.tsv*`, `eos_distance_*.tsv*`, `eos_spatial_cellchat_*.tsv`, `checkpoint_manifest.tsv`, `sessionInfo.txt`, and the `figures/` directory. A skipped or failed optional module is represented by its status TSV and must not be inferred from a missing figure.
 
 ## Section notebook inputs
 

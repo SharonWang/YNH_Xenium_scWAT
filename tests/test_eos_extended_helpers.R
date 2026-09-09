@@ -79,6 +79,15 @@ plain_plot <- ggplot2::ggplot(data.frame(x = 1:3, y = 1:3), ggplot2::aes(x, y)) 
   ggplot2::geom_point()
 styled_plot <- style_cell_plot(plain_plot)
 stopifnot(inherits(styled_plot, "ggplot"))
+plot_output_dir <- file.path(Sys.getenv("TMPDIR"), "cell_plot_contract")
+plot_files <- save_cell_plot(
+  styled_plot, stem = "test_plot", output_dir = plot_output_dir,
+  project_root = Sys.getenv("TMPDIR"), width = 4, height = 3, dpi = 72
+)
+stopifnot(
+  setequal(names(plot_files), c("png", "pdf")),
+  all(file.exists(unname(plot_files)))
+)
 
 # Break caught: spatial pools are joined by row position, Eosinophils leak into
 # the reference pool, or k-neighbour edge counts/distances are incorrect.

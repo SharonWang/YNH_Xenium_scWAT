@@ -113,14 +113,17 @@ DOWNSTREAM_ROOT <- Sys.getenv(
 )
 REGION_SHARED_ROOT <- file.path(DOWNSTREAM_ROOT, REGION_ID, "00_shared_domain")
 BRANCH_ROOT <- file.path(DOWNSTREAM_ROOT, REGION_ID, ANALYSIS_BRANCH)
+FIGURE_ROOT <- file.path(BRANCH_ROOT, "figures")
 TEMP_ROOT <- file.path(DOWNSTREAM_ROOT, "tmp", REGION_ID, ANALYSIS_BRANCH)
 set.seed(RANDOM_SEED)'''),
         code('''source(file.path(PIPELINE_REPO, "R", "source.R"))
 validate_runtime_paths(PROJECT_ROOT, INPUT_ROOT, DOWNSTREAM_ROOT, TEMP_ROOT)
 assert_path_within(PROJECT_ROOT, REGION_SHARED_ROOT)
 assert_path_within(PROJECT_ROOT, BRANCH_ROOT)
+assert_path_within(PROJECT_ROOT, FIGURE_ROOT)
 dir.create(REGION_SHARED_ROOT, recursive = TRUE, showWarnings = FALSE)
 dir.create(BRANCH_ROOT, recursive = TRUE, showWarnings = FALSE)
+dir.create(FIGURE_ROOT, recursive = TRUE, showWarnings = FALSE)
 dir.create(TEMP_ROOT, recursive = TRUE, showWarnings = FALSE)
 Sys.setenv(TMPDIR = TEMP_ROOT, TMP = TEMP_ROOT, TEMP = TEMP_ROOT)
 
@@ -138,13 +141,21 @@ optional_available <- setNames(
   vapply(optional_packages, requireNamespace, logical(1), quietly = TRUE),
   optional_packages
 )
+optional_versions <- data.frame(
+  package = optional_packages,
+  available = unname(optional_available),
+  version = vapply(optional_packages, function(package) {
+    if (optional_available[[package]]) as.character(packageVersion(package)) else NA_character_
+  }, character(1)),
+  stringsAsFactors = FALSE
+)
 RUN_DIPTEST <- unname(optional_available[["diptest"]])
 RUN_MCLUST <- unname(optional_available[["mclust"]])
 RUN_CELLCHAT <- unname(optional_available[["CellChat"]]) &&
   identical(toupper(Sys.getenv("SCWAT_RUN_CELLCHAT", "TRUE")), "TRUE")
 RUN_WANG_INTEGRATION <- identical(toupper(Sys.getenv("SCWAT_RUN_WANG_INTEGRATION", "TRUE")), "TRUE")
 CELLCHAT_STATE_PROPORTION <- 0.30
-print(optional_available)
+print(optional_versions)
 if (CLUSTER_ALGORITHM == 4L && !requireNamespace("leidenbase", quietly = TRUE)) {
   stop("SCWAT_CLUSTER_ALGORITHM=4 requires package 'leidenbase'. Use algorithm 1 or install it in the controlled HPC environment.")
 }
@@ -654,16 +665,46 @@ wang_xenium_integration_status'''),
     wang_xenium_object$integration_is_eosinophil %in% TRUE,
     paste(wang_xenium_object$integration_dataset, "Eosinophil"), "Other"
   )
+  wang_xenium_object$integration_cell_type <- apply_scwat_cell_type_order(
+    wang_xenium_object$integration_cell_type
+  )
   options(repr.plot.width = 14, repr.plot.height = 6)
-  print(style_cell_plot(DimPlot(
+  wang_dataset_plot <- style_cell_plot(DimPlot(
     wang_xenium_object, reduction = "wang_xenium_umap",
     group.by = "integration_dataset", cols = c(WANG = "#91C9B6", XENIUM = "#F29B8F")
-  )) + labs(title = "Wang–Xenium CCA integration: dataset mixing"))
-  print(style_cell_plot(DimPlot(
+  )) + labs(title = "Wang–Xenium CCA integration: dataset mixing")
+  wang_subtype_plot <- style_cell_plot(DimPlot(
+    wang_xenium_object, reduction = "wang_xenium_umap",
+    group.by = "integration_cell_type",
+    cols = cell_macaron_palette(levels(wang_xenium_object$integration_cell_type))
+  )) + labs(title = "Wang and Xenium subtype structure in joint space")
+  wang_eos_plot <- style_cell_plot(DimPlot(
     wang_xenium_object, reduction = "wang_xenium_umap",
     group.by = "integration_eos_display",
     cols = c("Other" = "#D9D9D9", "WANG Eosinophil" = "#78B7C5", "XENIUM Eosinophil" = "#E58C8A")
-  )) + labs(title = "Wang and Xenium Eosinophils in joint integrated space"))
+  )) + labs(title = "Wang and Xenium Eosinophils in joint integrated space")
+  wang_cross_distance_plot <- style_cell_plot(ggplot(
+    wang_xenium_neighbour_summary$per_cell,
+    aes(dataset, minimum_cross_dataset_distance, fill = dataset)
+  ) + geom_boxplot(outlier.shape = NA) +
+    scale_fill_manual(values = c(WANG = "#91C9B6", XENIUM = "#F29B8F")) +
+    facet_wrap(~is_eosinophil, labeller = label_both) +
+    labs(title = "Cross-dataset neighbour distance", x = NULL, y = "Minimum PCA distance", fill = NULL))
+  print(wang_dataset_plot)
+  print(wang_subtype_plot)
+  print(wang_eos_plot)
+  print(wang_cross_distance_plot)
+  save_cell_plot(wang_dataset_plot, "wang_xenium_dataset_umap", FIGURE_ROOT, PROJECT_ROOT, width = 10, height = 7)
+  save_cell_plot(wang_subtype_plot, "wang_xenium_subtype_umap", FIGURE_ROOT, PROJECT_ROOT, width = 13, height = 8)
+  save_cell_plot(wang_eos_plot, "wang_xenium_eosinophil_umap", FIGURE_ROOT, PROJECT_ROOT, width = 10, height = 7)
+  save_cell_plot(wang_cross_distance_plot, "wang_xenium_cross_dataset_distance", FIGURE_ROOT, PROJECT_ROOT, width = 9, height = 6)
+  if (WRITE_CHECKPOINTS) {
+    checkpoint_records$wang_integration <- write_validated_seurat_checkpoint(
+      wang_xenium_object,
+      file.path(BRANCH_ROOT, "03b_wang_xenium_integration.rds"),
+      PROJECT_ROOT, stage = "03B_WANG_XENIUM_CCA_DIAGNOSTIC"
+    )
+  }
   print(wang_xenium_neighbour_summary$dataset_summary)
   print(wang_xenium_neighbour_summary$cluster_enrichment %>%
           arrange(desc(eosinophil_fraction)) %>% head(20))
@@ -681,7 +722,12 @@ if (!RUN_EOS_STATE) message("Eos state analysis skipped: fewer than 20 inclusive
 region_spatial$EosState_balance <- NA_real_
 region_spatial$EosState_extreme <- NA_character_
 eos_obj <- if (RUN_EOS_STATE) subset(region_spatial, cells = eos_cells) else NULL'''),
-        code('''if (RUN_EOS_STATE) {
+        code('''mixture_diagnostic <- list(
+  status = "SKIPPED_NO_EOS_STATE", message = "Eosinophil-state analysis did not meet its cell-count gate.",
+  package_version = if (RUN_MCLUST) as.character(packageVersion("mclust")) else NA_character_,
+  selected_G = NA_integer_, model_name = NA_character_, fit = NULL, bic_table = data.frame()
+)
+if (RUN_EOS_STATE) {
   short_genes <- eos_gene_sets$gene[eos_gene_sets$gene_set == "short_lived"]
   long_genes <- eos_gene_sets$gene[eos_gene_sets$gene_set == "long_lived"]
   short_use <- intersect(short_genes, rownames(eos_obj))
@@ -734,7 +780,30 @@ if (RUN_EOS_STATE) table(eos_obj$EosState_extreme)'''),
     eos_obj$EosState_balance, G = 1:3, seed = RANDOM_SEED
   )
   print(mixture_diagnostic[c("status", "message", "selected_G", "model_name", "bic_table")])
-}'''),
+  if (identical(mixture_diagnostic$status, "PASS")) {
+    mixture_plot_data <- data.frame(
+      EosState_balance = eos_obj$EosState_balance[is.finite(eos_obj$EosState_balance)],
+      component = factor(mixture_diagnostic$fit$classification)
+    )
+    mixture_plot <- ggplot(mixture_plot_data, aes(EosState_balance, fill = component)) +
+      geom_density(alpha = 0.45, linewidth = 0.4) +
+      scale_fill_manual(values = cell_macaron_palette(levels(mixture_plot_data$component))) +
+      labs(title = "Gaussian-mixture diagnostic on continuous Eosinophil state",
+           subtitle = "Components are diagnostic and are not biological subtype calls",
+           x = "EosState balance", y = "Density", fill = "Component")
+    mixture_plot <- style_cell_plot(mixture_plot)
+    print(mixture_plot)
+    save_cell_plot(mixture_plot, "eos_state_mclust_diagnostic", FIGURE_ROOT, PROJECT_ROOT, width = 9, height = 5)
+  }
+}
+mclust_status <- data.frame(
+  status = mixture_diagnostic$status, message = mixture_diagnostic$message,
+  package_version = mixture_diagnostic$package_version,
+  selected_G = mixture_diagnostic$selected_G, model_name = mixture_diagnostic$model_name,
+  interpretation = "DIAGNOSTIC_NOT_BIOLOGICAL_SUBTYPE_ASSIGNMENT",
+  stringsAsFactors = FALSE
+)
+mclust_status'''),
         code('''if (RUN_EOS_STATE) {
   options(repr.plot.width = 13, repr.plot.height = 5)
   print(
@@ -840,6 +909,7 @@ if (RUN_EOS_SPATIAL) {
     scale_colour_manual(values = c("Eosinophil query" = "#E58C8A", "Non-Eosinophil reference" = "#D9D9D9")) +
     labs(title = "Step 10.1: disjoint spatial pools", colour = NULL)
   print(style_cell_plot(spatial_pool_plot))
+  save_cell_plot(style_cell_plot(spatial_pool_plot), "step10_1_eos_reference_pools", FIGURE_ROOT, PROJECT_ROOT, width = 10, height = 7)
 }'''),
         md("""## 10.2 Quantify nearest-cell composition at k = 1 and k = 15
 
@@ -871,6 +941,8 @@ print(knn_composition_k15$by_state %>% arrange(EosState_extreme, desc(fraction))
     labs(title = "Step 10.2: k = 15 neighbourhood by Eosinophil state", x = NULL, y = "Fraction of edges", fill = NULL)
   print(style_cell_plot(plot_k1))
   print(style_cell_plot(plot_k15))
+  save_cell_plot(style_cell_plot(plot_k1), "step10_2_k1_neighbour_composition", FIGURE_ROOT, PROJECT_ROOT, width = 9, height = 7)
+  save_cell_plot(style_cell_plot(plot_k15), "step10_2_k15_neighbour_by_state", FIGURE_ROOT, PROJECT_ROOT, width = 10, height = 7)
 }'''),
         md("""## 10.3 Estimate Eosinophil distance to every adequately represented cell type
 
@@ -900,6 +972,8 @@ print(distance_state_correlations %>% arrange(median_distance))'''),
     labs(title = "Step 10.3: continuous Eosinophil state versus proximity", x = "EosState balance", y = "Minimum centroid distance")
   print(style_cell_plot(distance_boxplot))
   print(style_cell_plot(distance_state_plot))
+  save_cell_plot(style_cell_plot(distance_boxplot), "step10_3_distance_by_cell_type", FIGURE_ROOT, PROJECT_ROOT, width = 10, height = 8)
+  save_cell_plot(style_cell_plot(distance_state_plot), "step10_3_distance_by_continuous_state", FIGURE_ROOT, PROJECT_ROOT, width = 14, height = 10)
 }'''),
         md("""## 10.4 Rank neighbour cell types along the continuous Eosinophil-state axis
 
@@ -937,6 +1011,8 @@ cat("Long-like top neighbours:", paste(eos_knn_state_association$long_top, colla
     labs(title = "Step 10.4: per-Eosinophil neighbour fraction", x = "EosState balance", y = "Fraction among k = 15")
   print(style_cell_plot(association_plot))
   print(style_cell_plot(per_eos_plot))
+  save_cell_plot(style_cell_plot(association_plot), "step10_4_knn_state_association", FIGURE_ROOT, PROJECT_ROOT, width = 10, height = 8)
+  save_cell_plot(style_cell_plot(per_eos_plot), "step10_4_per_eos_neighbour_fraction", FIGURE_ROOT, PROJECT_ROOT, width = 13, height = 8)
 }'''),
         md("""## 11. Spatial CellChat for the top three short-like and long-like neighbour types
 
@@ -993,6 +1069,8 @@ if (nrow(cellchat_significant_interactions)) {
     labs(title = "Exploratory spatial CellChat probability by source and target", x = NULL, y = NULL, fill = "Probability")
   print(style_cell_plot(cellchat_dotplot))
   print(style_cell_plot(cellchat_heatmap))
+  save_cell_plot(style_cell_plot(cellchat_dotplot), "eos_spatial_cellchat_significant_dotplot", FIGURE_ROOT, PROJECT_ROOT, width = 13, height = 10)
+  save_cell_plot(style_cell_plot(cellchat_heatmap), "eos_spatial_cellchat_significant_heatmap", FIGURE_ROOT, PROJECT_ROOT, width = 13, height = 10)
 } else {
   message("No CellChat interaction passed the prespecified raw-p and BH-FDR gates, or CellChat was skipped.")
 }'''),
@@ -1075,6 +1153,7 @@ table(domain_manifest$tissue_domain)'''),
 
 Objects and tables use unique stage/branch paths; no checkpoint is silently overwritten. The raw object remains unchanged. These results are section-level diagnostics and must pass the Region 3 anchor/admission workflow before primary release."""),
         code('''write_tsv(provenance, file.path(BRANCH_ROOT, "analysis_provenance.tsv"), PROJECT_ROOT)
+write_tsv(optional_versions, file.path(BRANCH_ROOT, "optional_package_versions.tsv"), PROJECT_ROOT)
 write_tsv(input_inventory, file.path(BRANCH_ROOT, "input_inventory.tsv"), PROJECT_ROOT)
 write_tsv(qc_counts, file.path(BRANCH_ROOT, "qc_counts.tsv"), PROJECT_ROOT)
 write_tsv(pca_qc_correlations, file.path(BRANCH_ROOT, "pca_qc_correlations.tsv"), PROJECT_ROOT)
@@ -1090,6 +1169,8 @@ write_tsv(wang_xenium_neighbour_summary$per_cell, file.path(BRANCH_ROOT, "wang_x
 write_tsv(wang_xenium_neighbour_summary$dataset_summary, file.path(BRANCH_ROOT, "wang_xenium_eos_dataset_summary.tsv"), PROJECT_ROOT)
 write_tsv(wang_xenium_neighbour_summary$cluster_enrichment, file.path(BRANCH_ROOT, "wang_xenium_eos_cluster_enrichment.tsv"), PROJECT_ROOT)
 write_tsv(eos_identity_summary, file.path(BRANCH_ROOT, "eos_identity_summary.tsv"), PROJECT_ROOT)
+write_tsv(mclust_status, file.path(BRANCH_ROOT, "eos_state_mclust_status.tsv"), PROJECT_ROOT)
+write_tsv(mixture_diagnostic$bic_table, file.path(BRANCH_ROOT, "eos_state_mclust_bic.tsv"), PROJECT_ROOT)
 write_tsv(eos_state_association, file.path(BRANCH_ROOT, "eos_state_association_exploratory.tsv"), PROJECT_ROOT)
 write_tsv(spatial_knn_edges$k1, file.path(BRANCH_ROOT, "eos_knn_k1_edges.tsv"), PROJECT_ROOT)
 write_gz_tsv(spatial_knn_edges$k15, file.path(BRANCH_ROOT, "eos_knn_k15_edges.tsv.gz"), PROJECT_ROOT)
@@ -1103,6 +1184,11 @@ write_gz_tsv(eos_knn_state_association$per_eos, file.path(BRANCH_ROOT, "eos_knn_
 write_tsv(cellchat_status, file.path(BRANCH_ROOT, "eos_spatial_cellchat_status.tsv"), PROJECT_ROOT)
 write_tsv(cellchat_all_interactions, file.path(BRANCH_ROOT, "eos_spatial_cellchat_all.tsv"), PROJECT_ROOT)
 write_tsv(cellchat_significant_interactions, file.path(BRANCH_ROOT, "eos_spatial_cellchat_significant.tsv"), PROJECT_ROOT)
+if (WRITE_CHECKPOINTS && identical(cellchat_result$status, "PASS")) {
+  cellchat_checkpoint <- file.path(BRANCH_ROOT, "eos_spatial_cellchat_object.rds")
+  assert_path_within(PROJECT_ROOT, cellchat_checkpoint)
+  saveRDS(cellchat_result$object, cellchat_checkpoint)
+}
 checkpoint_records$final <- write_validated_seurat_checkpoint(
   region_spatial,
   file.path(BRANCH_ROOT, paste0(REGION_ID, "_", ANALYSIS_BRANCH, "_479_final.rds")),
