@@ -80,4 +80,64 @@ plain_plot <- ggplot2::ggplot(data.frame(x = 1:3, y = 1:3), ggplot2::aes(x, y)) 
 styled_plot <- style_cell_plot(plain_plot)
 stopifnot(inherits(styled_plot, "ggplot"))
 
+# Break caught: spatial pools are joined by row position, Eosinophils leak into
+# the reference pool, or k-neighbour edge counts/distances are incorrect.
+spatial_fixture <- data.frame(
+  cell_id = c("e1", "e2", "a1", "a2", "m1", "m2", "t1", "t2"),
+  Eos_inclusive = c(TRUE, TRUE, rep(FALSE, 6)),
+  Final_CellType_subtype = c(
+    "Eosinophil", "Eosinophil", "ASC", "ASC",
+    "Macrophage", "Macrophage", "T", "T"
+  ),
+  EosState_balance = c(-1, 1, rep(NA_real_, 6)),
+  EosState_extreme = c("Short-lived-like", "Long-lived-like", rep(NA_character_, 6)),
+  stringsAsFactors = FALSE
+)
+coordinate_fixture <- data.frame(
+  cell_id = rev(spatial_fixture$cell_id),
+  x = c(13, 3, 12, 2, 11, 1, 10, 0),
+  y = 0,
+  stringsAsFactors = FALSE
+)
+pools <- build_eos_spatial_pools(spatial_fixture, coordinate_fixture)
+stopifnot(
+  identical(pools$query$cell_id, c("e1", "e2")),
+  pools$gate$n_overlap_ids == 0L,
+  pools$gate$n_duplicate_coordinate_pairs == 0L
+)
+edges <- calculate_eos_knn_edges(pools, k_values = c(1L, 3L))
+stopifnot(
+  nrow(edges$k1) == 2L,
+  nrow(edges$k3) == 6L,
+  all(edges$k1$distance > 0),
+  identical(edges$k1$reference_cell_type, c("ASC", "ASC"))
+)
+composition <- summarise_eos_knn_composition(edges$k3)
+stopifnot(sum(composition$overall$n_edges) == 6L)
+
+distance_by_type <- calculate_eos_distance_by_cell_type(pools, min_reference_cells = 2L)
+stopifnot(
+  nrow(distance_by_type$cell_level) == 6L,
+  setequal(distance_by_type$summary$reference_cell_type, c("ASC", "Macrophage", "T"))
+)
+
+association_edges <- data.frame(
+  eos_cell_id = rep(c("e1", "e2", "e3"), each = 3L),
+  reference_cell_type = c("ASC", "ASC", "T", "ASC", "Macrophage", "T", "Macrophage", "Macrophage", "T"),
+  EosState_balance = rep(c(-1, 0, 1), each = 3L),
+  stringsAsFactors = FALSE
+)
+ranking <- rank_eos_state_knn_associations(
+  association_edges,
+  biological_order = c("ASC", "Macrophage", "T"),
+  min_eos = 3L,
+  top_n = 2L
+)
+stopifnot(
+  ranking$full$spearman_rho[ranking$full$reference_cell_type == "ASC"] == -1,
+  ranking$full$spearman_rho[ranking$full$reference_cell_type == "Macrophage"] == 1,
+  identical(ranking$short_top[[1L]], "ASC"),
+  identical(ranking$long_top[[1L]], "Macrophage")
+)
+
 cat("Extended Eosinophil helper tests passed.\n")

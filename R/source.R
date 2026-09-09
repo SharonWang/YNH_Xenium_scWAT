@@ -7946,6 +7946,309 @@ validate_neighbour_distances <- function(distances, zero_tolerance = 0) {
   )
 }
 
+#' Build cell-ID-aligned Eosinophil and non-Eosinophil spatial pools
+#'
+#' @param cell_metadata Data frame with one row per cell and a unique `cell_id`.
+#' @param coordinates Data frame with unique `cell_id`, `x`, and `y` columns.
+#' @param eos_col Complete logical field defining the Eosinophil query pool.
+#' @param cell_type_col Downstream cell-type field for reference labels.
+#' @param state_col Continuous Eosinophil-state field.
+#' @param extreme_col Optional descriptive Eosinophil-tail field.
+#'
+#' @return A list with aligned `all`, `query`, and `reference` tables plus the
+#'   disjoint-pool validation result.
+build_eos_spatial_pools <- function(
+    cell_metadata,
+    coordinates,
+    eos_col = "Eos_inclusive",
+    cell_type_col = "Final_CellType_subtype",
+    state_col = "EosState_balance",
+    extreme_col = "EosState_extreme"
+) {
+  metadata <- as.data.frame(cell_metadata, stringsAsFactors = FALSE)
+  coords <- as.data.frame(coordinates, stringsAsFactors = FALSE)
+  metadata_required <- c("cell_id", eos_col, cell_type_col)
+  coordinate_required <- c("cell_id", "x", "y")
+  missing_metadata <- setdiff(metadata_required, names(metadata))
+  missing_coordinates <- setdiff(coordinate_required, names(coords))
+  if (length(missing_metadata)) {
+    stop("Cell metadata missing: ", paste(missing_metadata, collapse = ", "), call. = FALSE)
+  }
+  if (length(missing_coordinates)) {
+    stop("Coordinates missing: ", paste(missing_coordinates, collapse = ", "), call. = FALSE)
+  }
+  metadata$cell_id <- as.character(metadata$cell_id)
+  coords$cell_id <- as.character(coords$cell_id)
+  if (anyDuplicated(metadata$cell_id) || anyDuplicated(coords$cell_id)) {
+    stop("Cell metadata and coordinates require unique cell IDs.", call. = FALSE)
+  }
+  index <- match(metadata$cell_id, coords$cell_id)
+  if (anyNA(index)) {
+    stop("Coordinates do not cover every metadata cell ID.", call. = FALSE)
+  }
+  eos <- metadata[[eos_col]]
+  if (!is.logical(eos) || anyNA(eos)) {
+    stop(eos_col, " must be a complete logical field.", call. = FALSE)
+  }
+  cell_type <- as.character(metadata[[cell_type_col]])
+  if (anyNA(cell_type) || any(!nzchar(cell_type))) {
+    stop(cell_type_col, " must contain complete downstream labels.", call. = FALSE)
+  }
+  state <- if (state_col %in% names(metadata)) as.numeric(metadata[[state_col]]) else rep(NA_real_, nrow(metadata))
+  extreme <- if (extreme_col %in% names(metadata)) as.character(metadata[[extreme_col]]) else rep(NA_character_, nrow(metadata))
+  all_cells <- data.frame(
+    cell_id = metadata$cell_id,
+    x = as.numeric(coords$x[index]),
+    y = as.numeric(coords$y[index]),
+    Eos_inclusive = eos,
+    cell_type = cell_type,
+    EosState_balance = state,
+    EosState_extreme = extreme,
+    stringsAsFactors = FALSE
+  )
+  if (any(!is.finite(all_cells$x)) || any(!is.finite(all_cells$y))) {
+    stop("All spatial coordinates must be finite.", call. = FALSE)
+  }
+  query <- all_cells[all_cells$Eos_inclusive, , drop = FALSE]
+  reference <- all_cells[!all_cells$Eos_inclusive, , drop = FALSE]
+  gate <- validate_disjoint_spatial_pools(
+    query$cell_id, reference$cell_id,
+    query[, c("cell_id", "x", "y"), drop = FALSE],
+    reference[, c("cell_id", "x", "y"), drop = FALSE]
+  )
+  list(all = all_cells, query = query, reference = reference, gate = gate)
+}
+
+#' Calculate Eosinophil-to-reference K-nearest-neighbour edge tables
+#'
+#' @param pools Output from `build_eos_spatial_pools()`.
+#' @param k_values Positive requested neighbour counts.
+#'
+#' @return A named list (`k1`, `k15`, and so on) of edge data frames. Requested
+#'   k is capped at the available reference-cell count and recorded as
+#'   `k_actual`.
+calculate_eos_knn_edges <- function(pools, k_values = c(1L, 15L)) {
+  require_package("FNN")
+  if (!is.list(pools) || !all(c("query", "reference", "gate") %in% names(pools))) {
+    stop("pools must be returned by build_eos_spatial_pools().", call. = FALSE)
+  }
+  query <- pools$query
+  reference <- pools$reference
+  if (!nrow(query) || !nrow(reference)) {
+    stop("Spatial query and reference pools must both be non-empty.", call. = FALSE)
+  }
+  k_values <- sort(unique(as.integer(k_values)))
+  if (!length(k_values) || any(!is.finite(k_values)) || any(k_values < 1L)) {
+    stop("k_values must contain positive integers.", call. = FALSE)
+  }
+  result <- lapply(k_values, function(k_requested) {
+    k_actual <- min(k_requested, nrow(reference))
+    fit <- FNN::get.knnx(
+      data = as.matrix(reference[, c("x", "y"), drop = FALSE]),
+      query = as.matrix(query[, c("x", "y"), drop = FALSE]),
+      k = k_actual
+    )
+    distance <- as.vector(t(fit$nn.dist))
+    validate_neighbour_distances(distance)
+    reference_index <- as.vector(t(fit$nn.index))
+    data.frame(
+      eos_cell_id = rep(query$cell_id, each = k_actual),
+      reference_cell_id = reference$cell_id[reference_index],
+      neighbour_rank = rep(seq_len(k_actual), times = nrow(query)),
+      k_requested = k_requested,
+      k_actual = k_actual,
+      distance = distance,
+      reference_cell_type = reference$cell_type[reference_index],
+      EosState_balance = rep(query$EosState_balance, each = k_actual),
+      EosState_extreme = rep(query$EosState_extreme, each = k_actual),
+      stringsAsFactors = FALSE
+    )
+  })
+  names(result) <- paste0("k", k_values)
+  result
+}
+
+#' Summarize Eosinophil KNN composition overall and by descriptive state
+#'
+#' @param edges One edge table returned by `calculate_eos_knn_edges()`.
+#'
+#' @return A list with `overall` and `by_state` count/fraction tables.
+summarise_eos_knn_composition <- function(edges) {
+  required <- c("reference_cell_type", "EosState_extreme")
+  missing <- setdiff(required, names(edges))
+  if (length(missing)) stop("KNN edges missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  overall <- as.data.frame(table(reference_cell_type = as.character(edges$reference_cell_type)), stringsAsFactors = FALSE)
+  names(overall)[names(overall) == "Freq"] <- "n_edges"
+  overall <- overall[overall$n_edges > 0L, , drop = FALSE]
+  overall$fraction <- overall$n_edges / sum(overall$n_edges)
+  state_keep <- !is.na(edges$EosState_extreme) & nzchar(as.character(edges$EosState_extreme))
+  if (any(state_keep)) {
+    by_state <- as.data.frame(table(
+      EosState_extreme = as.character(edges$EosState_extreme[state_keep]),
+      reference_cell_type = as.character(edges$reference_cell_type[state_keep])
+    ), stringsAsFactors = FALSE)
+    names(by_state)[names(by_state) == "Freq"] <- "n_edges"
+    by_state <- by_state[by_state$n_edges > 0L, , drop = FALSE]
+    totals <- ave(by_state$n_edges, by_state$EosState_extreme, FUN = sum)
+    by_state$fraction <- by_state$n_edges / totals
+  } else {
+    by_state <- data.frame(
+      EosState_extreme = character(), reference_cell_type = character(),
+      n_edges = integer(), fraction = numeric(), stringsAsFactors = FALSE
+    )
+  }
+  list(overall = overall, by_state = by_state)
+}
+
+#' Calculate each Eosinophil cell's distance to every eligible cell type
+#'
+#' @param pools Output from `build_eos_spatial_pools()`.
+#' @param min_reference_cells Minimum reference cells required for a type.
+#'
+#' @return A list with cell-level distances and cell-type summaries containing
+#'   median, quartiles and descriptive continuous-state Spearman correlation.
+calculate_eos_distance_by_cell_type <- function(pools, min_reference_cells = 20L) {
+  require_package("FNN")
+  query <- pools$query
+  reference <- pools$reference
+  min_reference_cells <- as.integer(min_reference_cells)
+  type_counts <- table(reference$cell_type)
+  eligible <- names(type_counts[type_counts >= min_reference_cells])
+  eligible <- scwat_cell_type_order(eligible)
+  if (!length(eligible)) {
+    return(list(cell_level = data.frame(), summary = data.frame()))
+  }
+  cell_level <- do.call(rbind, lapply(eligible, function(cell_type_name) {
+    type_reference <- reference[reference$cell_type == cell_type_name, , drop = FALSE]
+    fit <- FNN::get.knnx(
+      as.matrix(type_reference[, c("x", "y"), drop = FALSE]),
+      as.matrix(query[, c("x", "y"), drop = FALSE]),
+      k = 1L
+    )
+    distance <- as.numeric(fit$nn.dist[, 1L])
+    validate_neighbour_distances(distance)
+    data.frame(
+      eos_cell_id = query$cell_id,
+      reference_cell_type = cell_type_name,
+      distance = distance,
+      EosState_balance = query$EosState_balance,
+      stringsAsFactors = FALSE
+    )
+  }))
+  rownames(cell_level) <- NULL
+  split_distance <- split(cell_level, cell_level$reference_cell_type)
+  summary <- do.call(rbind, lapply(names(split_distance), function(cell_type_name) {
+    x <- split_distance[[cell_type_name]]
+    complete <- is.finite(x$distance) & is.finite(x$EosState_balance)
+    rho <- if (sum(complete) >= 3L && stats::sd(x$distance[complete]) > 0 && stats::sd(x$EosState_balance[complete]) > 0) {
+      stats::cor(x$distance[complete], x$EosState_balance[complete], method = "spearman")
+    } else {
+      NA_real_
+    }
+    data.frame(
+      reference_cell_type = cell_type_name,
+      n_eos = nrow(x),
+      n_reference = unname(type_counts[[cell_type_name]]),
+      median_distance = stats::median(x$distance),
+      q25_distance = unname(stats::quantile(x$distance, 0.25)),
+      q75_distance = unname(stats::quantile(x$distance, 0.75)),
+      spearman_rho_state = rho,
+      interpretation = "DESCRIPTIVE_SPATIALLY_AUTOCORRELATED_NO_CELL_LEVEL_P_VALUE",
+      stringsAsFactors = FALSE
+    )
+  }))
+  rownames(summary) <- NULL
+  list(cell_level = cell_level, summary = summary)
+}
+
+#' Rank cell types associated with the continuous Eosinophil KNN state
+#'
+#' @param edges_k15 KNN edge table containing Eosinophil ID, reference type and
+#'   continuous state.
+#' @param biological_order Preferred cell-type tie-breaking order.
+#' @param min_eos Minimum Eosinophils with finite state.
+#' @param top_n Maximum selected types in each state direction.
+#'
+#' @return A list with the full association table, per-Eosinophil composition,
+#'   and deterministic short- and long-associated top-type vectors.
+rank_eos_state_knn_associations <- function(
+    edges_k15,
+    biological_order = scwat_cell_type_order(),
+    min_eos = 20L,
+    top_n = 3L
+) {
+  required <- c("eos_cell_id", "reference_cell_type", "EosState_balance")
+  missing <- setdiff(required, names(edges_k15))
+  if (length(missing)) stop("KNN edges missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  edges <- as.data.frame(edges_k15, stringsAsFactors = FALSE)
+  state_by_eos <- tapply(edges$EosState_balance, edges$eos_cell_id, function(x) unique(x[is.finite(x)]))
+  valid_state <- vapply(state_by_eos, length, integer(1)) == 1L
+  eos_ids <- names(state_by_eos)[valid_state]
+  if (length(eos_ids) < as.integer(min_eos)) {
+    return(list(
+      status = "SKIPPED_INSUFFICIENT_EOS",
+      full = data.frame(), per_eos = data.frame(),
+      short_top = character(), long_top = character()
+    ))
+  }
+  types <- unique(as.character(edges$reference_cell_type))
+  grid <- expand.grid(
+    eos_cell_id = eos_ids,
+    reference_cell_type = types,
+    stringsAsFactors = FALSE
+  )
+  counts <- aggregate(
+    rep(1L, nrow(edges[edges$eos_cell_id %in% eos_ids, , drop = FALSE])),
+    by = list(
+      eos_cell_id = edges$eos_cell_id[edges$eos_cell_id %in% eos_ids],
+      reference_cell_type = edges$reference_cell_type[edges$eos_cell_id %in% eos_ids]
+    ),
+    FUN = sum
+  )
+  names(counts)[[3L]] <- "n_edges"
+  per_eos <- merge(grid, counts, by = c("eos_cell_id", "reference_cell_type"), all.x = TRUE, sort = FALSE)
+  per_eos$n_edges[is.na(per_eos$n_edges)] <- 0L
+  total_by_eos <- table(edges$eos_cell_id[edges$eos_cell_id %in% eos_ids])
+  per_eos$k_actual <- as.integer(total_by_eos[per_eos$eos_cell_id])
+  per_eos$neighbour_fraction <- per_eos$n_edges / per_eos$k_actual
+  per_eos$EosState_balance <- as.numeric(vapply(
+    state_by_eos[per_eos$eos_cell_id], `[[`, numeric(1), 1L
+  ))
+  split_type <- split(per_eos, per_eos$reference_cell_type)
+  full <- do.call(rbind, lapply(names(split_type), function(cell_type_name) {
+    x <- split_type[[cell_type_name]]
+    rho <- if (stats::sd(x$neighbour_fraction) > 0 && stats::sd(x$EosState_balance) > 0) {
+      stats::cor(x$neighbour_fraction, x$EosState_balance, method = "spearman")
+    } else {
+      NA_real_
+    }
+    data.frame(
+      reference_cell_type = cell_type_name,
+      n_eos = nrow(x),
+      n_edges = sum(x$n_edges),
+      mean_neighbour_fraction = mean(x$neighbour_fraction),
+      spearman_rho = rho,
+      direction = if (is.na(rho)) "UNINFORMATIVE" else if (rho > 0) "LONG_ASSOCIATED" else if (rho < 0) "SHORT_ASSOCIATED" else "NEUTRAL",
+      interpretation = "DESCRIPTIVE_SPATIALLY_AUTOCORRELATED_NO_CELL_LEVEL_P_VALUE",
+      stringsAsFactors = FALSE
+    )
+  }))
+  rownames(full) <- NULL
+  order_index <- match(full$reference_cell_type, biological_order)
+  order_index[is.na(order_index)] <- length(biological_order) + seq_len(sum(is.na(order_index)))
+  short_rows <- which(is.finite(full$spearman_rho) & full$spearman_rho < 0)
+  long_rows <- which(is.finite(full$spearman_rho) & full$spearman_rho > 0)
+  short_rows <- short_rows[order(full$spearman_rho[short_rows], -full$n_edges[short_rows], order_index[short_rows])]
+  long_rows <- long_rows[order(-full$spearman_rho[long_rows], -full$n_edges[long_rows], order_index[long_rows])]
+  list(
+    status = "PASS",
+    full = full,
+    per_eos = per_eos,
+    short_top = head(full$reference_cell_type[short_rows], as.integer(top_n)),
+    long_top = head(full$reference_cell_type[long_rows], as.integer(top_n))
+  )
+}
+
 #' Calculate the adjusted Rand index for two cluster assignments
 #'
 #' @param labels_a,labels_b Equal-length complete cluster-label vectors.
