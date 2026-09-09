@@ -7630,6 +7630,431 @@ plot_eos_with_celltypes <- function(
   p
 }
 
+# -----------------------------------------------------------------------------
+# Downstream tissue-branch, stability, and spatial-safety helpers
+# -----------------------------------------------------------------------------
+
+#' Recreate the approved primary downstream cell mask from aligned metadata
+#'
+#' @param cell_metadata Data frame already aligned to the Seurat object by cell
+#'   ID and containing core-QC, high-control, and segmentation-multiplet flags.
+#' @param core_col,high_control_col,multiplet_col Metadata column names.
+#'
+#' @return A logical vector in `cell_metadata` row order. A cell passes only
+#'   when core QC is TRUE and both exclusion flags are FALSE.
+derive_primary_include_revised <- function(
+    cell_metadata,
+    core_col = "qc_core_pass",
+    high_control_col = "high_control_flag",
+    multiplet_col = "segmentation_multiplet_flag"
+) {
+  required <- c(core_col, high_control_col, multiplet_col)
+  missing <- setdiff(required, colnames(cell_metadata))
+  if (length(missing)) {
+    stop("Missing primary-mask fields: ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+  values <- lapply(cell_metadata[required], function(x) {
+    if (!is.logical(x) || anyNA(x)) stop("Primary-mask fields must be complete logical vectors.", call. = FALSE)
+    x
+  })
+  values[[1L]] & !values[[2L]] & !values[[3L]]
+}
+
+#' Build mutually exclusive all-cell, adipose, and lymph-node branch masks
+#'
+#' @param cell_metadata Data frame with unique cell IDs and an approved primary
+#'   inclusion field.
+#' @param lymph_node_cell_ids Character vector of QC-passed cells belonging to
+#'   the frozen lymph-node tissue domain. An empty vector records no LN domain.
+#' @param cell_id_col Name of the explicit cell-ID column.
+#' @param primary_col Name of the approved QC-passed inclusion column.
+#' @param provenance Character description of the domain source and parameters.
+#'
+#' @return A data frame in input row order containing the original cell ID,
+#'   primary mask, frozen lymph-node mask, three branch masks, tissue-domain
+#'   label, and provenance. Adipose and LN masks exactly partition QC-passed
+#'   cells; failed-QC cells belong to neither child branch.
+build_tissue_branch_manifest <- function(
+    cell_metadata,
+    lymph_node_cell_ids = character(),
+    cell_id_col = "cell_id",
+    primary_col = "primary_include_revised",
+    provenance = NA_character_
+) {
+  if (!is.data.frame(cell_metadata)) stop("cell_metadata must be a data frame.", call. = FALSE)
+  required <- c(cell_id_col, primary_col)
+  missing <- setdiff(required, colnames(cell_metadata))
+  if (length(missing)) stop("Missing branch-manifest fields: ", paste(missing, collapse = ", "), call. = FALSE)
+  ids <- as.character(cell_metadata[[cell_id_col]])
+  if (anyNA(ids) || any(!nzchar(ids))) stop("Cell IDs must be complete and non-empty.", call. = FALSE)
+  if (anyDuplicated(ids)) stop("Duplicate cell IDs are not allowed.", call. = FALSE)
+  primary <- cell_metadata[[primary_col]]
+  if (!is.logical(primary) || anyNA(primary)) stop("The primary inclusion field must be complete and logical.", call. = FALSE)
+  lymph_node_cell_ids <- unique(as.character(lymph_node_cell_ids))
+  unknown <- setdiff(lymph_node_cell_ids, ids)
+  if (length(unknown)) stop("Lymph-node IDs are not present in cell metadata: ", paste(head(unknown, 10L), collapse = ", "), call. = FALSE)
+  failed_qc_ln <- lymph_node_cell_ids[!primary[match(lymph_node_cell_ids, ids)]]
+  if (length(failed_qc_ln)) stop("Lymph-node IDs must be restricted to primary QC-passed cells.", call. = FALSE)
+  lymph_node <- primary & ids %in% lymph_node_cell_ids
+  adipose <- primary & !lymph_node
+  if (!all((adipose | lymph_node) == primary) || any(adipose & lymph_node)) {
+    stop("Adipose and lymph-node masks do not partition the primary cohort.", call. = FALSE)
+  }
+  data.frame(
+    cell_id = ids,
+    primary_include_revised = primary,
+    lymph_node_include = lymph_node,
+    all_qcpass_include = primary,
+    adipose_only_include = adipose,
+    lymph_node_only_include = lymph_node,
+    tissue_domain = ifelse(!primary, "QC_EXCLUDED", ifelse(lymph_node, "LYMPH_NODE", "ADIPOSE")),
+    branch_manifest_provenance = rep(as.character(provenance)[1L], length(ids)),
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Select the ordered cell IDs for one frozen tissue branch
+#'
+#' @param branch_manifest Output from `build_tissue_branch_manifest()`.
+#' @param branch One of `all_qcpass`, `adipose_only`, or `lymph_node_only`.
+#' @param min_cells Minimum required number of cells; the function stops below
+#'   this gate instead of forcing an underpowered analysis.
+#'
+#' @return Character vector of selected cell IDs in manifest order.
+select_tissue_branch_ids <- function(branch_manifest, branch, min_cells = 100L) {
+  branch <- match.arg(branch, c("all_qcpass", "adipose_only", "lymph_node_only"))
+  column <- paste0(branch, "_include")
+  required <- c("cell_id", column)
+  missing <- setdiff(required, colnames(branch_manifest))
+  if (length(missing)) stop("Branch manifest is missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  include <- branch_manifest[[column]]
+  if (!is.logical(include) || anyNA(include)) stop("Branch inclusion field must be complete and logical.", call. = FALSE)
+  ids <- as.character(branch_manifest$cell_id[include])
+  min_cells <- as.integer(min_cells)
+  if (!is.finite(min_cells) || min_cells < 1L) stop("min_cells must be a positive integer.", call. = FALSE)
+  if (length(ids) < min_cells) {
+    stop("INSUFFICIENT_", toupper(branch), "_CELLS: ", length(ids), " < ", min_cells, call. = FALSE)
+  }
+  ids
+}
+
+#' Validate that spatial query and reference pools are truly disjoint
+#'
+#' @param query_ids,reference_ids Character cell-ID vectors.
+#' @param query_coordinates,reference_coordinates Optional data frames with
+#'   `cell_id`, `x`, and `y`; when supplied, duplicate cross-pool coordinates
+#'   are prohibited because they generate zero-distance matches.
+#'
+#' @return A one-row list with query/reference counts, ID-overlap count, and
+#'   duplicate-coordinate-pair count. The function stops on any unsafe overlap.
+validate_disjoint_spatial_pools <- function(
+    query_ids,
+    reference_ids,
+    query_coordinates = NULL,
+    reference_coordinates = NULL
+) {
+  query_ids <- as.character(query_ids)
+  reference_ids <- as.character(reference_ids)
+  if (!length(query_ids) || !length(reference_ids)) stop("Spatial pools must both be non-empty.", call. = FALSE)
+  if (anyNA(query_ids) || anyNA(reference_ids) || any(!nzchar(query_ids)) || any(!nzchar(reference_ids))) {
+    stop("Spatial pool IDs must be complete and non-empty.", call. = FALSE)
+  }
+  if (anyDuplicated(query_ids) || anyDuplicated(reference_ids)) stop("Duplicate IDs within a spatial pool are not allowed.", call. = FALSE)
+  overlap <- intersect(query_ids, reference_ids)
+  if (length(overlap)) stop("Spatial query/reference cell-ID overlap detected: ", paste(head(overlap, 10L), collapse = ", "), call. = FALSE)
+  duplicate_coordinates <- 0L
+  if (xor(is.null(query_coordinates), is.null(reference_coordinates))) {
+    stop("Supply both coordinate tables or neither.", call. = FALSE)
+  }
+  if (!is.null(query_coordinates)) {
+    validate_coordinates <- function(x, ids, label) {
+      required <- c("cell_id", "x", "y")
+      missing <- setdiff(required, colnames(x))
+      if (length(missing)) stop(label, " coordinates are missing: ", paste(missing, collapse = ", "), call. = FALSE)
+      if (anyDuplicated(x$cell_id)) stop(label, " coordinates contain duplicate cell IDs.", call. = FALSE)
+      index <- match(ids, as.character(x$cell_id))
+      if (anyNA(index)) stop(label, " coordinates do not cover every pool cell.", call. = FALSE)
+      out <- x[index, required, drop = FALSE]
+      if (any(!is.finite(out$x)) || any(!is.finite(out$y))) stop(label, " coordinates must be finite.", call. = FALSE)
+      out
+    }
+    q <- validate_coordinates(query_coordinates, query_ids, "Query")
+    r <- validate_coordinates(reference_coordinates, reference_ids, "Reference")
+    q_key <- paste(format(q$x, digits = 17), format(q$y, digits = 17), sep = "\r")
+    r_key <- paste(format(r$x, digits = 17), format(r$y, digits = 17), sep = "\r")
+    duplicate_coordinates <- sum(q_key %in% r_key)
+    if (duplicate_coordinates) stop("Cross-pool duplicate coordinate pairs would create zero-distance matches.", call. = FALSE)
+  }
+  list(
+    n_query = length(query_ids),
+    n_reference = length(reference_ids),
+    n_overlap_ids = length(overlap),
+    n_duplicate_coordinate_pairs = as.integer(duplicate_coordinates)
+  )
+}
+
+#' Enforce the positive-distance gate after nearest-neighbour matching
+#'
+#' @param distances Numeric vector or matrix of spatial distances.
+#' @param zero_tolerance Values less than or equal to this tolerance are unsafe.
+#'
+#' @return A one-row list containing count, minimum, median, maximum, and the
+#'   number of zero/negative distances. Stops if an unsafe distance is present.
+validate_neighbour_distances <- function(distances, zero_tolerance = 0) {
+  distances <- as.numeric(distances)
+  if (!length(distances) || any(!is.finite(distances))) stop("Neighbour distances must be non-empty and finite.", call. = FALSE)
+  unsafe <- distances <= zero_tolerance
+  if (any(unsafe)) stop("Zero or negative nearest-neighbour distance detected; spatial result is invalid.", call. = FALSE)
+  list(
+    n_distances = length(distances),
+    minimum_distance = min(distances),
+    median_distance = stats::median(distances),
+    maximum_distance = max(distances),
+    n_zero_or_negative = sum(unsafe)
+  )
+}
+
+#' Calculate the adjusted Rand index for two cluster assignments
+#'
+#' @param labels_a,labels_b Equal-length complete cluster-label vectors.
+#'
+#' @return A numeric scalar in the adjusted-Rand scale. Identical partitions,
+#'   including label permutations, return exactly 1.
+adjusted_rand_index <- function(labels_a, labels_b) {
+  if (length(labels_a) != length(labels_b) || !length(labels_a)) stop("Cluster label vectors must have equal positive length.", call. = FALSE)
+  if (anyNA(labels_a) || anyNA(labels_b)) stop("Cluster labels cannot contain missing values.", call. = FALSE)
+  tab <- table(as.character(labels_a), as.character(labels_b))
+  choose2 <- function(x) x * (x - 1) / 2
+  sum_cells <- sum(choose2(tab))
+  sum_rows <- sum(choose2(rowSums(tab)))
+  sum_cols <- sum(choose2(colSums(tab)))
+  total <- choose2(length(labels_a))
+  expected <- if (total == 0) 0 else sum_rows * sum_cols / total
+  maximum <- (sum_rows + sum_cols) / 2
+  denominator <- maximum - expected
+  if (denominator == 0) return(if (identical(as.integer(tab > 0), as.integer(diag(nrow(tab)) > 0))) 1 else 0)
+  as.numeric((sum_cells - expected) / denominator)
+}
+
+#' Summarize pairwise stability across repeated cluster assignments
+#'
+#' @param cluster_assignments Data frame or matrix with cells in rows and one
+#'   clustering run, seed, or resolution in each column.
+#'
+#' @return A list with a pairwise adjusted-Rand table and one-row summary of
+#'   comparison count, minimum, median, mean, and maximum ARI.
+summarise_cluster_stability <- function(cluster_assignments) {
+  x <- as.data.frame(cluster_assignments, stringsAsFactors = FALSE)
+  if (ncol(x) < 2L || nrow(x) < 2L) stop("At least two cells and two clustering runs are required.", call. = FALSE)
+  if (anyNA(x)) stop("Cluster assignments cannot contain missing values.", call. = FALSE)
+  pairs <- utils::combn(colnames(x), 2L, simplify = FALSE)
+  pairwise <- do.call(rbind, lapply(pairs, function(pair) {
+    data.frame(run_a = pair[[1L]], run_b = pair[[2L]], ari = adjusted_rand_index(x[[pair[[1L]]]], x[[pair[[2L]]]]), stringsAsFactors = FALSE)
+  }))
+  rownames(pairwise) <- NULL
+  list(
+    pairwise = pairwise,
+    summary = data.frame(
+      n_comparisons = nrow(pairwise),
+      minimum_ari = min(pairwise$ari),
+      median_ari = stats::median(pairwise$ari),
+      mean_ari = mean(pairwise$ari),
+      maximum_ari = max(pairwise$ari),
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+#' Calculate tidy PC-to-QC Spearman correlations
+#'
+#' @param pca_embeddings Numeric cell-by-PC matrix.
+#' @param cell_metadata Data frame in exactly the same cell order.
+#' @param qc_metrics Candidate metadata columns to test.
+#'
+#' @return A data frame with one row per PC/available-QC-metric pair and fields
+#'   `pc`, `qc_metric`, `rho`, `abs_rho`, and `technical_review_flag`.
+summarise_pca_qc_correlations <- function(
+    pca_embeddings,
+    cell_metadata,
+    qc_metrics = c("nCount_Xenium", "nFeature_Xenium", "cell_area"),
+    review_abs_rho = 0.5
+) {
+  embeddings <- as.matrix(pca_embeddings)
+  if (!is.numeric(embeddings) || nrow(embeddings) != nrow(cell_metadata)) stop("PCA embeddings and metadata must have the same cell rows.", call. = FALSE)
+  if (is.null(colnames(embeddings))) colnames(embeddings) <- paste0("PC_", seq_len(ncol(embeddings)))
+  metrics <- intersect(qc_metrics, colnames(cell_metadata))
+  if (!length(metrics)) stop("No requested QC metrics are present.", call. = FALSE)
+  rows <- lapply(colnames(embeddings), function(pc) lapply(metrics, function(metric) {
+    rho <- suppressWarnings(stats::cor(embeddings[, pc], cell_metadata[[metric]], method = "spearman", use = "pairwise.complete.obs"))
+    data.frame(pc = pc, qc_metric = metric, rho = as.numeric(rho), abs_rho = abs(as.numeric(rho)), technical_review_flag = is.finite(rho) && abs(rho) >= review_abs_rho, stringsAsFactors = FALSE)
+  }))
+  do.call(rbind, unlist(rows, recursive = FALSE))
+}
+
+#' Derive a spatial lymph-node candidate domain from local lymphoid enrichment
+#'
+#' @param cell_metadata Data frame containing unique IDs, coordinates, and a
+#'   conservative cell-type label for QC-passed cells.
+#' @param lymphoid_labels Labels considered direct lymphoid/DC evidence.
+#' @param cell_id_col,x_col,y_col,label_col Input column names.
+#' @param k Number of neighbouring cells used for local enrichment.
+#' @param lymphoid_fraction_threshold Minimum local fraction defining core cells.
+#' @param expansion_radius Maximum coordinate-space distance used to include
+#'   stromal/vascular cells surrounding an LN core.
+#' @param min_core_cells Minimum enriched core size required to call a candidate.
+#'
+#' @return A list with status, parameters, a cell-level diagnostic table, and
+#'   counts. `LN_NOT_DETECTED` returns an all-FALSE domain instead of forcing LN.
+derive_lymph_node_domain <- function(
+    cell_metadata,
+    lymphoid_labels,
+    cell_id_col = "cell_id",
+    x_col = "x",
+    y_col = "y",
+    label_col = "cell_type",
+    k = 30L,
+    lymphoid_fraction_threshold = 0.5,
+    expansion_radius = 80,
+    min_core_cells = 100L
+) {
+  require_package("FNN")
+  required <- c(cell_id_col, x_col, y_col, label_col)
+  missing <- setdiff(required, colnames(cell_metadata))
+  if (length(missing)) stop("Missing lymph-node-domain fields: ", paste(missing, collapse = ", "), call. = FALSE)
+  ids <- as.character(cell_metadata[[cell_id_col]])
+  if (anyDuplicated(ids) || anyNA(ids)) stop("Lymph-node-domain cell IDs must be unique and complete.", call. = FALSE)
+  coordinates <- as.matrix(cell_metadata[c(x_col, y_col)])
+  storage.mode(coordinates) <- "double"
+  if (any(!is.finite(coordinates))) stop("Lymph-node-domain coordinates must be finite.", call. = FALSE)
+  n <- nrow(coordinates)
+  k <- as.integer(k)
+  if (n < 3L || k < 1L || k >= n) stop("k must be between 1 and the number of cells minus one.", call. = FALSE)
+  if (!is.finite(lymphoid_fraction_threshold) || lymphoid_fraction_threshold < 0 || lymphoid_fraction_threshold > 1) stop("lymphoid_fraction_threshold must be between zero and one.", call. = FALSE)
+  if (!is.finite(expansion_radius) || expansion_radius < 0) stop("expansion_radius must be non-negative.", call. = FALSE)
+  neighbour_index <- FNN::get.knn(coordinates, k = k)$nn.index
+  lymphoid <- as.character(cell_metadata[[label_col]]) %in% lymphoid_labels
+  local_fraction <- rowMeans(matrix(lymphoid[neighbour_index], nrow = n, ncol = k))
+  core <- local_fraction >= lymphoid_fraction_threshold
+  minimum <- as.integer(min_core_cells)
+  status <- if (sum(core) >= minimum) "LN_CANDIDATE" else "LN_NOT_DETECTED"
+  distance_to_core <- rep(Inf, n)
+  include <- rep(FALSE, n)
+  if (status == "LN_CANDIDATE") {
+    nearest <- FNN::get.knnx(coordinates[core, , drop = FALSE], coordinates, k = 1L)
+    distance_to_core <- as.numeric(nearest$nn.dist[, 1L])
+    include <- distance_to_core <= expansion_radius
+  }
+  cell_table <- data.frame(
+    cell_id = ids,
+    direct_lymphoid_evidence = lymphoid,
+    local_lymphoid_fraction = local_fraction,
+    lymph_node_core = core,
+    distance_to_lymph_node_core = distance_to_core,
+    lymph_node_include = include,
+    stringsAsFactors = FALSE
+  )
+  list(
+    status = status,
+    parameters = data.frame(k = k, lymphoid_fraction_threshold = lymphoid_fraction_threshold, expansion_radius = expansion_radius, min_core_cells = minimum),
+    cell_table = cell_table,
+    counts = data.frame(n_cells = n, n_direct_lymphoid = sum(lymphoid), n_core = sum(core), n_domain = sum(include), stringsAsFactors = FALSE)
+  )
+}
+
+#' Quantify lymph-node boundary agreement across parameter settings
+#'
+#' @param masks Named list of equal-length complete logical inclusion vectors.
+#'
+#' @return A list with pairwise Jaccard overlap and a one-row summary. Empty-set
+#'   agreement is defined as one only when both compared masks are empty.
+summarise_ln_boundary_sensitivity <- function(masks) {
+  if (!is.list(masks) || length(masks) < 2L || is.null(names(masks)) || any(!nzchar(names(masks)))) stop("Supply at least two named LN masks.", call. = FALSE)
+  lengths <- vapply(masks, length, integer(1))
+  if (length(unique(lengths)) != 1L || any(vapply(masks, function(x) !is.logical(x) || anyNA(x), logical(1)))) stop("LN masks must be complete logical vectors of equal length.", call. = FALSE)
+  pairs <- utils::combn(names(masks), 2L, simplify = FALSE)
+  pairwise <- do.call(rbind, lapply(pairs, function(pair) {
+    a <- masks[[pair[[1L]]]]
+    b <- masks[[pair[[2L]]]]
+    union_n <- sum(a | b)
+    jaccard <- if (union_n == 0L) 1 else sum(a & b) / union_n
+    data.frame(mask_a = pair[[1L]], mask_b = pair[[2L]], jaccard = jaccard, n_a = sum(a), n_b = sum(b), stringsAsFactors = FALSE)
+  }))
+  rownames(pairwise) <- NULL
+  list(
+    pairwise = pairwise,
+    summary = data.frame(n_comparisons = nrow(pairwise), minimum_jaccard = min(pairwise$jaccard), median_jaccard = stats::median(pairwise$jaccard), mean_jaccard = mean(pairwise$jaccard), stringsAsFactors = FALSE)
+  )
+}
+
+#' Save and reload-validate a Seurat checkpoint
+#'
+#' @param object Seurat object to checkpoint without modifying it.
+#' @param path Destination `.rds` path.
+#' @param project_root Approved project root that must contain `path`.
+#' @param stage Stable stage label written to the checkpoint manifest.
+#' @param compress Compression argument passed to `saveRDS`; `FALSE` is faster
+#'   for large HPC checkpoints and is the default.
+#'
+#' @return A one-row data frame containing stage, absolute path, byte size, MD5,
+#'   cell/feature counts, timestamp, and `PASS` validation status. Validation
+#'   reloads the object and requires identical class, dimensions, feature IDs,
+#'   cell IDs, assay names, and reduction names.
+write_validated_seurat_checkpoint <- function(
+    object,
+    path,
+    project_root,
+    stage,
+    compress = FALSE
+) {
+  if (!inherits(object, "Seurat")) stop("object must be a Seurat object.", call. = FALSE)
+  if (length(path) != 1L || is.na(path) || !nzchar(path)) stop("path must be one non-empty value.", call. = FALSE)
+  if (length(stage) != 1L || is.na(stage) || !nzchar(stage)) stop("stage must be one non-empty value.", call. = FALSE)
+  assert_path_within(project_root, path)
+  parent <- dirname(path)
+  assert_path_within(project_root, parent)
+  dir.create(parent, recursive = TRUE, showWarnings = FALSE)
+  saveRDS(object, path, compress = compress)
+  if (!file.exists(path)) stop("Checkpoint was not created: ", path, call. = FALSE)
+  restored <- readRDS(path)
+  checks <- c(
+    inherits(restored, "Seurat"),
+    identical(class(restored), class(object)),
+    identical(dim(restored), dim(object)),
+    identical(rownames(restored), rownames(object)),
+    identical(colnames(restored), colnames(object)),
+    identical(names(restored@assays), names(object@assays)),
+    identical(names(restored@reductions), names(object@reductions))
+  )
+  if (!all(checks)) stop("Reloaded checkpoint failed Seurat identity validation: ", path, call. = FALSE)
+  info <- file.info(path)
+  data.frame(
+    stage = stage,
+    path = normalizePath(path, winslash = "/", mustWork = TRUE),
+    bytes = as.numeric(info$size),
+    md5 = unname(tools::md5sum(path)),
+    n_cells = ncol(object),
+    n_features = nrow(object),
+    validation_status = "PASS",
+    timestamp_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Import a Xenium region as a spatial Seurat object
+#'
+#' @param xenium_dir Existing 10x Xenium output directory containing the
+#'   cell-feature matrix, cell centroids, and requested segmentation files.
+#' @param genes Optional character vector of panel genes to retain.
+#' @param cells Optional character vector of cell IDs to retain.
+#' @param project Optional Seurat project name; defaults to the directory name.
+#' @param assay Name assigned to the count assay.
+#' @param fov Name assigned to the Xenium field of view.
+#' @param include_cell_segmentation Whether to attach cell polygons when present.
+#' @param include_nucleus_segmentation Whether to attach nucleus polygons when
+#'   present.
+#'
+#' @return A Seurat object containing sparse Xenium counts, cell metadata,
+#'   centroid coordinates, a spatial FOV, and each requested available boundary.
 create_spatial_seurat_from_xenium <- function(
     xenium_dir,
     genes = NULL,
@@ -8430,6 +8855,17 @@ create_spatial_seurat_from_xenium <- function(
 }
 
 
+#' Attach externally generated QC masks to a Seurat object by cell ID
+#'
+#' @param object Seurat object whose column names are Xenium cell IDs.
+#' @param masks Data frame containing one unique cell-ID column and mask fields.
+#' @param cell_id_col Name of the mask-table cell-ID column.
+#' @param cols Optional mask columns to attach; `NULL` uses every non-ID column.
+#' @param overwrite Whether existing metadata columns may be replaced.
+#' @param require_complete_match Whether every Seurat cell must occur in `masks`.
+#'
+#' @return The input Seurat object with requested mask fields aligned and added
+#'   to `object@meta.data` by matched cell ID, never by input row position.
 add_masks_to_seurat <- function(
     object,
     masks,
@@ -8654,6 +9090,17 @@ add_masks_to_seurat <- function(
   return(object)
 }
 
+#' Transfer Wang-reference main and subtype labels to a Xenium query
+#'
+#' @param reference Seurat reference object with an RNA assay and Wang labels.
+#' @param query Seurat Xenium query object.
+#' @param annotation_genes Character vector of candidate shared features.
+#' @param main_col Reference metadata column containing main cell types.
+#' @param subtype_col Reference metadata column containing harmonized subtypes.
+#' @param prefix Prefix used for transferred prediction-score columns.
+#'
+#' @return A list with `main` and `subtype` prediction data frames, the Seurat
+#'   anchor set, and the exact shared feature vector used for transfer.
 run_wang_transfer <- function(
   reference,
   query,
@@ -8751,6 +9198,19 @@ run_wang_transfer <- function(
   )
 }
 
+#' Plot Eosinophil evidence-call composition within annotated subtypes
+#'
+#' @param object Seurat object containing subtype and Eosinophil-call metadata.
+#' @param subtype_col Metadata column holding final or provisional subtypes.
+#' @param eos_call_col Metadata column holding ordered Eosinophil evidence calls.
+#' @param eos_first Subtype displayed first in the plotted ordering.
+#' @param title Plot title.
+#' @param base_size Base ggplot text size.
+#' @param show_n Whether subtype labels include cell counts.
+#' @param return_data Whether to return plotting data with the plot.
+#'
+#' @return A ggplot object, or when `return_data = TRUE`, a list containing the
+#'   plot, its summarized plotting data, subtype order, and displayed labels.
 plot_eos_call_by_subtype <- function(
     object,
     subtype_col = "Final_CellType_subtype",
@@ -9092,6 +9552,30 @@ plot_eos_call_by_subtype <- function(
   p
 }
 
+#' Draw a continuously ordered Eosinophil-state expression heatmap
+#'
+#' @param eos_obj Seurat object restricted to the Eosinophil analysis cohort.
+#' @param eos_gene_sets Data frame with `gene` and `gene_set` columns.
+#' @param state_col Metadata column containing descriptive state categories.
+#' @param balance_col Numeric continuous state-balance metadata column.
+#' @param assay Seurat assay containing normalized expression.
+#' @param layer Assay layer used for the heatmap.
+#' @param remove_short_ribosomal Whether to remove ribosomal genes from the
+#'   short-lived signature before plotting.
+#' @param z_cap Absolute cap applied to row-wise expression z-scores.
+#' @param cluster_rows Whether genes are clustered within signature blocks.
+#' @param clustering_distance_rows ComplexHeatmap row-distance setting.
+#' @param clustering_method_rows Hierarchical clustering method for rows.
+#' @param column_title Heatmap title.
+#' @param show_row_names Whether gene names are drawn.
+#' @param row_name_size Gene-label font size.
+#' @param draw_heatmap Whether to draw immediately.
+#' @param return_data Whether to return matrices, orders, and annotations.
+#'
+#' @return If `return_data = TRUE`, a list containing the heatmap, optional
+#'   drawn object, row-z-scored matrix, cell order, gene groups, and annotation
+#'   vectors. Otherwise returns the heatmap object, invisibly returning the
+#'   drawn object when `draw_heatmap = TRUE`.
 plot_eos_state_heatmap <- function(
     eos_obj,
     eos_gene_sets,
