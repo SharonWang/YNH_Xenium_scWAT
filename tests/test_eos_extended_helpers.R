@@ -64,6 +64,27 @@ stopifnot(
 )
 stopifnot(identical(palette, cell_macaron_palette(labels)))
 
+overlay_fixture <- data.frame(
+  x = 1:5, y = 5:1,
+  group = c("Other", "Short-lived-like", "Other", "Long-lived-like", "Other"),
+  stringsAsFactors = FALSE
+)
+overlay_plot <- plot_target_overlay(
+  overlay_fixture, x_col = "x", y_col = "y", group_col = "group",
+  target_labels = c("Short-lived-like", "Long-lived-like"),
+  palette = c("Other" = "#D9D9D9", "Short-lived-like" = "#3979A8", "Long-lived-like" = "#B84E4B"),
+  background_size = 0.5, target_size = 2
+)
+stopifnot(
+  inherits(overlay_plot, "ggplot"),
+  length(overlay_plot$layers) == 2L,
+  nrow(overlay_plot$layers[[1L]]$data) == 3L,
+  nrow(overlay_plot$layers[[2L]]$data) == 2L,
+  overlay_plot$layers[[1L]]$aes_params$size == 0.5,
+  overlay_plot$layers[[2L]]$aes_params$size == 2,
+  is.null(overlay_plot$labels$subtitle)
+)
+
 markers <- data.frame(
   Gene_Symbol = c("Cd3d", "Pck1", "Siglecf", "Kdr"),
   CellType_subtype = c("T", "Adipocyte", "Eosinophil", "Capillary_EC"),
@@ -87,6 +108,20 @@ plot_files <- save_cell_plot(
 stopifnot(
   setequal(names(plot_files), c("png", "pdf")),
   all(file.exists(unname(plot_files)))
+)
+
+# Break caught: write.table() fails on list/matrix-valued columns returned by
+# optional packages, preventing the final audit-output cell from completing.
+nested_table <- data.frame(id = c("a", "b"), stringsAsFactors = FALSE)
+nested_table$matrix_metric <- I(matrix(1:4, nrow = 2, dimnames = list(NULL, c("x", "y"))))
+nested_table$list_metric <- I(list(c("u", "v"), "w"))
+nested_path <- file.path(Sys.getenv("TMPDIR"), "nested_table.tsv")
+write_tsv(nested_table, nested_path, Sys.getenv("TMPDIR"))
+nested_roundtrip <- read.delim(nested_path, check.names = FALSE, stringsAsFactors = FALSE)
+stopifnot(
+  nrow(nested_roundtrip) == 2L,
+  all(c("matrix_metric.x", "matrix_metric.y", "list_metric") %in% colnames(nested_roundtrip)),
+  nested_roundtrip$list_metric[[1L]] == "u | v"
 )
 
 # Break caught: spatial pools are joined by row position, Eosinophils leak into
@@ -192,8 +227,26 @@ stopifnot(
   cellchat_inputs$status == "PASS",
   ncol(cellchat_inputs$data) == 44L,
   identical(rownames(cellchat_inputs$meta), colnames(cellchat_inputs$data)),
-  cellchat_inputs$scale_factors$spot == 1,
-  isTRUE(all.equal(cellchat_inputs$scale_factors$spot.diameter, 2 * sqrt(100 / pi)))
+  cellchat_inputs$scale_factors$spot == 2 * sqrt(100 / pi),
+  isTRUE(all.equal(cellchat_inputs$scale_factors$spot.diameter, 2 * sqrt(100 / pi))),
+  cellchat_inputs$spatial_factors$ratio == 1,
+  isTRUE(all.equal(cellchat_inputs$spatial_factors$tol, sqrt(100 / pi))),
+  identical(as.character(cellchat_inputs$meta$samples), rep("sample1", nrow(cellchat_inputs$meta)))
+)
+
+old_create <- function(object, meta, group.by, datatype, coordinates, scale.factors) {
+  list(api = "scale.factors", scale = scale.factors, coordinates = coordinates)
+}
+new_create <- function(object, meta, group.by, datatype, coordinates, spatial.factors) {
+  list(api = "spatial.factors", scale = spatial.factors, coordinates = coordinates)
+}
+old_created <- create_cellchat_object_compatible(cellchat_inputs, create_fun = old_create)
+new_created <- create_cellchat_object_compatible(cellchat_inputs, create_fun = new_create)
+stopifnot(
+  old_created$api == "scale.factors",
+  new_created$api == "spatial.factors",
+  old_created$scale$spot == 2 * sqrt(100 / pi),
+  new_created$scale$ratio == 1
 )
 
 lr_fixture <- data.frame(
@@ -204,14 +257,17 @@ lr_fixture <- data.frame(
   ligand = c("A", "C", "E"),
   receptor = c("B", "D", "F"),
   prob = c(0.4, 0.2, 0.3),
-  pval = c(0.001, 0.20, 0.01),
+  pval = c(0.001, 0.002, 0.01),
   stringsAsFactors = FALSE
 )
-filtered_lr <- filter_eos_cellchat_interactions(lr_fixture)
+filtered_lr <- filter_eos_cellchat_interactions(
+  lr_fixture, top_short = "ASC", top_long = "Macrophage"
+)
 stopifnot(
   nrow(filtered_lr$significant) == 2L,
-  setequal(filtered_lr$significant$direction, c("EOS_TO_NEIGHBOUR", "NEIGHBOUR_TO_EOS")),
-  all(filtered_lr$significant$p_adjust_bh < 0.10)
+  all(filtered_lr$significant$direction == "EOS_TO_NEIGHBOUR"),
+  all(filtered_lr$significant$p_adjust_bh < 0.10),
+  all(filtered_lr$significant$matches_state_top_neighbour)
 )
 
 cellchat_skip <- run_eos_spatial_cellchat(list(status = "SKIPPED_TEST_INPUT"))

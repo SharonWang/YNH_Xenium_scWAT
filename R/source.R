@@ -208,6 +208,56 @@ validate_section_integrity <- function(region_dir, region_id) {
   out
 }
 
+#' Flatten optional-package tables to a rectangular TSV-safe data frame
+#'
+#' Some R packages return nominal data frames containing matrix or list-valued
+#' columns. Base `write.table()` cannot reliably construct column names for
+#' these objects and can fail with a dimnames/array-extent error. Matrix/data
+#' frame columns are expanded with their parent column name; list cells are
+#' serialized to a deterministic ` | `-separated character value.
+#'
+#' @param x Object coercible to a data frame.
+#'
+#' @return A rectangular data frame containing only atomic columns and the same
+#'   number and order of rows as `x`.
+flatten_tsv_table <- function(x) {
+  table <- if (is.data.frame(x)) x else as.data.frame(x, stringsAsFactors = FALSE)
+  if (!ncol(table)) return(table)
+  n_rows <- nrow(table)
+  pieces <- lapply(seq_along(table), function(index) {
+    column <- table[[index]]
+    parent <- names(table)[[index]]
+    if (is.matrix(column) || is.data.frame(column)) {
+      nested_value <- if (is.matrix(column)) unclass(column) else column
+      expanded <- as.data.frame(nested_value, stringsAsFactors = FALSE, check.names = FALSE)
+      if (nrow(expanded) != n_rows) {
+        stop("Nested TSV column has incompatible row count: ", parent, call. = FALSE)
+      }
+      child_names <- names(expanded)
+      if (is.null(child_names) || any(!nzchar(child_names))) {
+        child_names <- paste0("V", seq_len(ncol(expanded)))
+      }
+      names(expanded) <- paste(parent, child_names, sep = ".")
+      return(expanded)
+    }
+    if (is.list(column)) {
+      serialize_cell <- function(value) {
+        if (is.null(value) || !length(value)) return(NA_character_)
+        if (is.atomic(value)) return(paste(as.character(value), collapse = " | "))
+        paste(capture.output(dput(value)), collapse = " ")
+      }
+      column <- vapply(column, serialize_cell, character(1))
+    }
+    output <- data.frame(column, stringsAsFactors = FALSE, check.names = FALSE)
+    names(output) <- parent
+    output
+  })
+  output <- do.call(cbind, pieces)
+  names(output) <- make.unique(names(output), sep = ".")
+  rownames(output) <- rownames(table)
+  output
+}
+
 #' Write tsv.
 #'
 #' @param x Required `x` input; validated before computation.
@@ -217,7 +267,13 @@ validate_section_integrity <- function(region_dir, region_id) {
 write_tsv <- function(x, path, project_root) {
   assert_path_within(project_root, path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  utils::write.table(x, path, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
+  table <- flatten_tsv_table(x)
+  tryCatch(
+    utils::write.table(table, path, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA"),
+    error = function(error) {
+      stop("Failed to write TSV '", path, "': ", conditionMessage(error), call. = FALSE)
+    }
+  )
   invisible(path)
 }
 
@@ -750,6 +806,72 @@ style_cell_plot <- function(plot, base_size = 12, legend_position = "right") {
     )
 }
 
+#' Plot focal categories above smaller contextual points
+#'
+#' @param data Data frame containing coordinates and a grouping field.
+#' @param x_col,y_col Numeric coordinate column names.
+#' @param group_col Categorical grouping column name.
+#' @param target_labels Groups to draw in the final, larger point layer.
+#' @param palette Named colours covering all observed groups.
+#' @param background_size,target_size Point sizes for context and focal layers.
+#' @param background_alpha,target_alpha Point opacity for context and focal layers.
+#' @param fixed_coordinates Whether to use an equal-aspect coordinate system.
+#' @param title Optional title. Subtitles are deliberately unsupported.
+#' @param legend_title Optional legend title.
+#'
+#' @return A cell-style ggplot with contextual points in layer one and target
+#'   points in layer two, guaranteeing that focal cells are drawn on top.
+plot_target_overlay <- function(
+    data,
+    x_col,
+    y_col,
+    group_col,
+    target_labels,
+    palette = NULL,
+    background_size = 0.35,
+    target_size = 1.1,
+    background_alpha = 0.45,
+    target_alpha = 0.95,
+    fixed_coordinates = FALSE,
+    title = NULL,
+    legend_title = NULL
+) {
+  require_package("ggplot2")
+  plot_data <- as.data.frame(data, stringsAsFactors = FALSE)
+  required <- c(x_col, y_col, group_col)
+  missing <- setdiff(required, names(plot_data))
+  if (length(missing)) stop("Overlay plot data missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  if (any(!is.finite(as.numeric(plot_data[[x_col]]))) || any(!is.finite(as.numeric(plot_data[[y_col]])))) {
+    stop("Overlay plot coordinates must be finite.", call. = FALSE)
+  }
+  groups <- unique(as.character(plot_data[[group_col]]))
+  groups <- groups[!is.na(groups) & nzchar(groups)]
+  targets <- intersect(as.character(target_labels), groups)
+  if (is.null(palette)) palette <- cell_macaron_palette(groups)
+  if (is.null(names(palette)) || !all(groups %in% names(palette))) {
+    stop("palette must be named and cover every observed group.", call. = FALSE)
+  }
+  plot_data[[group_col]] <- factor(as.character(plot_data[[group_col]]), levels = groups)
+  is_target <- as.character(plot_data[[group_col]]) %in% targets
+  background <- plot_data[!is_target, , drop = FALSE]
+  focal <- plot_data[is_target, , drop = FALSE]
+  plot <- ggplot2::ggplot() +
+    ggplot2::geom_point(
+      data = background,
+      ggplot2::aes(x = .data[[x_col]], y = .data[[y_col]], colour = .data[[group_col]]),
+      size = background_size, alpha = background_alpha
+    ) +
+    ggplot2::geom_point(
+      data = focal,
+      ggplot2::aes(x = .data[[x_col]], y = .data[[y_col]], colour = .data[[group_col]]),
+      size = target_size, alpha = target_alpha
+    ) +
+    ggplot2::scale_colour_manual(values = palette[groups], drop = FALSE) +
+    ggplot2::labs(title = title, x = NULL, y = NULL, colour = legend_title)
+  if (isTRUE(fixed_coordinates)) plot <- plot + ggplot2::coord_fixed()
+  style_cell_plot(plot)
+}
+
 #' Save a cell-style plot as matched PNG and PDF artifacts
 #'
 #' @param plot A ggplot or patchwork-compatible plot object.
@@ -917,7 +1039,13 @@ write_gz_tsv <- function(x, path, project_root) {
   assert_path_within(project_root, path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   con <- gzfile(path, "wt"); on.exit(close(con), add = TRUE)
-  utils::write.table(x, con, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
+  table <- flatten_tsv_table(x)
+  tryCatch(
+    utils::write.table(table, con, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA"),
+    error = function(error) {
+      stop("Failed to write gzipped TSV '", path, "': ", conditionMessage(error), call. = FALSE)
+    }
+  )
   invisible(path)
 }
 
@@ -8456,6 +8584,7 @@ prepare_eos_cellchat_inputs <- function(
   equivalent_diameter <- 2 * sqrt(cell_area[valid_area] / pi)
   meta <- data.frame(
     cellchat_group = factor(group, levels = c("Eos_short_enriched", "Eos_long_enriched", top_types)),
+    samples = factor(rep("sample1", length(selected))),
     original_cell_type = as.character(metadata[selected, cell_type_col]),
     EosState_balance = as.numeric(metadata[selected, state_col]),
     row.names = selected,
@@ -8468,14 +8597,63 @@ prepare_eos_cellchat_inputs <- function(
     meta = meta,
     coordinates = as.matrix(aligned_coordinates),
     scale_factors = list(
-      spot = 1,
+      # Xenium centroid coordinates are already in micrometres. In the legacy
+      # CellChat API, spot.diameter / spot is the coordinate-to-micron ratio,
+      # so equal values encode ratio = 1.
+      spot = stats::median(equivalent_diameter),
       spot.diameter = stats::median(equivalent_diameter)
+    ),
+    spatial_factors = data.frame(
+      ratio = 1,
+      tol = stats::median(equivalent_diameter) / 2,
+      row.names = "sample1",
+      stringsAsFactors = FALSE
     ),
     group_counts = as.data.frame(group_counts, stringsAsFactors = FALSE),
     state_groups = state_groups,
     top_short = intersect(top_types, as.character(top_short)),
     top_long = intersect(top_types, as.character(top_long))
   )
+}
+
+#' Create a spatial CellChat object across legacy and current APIs
+#'
+#' CellChat up to the archived API accepts `scale.factors`; current jinworks
+#' CellChat accepts `spatial.factors`. This adapter inspects the callable's
+#' formal arguments and supplies exactly one representation.
+#'
+#' @param inputs Passed result from `prepare_eos_cellchat_inputs()`.
+#' @param create_fun CellChat object-construction function. Defaults to the
+#'   installed package export and can be injected for compatibility tests.
+#'
+#' @return The object returned by `create_fun`.
+create_cellchat_object_compatible <- function(inputs, create_fun = NULL) {
+  if (!identical(inputs$status, "PASS")) {
+    stop("CellChat inputs must pass before object creation.", call. = FALSE)
+  }
+  if (is.null(create_fun)) {
+    require_package("CellChat")
+    create_fun <- getExportedValue("CellChat", "createCellChat")
+  }
+  formal_names <- names(formals(create_fun))
+  arguments <- list(
+    object = inputs$data,
+    meta = inputs$meta,
+    group.by = "cellchat_group",
+    datatype = "spatial",
+    coordinates = inputs$coordinates
+  )
+  if ("spatial.factors" %in% formal_names) {
+    arguments$spatial.factors <- inputs$spatial_factors
+  } else if ("scale.factors" %in% formal_names) {
+    arguments$scale.factors <- inputs$scale_factors
+  } else {
+    stop(
+      "Unsupported CellChat createCellChat() API: neither spatial.factors nor scale.factors is available.",
+      call. = FALSE
+    )
+  }
+  do.call(create_fun, arguments)
 }
 
 #' Run the optional spatial CellChat pipeline with typed failure status
@@ -8514,14 +8692,7 @@ run_eos_spatial_cellchat <- function(
   stage <- "CREATE_OBJECT"
   result <- tryCatch({
     set.seed(as.integer(seed))
-    cellchat <- CellChat::createCellChat(
-      object = inputs$data,
-      meta = inputs$meta,
-      group.by = "cellchat_group",
-      datatype = "spatial",
-      coordinates = inputs$coordinates,
-      scale.factors = inputs$scale_factors
-    )
+    cellchat <- create_cellchat_object_compatible(inputs)
     stage <- "SET_DATABASE"
     cellchat@DB <- database %||% getExportedValue("CellChat", "CellChatDB.mouse")
     stage <- "SUBSET_DATA"
@@ -8569,13 +8740,18 @@ run_eos_spatial_cellchat <- function(
 #' @param table Communication table returned by CellChat.
 #' @param raw_p_max Maximum raw CellChat permutation p-value.
 #' @param adjusted_p_max Maximum BH-adjusted p-value across reported rows.
+#' @param top_short,top_long Prespecified KNN-selected neighbour types for the
+#'   short-enriched and long-enriched Eosinophil groups. When supplied, each
+#'   state is restricted to its matching neighbour set.
 #'
 #' @return A list containing the complete annotated table and the significant
-#'   Eosinophil-to-neighbour or neighbour-to-Eosinophil subset.
+#'   outgoing Eosinophil-to-neighbour subset.
 filter_eos_cellchat_interactions <- function(
     table,
     raw_p_max = 0.05,
-    adjusted_p_max = 0.10
+    adjusted_p_max = 0.10,
+    top_short = NULL,
+    top_long = NULL
 ) {
   communication <- as.data.frame(table, stringsAsFactors = FALSE)
   required <- c("source", "target", "interaction_name", "prob", "pval")
@@ -8584,6 +8760,9 @@ filter_eos_cellchat_interactions <- function(
   if (!nrow(communication)) {
     communication$p_adjust_bh <- numeric()
     communication$direction <- character()
+    communication$eos_state_group <- character()
+    communication$neighbour_cell_type <- character()
+    communication$matches_state_top_neighbour <- logical()
     communication$analysis_scope <- character()
     return(list(all = communication, significant = communication))
   }
@@ -8594,11 +8773,28 @@ filter_eos_cellchat_interactions <- function(
     source_eos & !target_eos, "EOS_TO_NEIGHBOUR",
     ifelse(!source_eos & target_eos, "NEIGHBOUR_TO_EOS", "OUTSIDE_REQUESTED_DIRECTION")
   )
+  communication$eos_state_group <- ifelse(
+    source_eos, as.character(communication$source),
+    ifelse(target_eos, as.character(communication$target), NA_character_)
+  )
+  communication$neighbour_cell_type <- ifelse(
+    source_eos & !target_eos, as.character(communication$target),
+    ifelse(!source_eos & target_eos, as.character(communication$source), NA_character_)
+  )
+  short_allowed <- if (is.null(top_short)) rep(TRUE, nrow(communication)) else
+    communication$neighbour_cell_type %in% as.character(top_short)
+  long_allowed <- if (is.null(top_long)) rep(TRUE, nrow(communication)) else
+    communication$neighbour_cell_type %in% as.character(top_long)
+  communication$matches_state_top_neighbour <- ifelse(
+    communication$eos_state_group == "Eos_short_enriched", short_allowed,
+    ifelse(communication$eos_state_group == "Eos_long_enriched", long_allowed, FALSE)
+  )
   communication$analysis_scope <- "EXPLORATORY_WITHIN_SECTION_CELLCHAT"
   significant <- communication[
     is.finite(communication$pval) & communication$pval < raw_p_max &
       is.finite(communication$p_adjust_bh) & communication$p_adjust_bh < adjusted_p_max &
-      communication$direction != "OUTSIDE_REQUESTED_DIRECTION",
+      communication$direction == "EOS_TO_NEIGHBOUR" &
+      communication$matches_state_top_neighbour,
     , drop = FALSE
   ]
   significant <- significant[order(significant$p_adjust_bh, -significant$prob), , drop = FALSE]

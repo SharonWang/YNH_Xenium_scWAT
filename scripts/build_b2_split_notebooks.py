@@ -226,12 +226,26 @@ qc_counts <- do.call(rbind, lapply(qc_columns, function(field) data.frame(
 )))
 qc_counts'''),
         code('''options(repr.plot.width = 14, repr.plot.height = 6)
-ImageDimPlot(
-  region_spatial_all, fov = "fov",
-  group.by = c("qc_core_pass", "primary_include_revised"),
-  flip_xy = FALSE, dark.background = FALSE,
-  cols = c("FALSE" = "#E58C8A", "TRUE" = "#D9D9D9")
-)'''),
+qc_coordinates <- GetTissueCoordinates(region_spatial_all[["fov"]], which = "centroids") %>% as.data.frame()
+if (!"cell" %in% colnames(qc_coordinates)) qc_coordinates$cell <- rownames(qc_coordinates)
+qc_coordinates <- qc_coordinates %>%
+  rename(cell_id = cell) %>%
+  mutate(
+    qc_core_pass = as.character(region_spatial_all$qc_core_pass[match(cell_id, colnames(region_spatial_all))]),
+    primary_include_revised = as.character(region_spatial_all$primary_include_revised[match(cell_id, colnames(region_spatial_all))])
+  )
+qc_core_plot <- plot_target_overlay(
+  qc_coordinates, x_col = "x", y_col = "y", group_col = "qc_core_pass", target_labels = "FALSE",
+  palette = c("TRUE" = "#D9D9D9", "FALSE" = "#963E49"),
+  background_size = 0.10, target_size = 0.70, title = "Core-QC failures", fixed_coordinates = TRUE
+)
+primary_mask_plot <- plot_target_overlay(
+  qc_coordinates, x_col = "x", y_col = "y", group_col = "primary_include_revised", target_labels = "FALSE",
+  palette = c("TRUE" = "#D9D9D9", "FALSE" = "#963E49"),
+  background_size = 0.10, target_size = 0.70, title = "Cells excluded from primary analysis", fixed_coordinates = TRUE
+)
+print(qc_core_plot)
+print(primary_mask_plot)'''),
     ]
 
     if child_branch:
@@ -553,13 +567,29 @@ reference_concordance_summary <- reference_concordance %>%
 reference_concordance_summary %>% head(30)
 options(repr.plot.width = 15, repr.plot.height = 9)
 annotation_palette <- cell_macaron_palette(levels(region_spatial$Final_CellType_subtype))
-print(style_cell_plot(DimPlot(
-  region_spatial, reduction = "umap_PC30", group.by = "Final_CellType_subtype",
-  label = TRUE, repel = TRUE, cols = annotation_palette
-)) + labs(title = "Definitive subtype labels used downstream"))
-print(ImageDimPlot(
-  region_spatial, fov = "fov", group.by = "Final_CellType_subtype",
-  flip_xy = FALSE, dark.background = FALSE, cols = annotation_palette
+annotation_palette["Eosinophil"] <- "#8F3340"
+annotation_umap <- as.data.frame(Embeddings(region_spatial, "umap_PC30")) %>%
+  rownames_to_column("cell_id") %>%
+  mutate(cell_type = as.character(region_spatial$Final_CellType_subtype[match(cell_id, colnames(region_spatial))]))
+annotation_spatial <- GetTissueCoordinates(region_spatial[["fov"]], which = "centroids") %>% as.data.frame()
+if (!"cell" %in% colnames(annotation_spatial)) annotation_spatial$cell <- rownames(annotation_spatial)
+annotation_spatial <- annotation_spatial %>% rename(cell_id = cell) %>%
+  mutate(cell_type = as.character(region_spatial$Final_CellType_subtype[match(cell_id, colnames(region_spatial))]))
+annotation_umap_centres <- annotation_umap %>%
+  group_by(cell_type) %>%
+  summarise(label_x = median(.data[[colnames(annotation_umap)[2]]]),
+            label_y = median(.data[[colnames(annotation_umap)[3]]]), .groups = "drop")
+annotation_umap_plot <- plot_target_overlay(
+  annotation_umap, x_col = colnames(annotation_umap)[2], y_col = colnames(annotation_umap)[3],
+  group_col = "cell_type", target_labels = "Eosinophil", palette = annotation_palette,
+  background_size = 0.22, target_size = 1.15, title = "Definitive subtype labels used downstream"
+) + geom_text(data = annotation_umap_centres, aes(label_x, label_y, label = cell_type),
+              inherit.aes = FALSE, size = 3, colour = "#3F3F3F", check_overlap = TRUE)
+print(annotation_umap_plot)
+print(plot_target_overlay(
+  annotation_spatial, x_col = "x", y_col = "y", group_col = "cell_type", target_labels = "Eosinophil",
+  palette = annotation_palette, background_size = 0.10, target_size = 0.85,
+  title = "Spatial definitive subtype labels", fixed_coordinates = TRUE
 ))
 marker_plot_features <- order_marker_features(
   marker_df_use, available_genes = rownames(region_spatial)
@@ -567,7 +597,7 @@ marker_plot_features <- order_marker_features(
 print(style_cell_plot(DotPlot(
   region_spatial, features = marker_plot_features,
   group.by = "Final_CellType_subtype", assay = "Xenium",
-  dot.scale = 5, scale = TRUE, cols = c("#F5E9F0", "#81506E")
+  dot.scale = 5, scale = TRUE, cols = c("#D9D9D9", "#5A2F5E")
 )) + RotatedAxis() + labs(
   title = "Canonical-marker consistency (internal, not independent validation)",
   x = NULL, y = NULL
@@ -602,11 +632,17 @@ eos_identity_summary'''),
 options(repr.plot.width = 12, repr.plot.height = 7)
 eos_plot$plot
 options(repr.plot.width = 14, repr.plot.height = 7)
-ImageDimPlot(
-  region_spatial, fov = "fov", group.by = "Eos_origin", flip_xy = FALSE,
-  dark.background = FALSE,
-  cols = c("ANNOTATION_AND_TIER12" = "#E58C8A", "ANNOTATION_ONLY_REVIEW" = "#F5D6A1",
-           "TIER12_RESCUE_REVIEW" = "#C9B6DF", "NOT_EOS" = "#D9D9D9")
+eos_origin_coordinates <- GetTissueCoordinates(region_spatial[["fov"]], which = "centroids") %>% as.data.frame()
+if (!"cell" %in% colnames(eos_origin_coordinates)) eos_origin_coordinates$cell <- rownames(eos_origin_coordinates)
+eos_origin_coordinates <- eos_origin_coordinates %>% rename(cell_id = cell) %>%
+  mutate(Eos_origin = region_spatial$Eos_origin[match(cell_id, colnames(region_spatial))])
+plot_target_overlay(
+  eos_origin_coordinates, x_col = "x", y_col = "y", group_col = "Eos_origin",
+  target_labels = c("ANNOTATION_AND_TIER12", "ANNOTATION_ONLY_REVIEW", "TIER12_RESCUE_REVIEW"),
+  palette = c("ANNOTATION_AND_TIER12" = "#9B3C48", "ANNOTATION_ONLY_REVIEW" = "#B66A25",
+              "TIER12_RESCUE_REVIEW" = "#694F85", "NOT_EOS" = "#D9D9D9"),
+  background_size = 0.10, target_size = 0.95,
+  title = "Spatial Eosinophil evidence origin", fixed_coordinates = TRUE
 )'''),
         md("""### 9.1 Wang–Xenium joint integration diagnostic
 
@@ -668,21 +704,36 @@ wang_xenium_integration_status'''),
   wang_xenium_object$integration_cell_type <- apply_scwat_cell_type_order(
     wang_xenium_object$integration_cell_type
   )
+  wang_umap_data <- as.data.frame(Embeddings(wang_xenium_object, "wang_xenium_umap")) %>%
+    rownames_to_column("cell_id") %>%
+    mutate(
+      integration_dataset = wang_xenium_object$integration_dataset[match(cell_id, colnames(wang_xenium_object))],
+      integration_cell_type = as.character(wang_xenium_object$integration_cell_type[match(cell_id, colnames(wang_xenium_object))]),
+      integration_eos_display = wang_xenium_object$integration_eos_display[match(cell_id, colnames(wang_xenium_object))]
+    )
   options(repr.plot.width = 14, repr.plot.height = 6)
-  wang_dataset_plot <- style_cell_plot(DimPlot(
-    wang_xenium_object, reduction = "wang_xenium_umap",
-    group.by = "integration_dataset", cols = c(WANG = "#91C9B6", XENIUM = "#F29B8F")
-  )) + labs(title = "Wang–Xenium CCA integration: dataset mixing")
-  wang_subtype_plot <- style_cell_plot(DimPlot(
-    wang_xenium_object, reduction = "wang_xenium_umap",
-    group.by = "integration_cell_type",
-    cols = cell_macaron_palette(levels(wang_xenium_object$integration_cell_type))
-  )) + labs(title = "Wang and Xenium subtype structure in joint space")
-  wang_eos_plot <- style_cell_plot(DimPlot(
-    wang_xenium_object, reduction = "wang_xenium_umap",
-    group.by = "integration_eos_display",
-    cols = c("Other" = "#D9D9D9", "WANG Eosinophil" = "#78B7C5", "XENIUM Eosinophil" = "#E58C8A")
-  )) + labs(title = "Wang and Xenium Eosinophils in joint integrated space")
+  wang_dataset_plot <- plot_target_overlay(
+    wang_umap_data, x_col = colnames(wang_umap_data)[2], y_col = colnames(wang_umap_data)[3],
+    group_col = "integration_dataset", target_labels = "XENIUM",
+    palette = c(WANG = "#91C9B6", XENIUM = "#B84E4B"),
+    background_size = 0.20, target_size = 0.65,
+    title = "Wang–Xenium CCA integration: dataset mixing"
+  )
+  wang_subtype_palette <- cell_macaron_palette(unique(wang_umap_data$integration_cell_type))
+  wang_subtype_palette["Eosinophil"] <- "#8F3340"
+  wang_subtype_plot <- plot_target_overlay(
+    wang_umap_data, x_col = colnames(wang_umap_data)[2], y_col = colnames(wang_umap_data)[3],
+    group_col = "integration_cell_type", target_labels = "Eosinophil",
+    palette = wang_subtype_palette, background_size = 0.20, target_size = 0.90,
+    title = "Wang and Xenium subtype structure in joint space"
+  )
+  wang_eos_plot <- plot_target_overlay(
+    wang_umap_data, x_col = colnames(wang_umap_data)[2], y_col = colnames(wang_umap_data)[3],
+    group_col = "integration_eos_display", target_labels = c("WANG Eosinophil", "XENIUM Eosinophil"),
+    palette = c("Other" = "#D9D9D9", "WANG Eosinophil" = "#3979A8", "XENIUM Eosinophil" = "#B84E4B"),
+    background_size = 0.18, target_size = 1.00,
+    title = "Wang and Xenium Eosinophils in joint integrated space"
+  )
   wang_cross_distance_plot <- style_cell_plot(ggplot(
     wang_xenium_neighbour_summary$per_cell,
     aes(dataset, minimum_cross_dataset_distance, fill = dataset)
@@ -789,7 +840,6 @@ if (RUN_EOS_STATE) table(eos_obj$EosState_extreme)'''),
       geom_density(alpha = 0.45, linewidth = 0.4) +
       scale_fill_manual(values = cell_macaron_palette(levels(mixture_plot_data$component))) +
       labs(title = "Gaussian-mixture diagnostic on continuous Eosinophil state",
-           subtitle = "Components are diagnostic and are not biological subtype calls",
            x = "EosState balance", y = "Density", fill = "Component")
     mixture_plot <- style_cell_plot(mixture_plot)
     print(mixture_plot)
@@ -809,15 +859,18 @@ mclust_status'''),
   print(
     style_cell_plot(ggplot(eos_obj@meta.data, aes(EosState_balance, fill = EosState_extreme)) +
       geom_histogram(bins = 30, colour = "white", linewidth = 0.2) + geom_vline(xintercept = 0, linetype = 2) +
-      scale_fill_manual(values = c("Short-lived-like" = "#8FBBD9", "Intermediate" = "#F5D6A1", "Long-lived-like" = "#E58C8A")) +
+      scale_fill_manual(values = c("Short-lived-like" = "#3979A8", "Intermediate" = "#CFCFCF", "Long-lived-like" = "#B84E4B")) +
       labs(title = "Continuous Eosinophil-state balance", x = "Long-lived-like − short-lived-like", y = "Cells", fill = NULL))
   )
-  print(
-    style_cell_plot(ggplot(eos_obj@meta.data, aes(EosShort_z, EosLong_z, colour = EosState_extreme)) +
-      geom_point(alpha = 0.75) + geom_abline(slope = 1, intercept = 0, linetype = 2) +
-      scale_colour_manual(values = c("Short-lived-like" = "#8FBBD9", "Intermediate" = "#F5D6A1", "Long-lived-like" = "#E58C8A")) +
-      labs(title = "Eosinophil state is displayed as a continuum", colour = NULL))
-  )
+  eos_state_scatter_data <- eos_obj@meta.data %>% rownames_to_column("cell_id")
+  eos_state_scatter <- plot_target_overlay(
+    eos_state_scatter_data, x_col = "EosShort_z", y_col = "EosLong_z", group_col = "EosState_extreme",
+    target_labels = c("Short-lived-like", "Long-lived-like"),
+    palette = c("Short-lived-like" = "#3979A8", "Intermediate" = "#CFCFCF", "Long-lived-like" = "#B84E4B"),
+    background_size = 0.75, target_size = 1.65,
+    title = "Eosinophil state is displayed as a continuum"
+  ) + geom_abline(slope = 1, intercept = 0, linetype = 2, colour = "grey55")
+  print(eos_state_scatter)
   plot_eos_state_heatmap(eos_obj, eos_gene_sets)
 }'''),
         md("""### 10.A Exploratory within-section state-associated markers
@@ -863,8 +916,11 @@ head(eos_state_association, 30)'''),
   print(
     ggplot() +
       geom_point(data = state_coordinates, aes(x, y), colour = "#E8E8E8", size = 0.10, alpha = 0.45) +
-      geom_point(data = eos_state_coordinates, aes(x, y, colour = EosState_balance), size = 1.2, alpha = 0.9) +
-      scale_colour_gradient2(low = "#8FBBD9", mid = "#FFF4CF", high = "#E58C8A", midpoint = 0,
+      geom_point(data = eos_state_coordinates %>% filter(EosState_extreme == "Intermediate"),
+                 aes(x, y), colour = "#CFCFCF", size = 0.45, alpha = 0.60) +
+      geom_point(data = eos_state_coordinates %>% filter(EosState_extreme != "Intermediate"),
+                 aes(x, y, colour = EosState_balance), size = 1.5, alpha = 0.95) +
+      scale_colour_gradient2(low = "#3979A8", mid = "#CFCFCF", high = "#B84E4B", midpoint = 0,
                              limits = c(-balance_limit, balance_limit)) +
       coord_fixed() + theme_void() +
       labs(title = "Spatial Eosinophil-state continuum", colour = "State balance")
@@ -872,11 +928,13 @@ head(eos_state_association, 30)'''),
   print(
     ggplot() +
       geom_point(data = state_coordinates, aes(x, y), colour = "#E8E8E8", size = 0.10, alpha = 0.45) +
+      geom_point(data = eos_state_coordinates %>% filter(EosState_extreme == "Intermediate"),
+        aes(x, y), colour = "#CFCFCF", size = 0.45, alpha = 0.60) +
       geom_point(
         data = eos_state_coordinates %>% filter(EosState_extreme != "Intermediate"),
-        aes(x, y, colour = EosState_extreme), size = 1.2, alpha = 0.9
+        aes(x, y, colour = EosState_extreme), size = 1.5, alpha = 0.95
       ) +
-      scale_colour_manual(values = c("Short-lived-like" = "#8FBBD9", "Long-lived-like" = "#E58C8A")) +
+      scale_colour_manual(values = c("Short-lived-like" = "#3979A8", "Long-lived-like" = "#B84E4B")) +
       coord_fixed() + theme_void() + labs(title = "Descriptive Eosinophil-state tails", colour = "Tail")
   )
 }'''),
@@ -904,12 +962,22 @@ RUN_EOS_SPATIAL <- identical(spatial_pools$status, "PASS")
 spatial_pool_gate <- spatial_pools$gate
 print(spatial_pool_gate)
 if (RUN_EOS_SPATIAL) {
-  spatial_pool_plot <- ggplot(coordinates, aes(x, y, colour = ifelse(Eos_inclusive, "Eosinophil query", "Non-Eosinophil reference"))) +
-    geom_point(size = 0.18, alpha = 0.70) + coord_fixed() +
-    scale_colour_manual(values = c("Eosinophil query" = "#E58C8A", "Non-Eosinophil reference" = "#D9D9D9")) +
-    labs(title = "Step 10.1: disjoint spatial pools", colour = NULL)
-  print(style_cell_plot(spatial_pool_plot))
-  save_cell_plot(style_cell_plot(spatial_pool_plot), "step10_1_eos_reference_pools", FIGURE_ROOT, PROJECT_ROOT, width = 10, height = 7)
+  spatial_pool_plot_data <- coordinates %>% mutate(
+    display_group = case_when(
+      EosState_extreme == "Short-lived-like" ~ "Short-lived-like",
+      EosState_extreme == "Long-lived-like" ~ "Long-lived-like",
+      TRUE ~ "Reference / intermediate"
+    )
+  )
+  spatial_pool_plot <- plot_target_overlay(
+    spatial_pool_plot_data, x_col = "x", y_col = "y", group_col = "display_group",
+    target_labels = c("Short-lived-like", "Long-lived-like"),
+    palette = c("Reference / intermediate" = "#CFCFCF", "Short-lived-like" = "#3979A8", "Long-lived-like" = "#B84E4B"),
+    background_size = 0.12, target_size = 1.45,
+    title = "Step 10.1: disjoint pools with Eosinophil-state tails", fixed_coordinates = TRUE
+  )
+  print(spatial_pool_plot)
+  save_cell_plot(spatial_pool_plot, "step10_1_eos_reference_pools", FIGURE_ROOT, PROJECT_ROOT, width = 10, height = 7)
 }'''),
         md("""## 10.2 Quantify nearest-cell composition at k = 1 and k = 15
 
@@ -926,19 +994,25 @@ print(knn_composition_k1$overall %>% arrange(desc(fraction)))
 print(knn_composition_k15$overall %>% arrange(desc(fraction)))
 print(knn_composition_k15$by_state %>% arrange(EosState_extreme, desc(fraction)))'''),
         code('''if (nrow(knn_composition_k15$overall)) {
-  neighbour_order <- scwat_cell_type_order(knn_composition_k15$overall$reference_cell_type)
-  plot_k1 <- knn_composition_k1$overall %>%
-    mutate(reference_cell_type = factor(reference_cell_type, levels = neighbour_order)) %>%
-    ggplot(aes(reference_cell_type, fraction, fill = reference_cell_type)) +
-    geom_col(show.legend = FALSE) + coord_flip() +
-    scale_fill_manual(values = cell_macaron_palette(neighbour_order)) +
-    labs(title = "Step 10.2: nearest non-Eosinophil cell type (k = 1)", x = NULL, y = "Fraction of Eosinophils")
-  plot_k15 <- knn_composition_k15$by_state %>%
-    mutate(reference_cell_type = factor(reference_cell_type, levels = neighbour_order)) %>%
-    ggplot(aes(reference_cell_type, fraction, fill = EosState_extreme)) +
-    geom_col(position = "dodge") + coord_flip() +
-    scale_fill_manual(values = c("Short-lived-like" = "#8FBBD9", "Intermediate" = "#F5D6A1", "Long-lived-like" = "#E58C8A")) +
-    labs(title = "Step 10.2: k = 15 neighbourhood by Eosinophil state", x = NULL, y = "Fraction of edges", fill = NULL)
+  make_signed_composition <- function(by_state) {
+    by_state %>%
+      filter(EosState_extreme %in% c("Short-lived-like", "Long-lived-like")) %>%
+      mutate(signed_fraction = ifelse(EosState_extreme == "Short-lived-like", -fraction, fraction)) %>%
+      group_by(reference_cell_type) %>%
+      mutate(order_score = sum(signed_fraction, na.rm = TRUE)) %>% ungroup() %>%
+      arrange(desc(order_score), desc(signed_fraction)) %>%
+      mutate(reference_cell_type = factor(reference_cell_type, levels = rev(unique(reference_cell_type))))
+  }
+  plot_k1_data <- make_signed_composition(knn_composition_k1$by_state)
+  plot_k15_data <- make_signed_composition(knn_composition_k15$by_state)
+  plot_k1 <- ggplot(plot_k1_data, aes(signed_fraction, reference_cell_type, fill = EosState_extreme)) +
+    geom_vline(xintercept = 0, colour = "grey70") + geom_col() +
+    scale_fill_manual(values = c("Short-lived-like" = "#3979A8", "Long-lived-like" = "#B84E4B")) +
+    labs(title = "Step 10.2: nearest-cell composition (k = 1)", x = "Fraction (short-like left; long-like right)", y = NULL, fill = NULL)
+  plot_k15 <- ggplot(plot_k15_data, aes(signed_fraction, reference_cell_type, fill = EosState_extreme)) +
+    geom_vline(xintercept = 0, colour = "grey70") + geom_col() +
+    scale_fill_manual(values = c("Short-lived-like" = "#3979A8", "Long-lived-like" = "#B84E4B")) +
+    labs(title = "Step 10.2: neighbourhood composition (k = 15)", x = "Fraction of edges (short-like left; long-like right)", y = NULL, fill = NULL)
   print(style_cell_plot(plot_k1))
   print(style_cell_plot(plot_k15))
   save_cell_plot(style_cell_plot(plot_k1), "step10_2_k1_neighbour_composition", FIGURE_ROOT, PROJECT_ROOT, width = 9, height = 7)
@@ -954,22 +1028,37 @@ For every Eosinophil, the minimum Euclidean centroid distance to each cell type 
 }
 distance_to_each_cell_type <- eos_distance_result$cell_level
 distance_state_correlations <- eos_distance_result$summary
+distance_tail_summary <- data.frame()
 print(distance_state_correlations %>% arrange(median_distance))'''),
         code('''if (nrow(distance_to_each_cell_type)) {
-  distance_order <- scwat_cell_type_order(distance_state_correlations$reference_cell_type)
+  distance_tail_summary <- distance_to_each_cell_type %>%
+    filter(EosState_extreme %in% c("Short-lived-like", "Long-lived-like")) %>%
+    group_by(reference_cell_type, EosState_extreme) %>%
+    summarise(median_distance = median(distance, na.rm = TRUE), .groups = "drop") %>%
+    tidyr::complete(reference_cell_type,
+                    EosState_extreme = c("Short-lived-like", "Long-lived-like"),
+                    fill = list(median_distance = NA_real_)) %>%
+    tidyr::pivot_wider(names_from = EosState_extreme, values_from = median_distance) %>%
+    mutate(proximity_difference = `Short-lived-like` - `Long-lived-like`) %>%
+    arrange(desc(proximity_difference))
+  distance_order <- rev(distance_tail_summary$reference_cell_type)
   distance_boxplot <- distance_to_each_cell_type %>%
+    filter(EosState_extreme %in% c("Short-lived-like", "Long-lived-like")) %>%
     mutate(reference_cell_type = factor(reference_cell_type, levels = distance_order)) %>%
-    ggplot(aes(reference_cell_type, distance, fill = reference_cell_type)) +
-    geom_boxplot(outlier.shape = NA, linewidth = 0.25) + coord_flip() +
-    scale_fill_manual(values = cell_macaron_palette(distance_order)) +
-    labs(title = "Step 10.3: Eosinophil distance to each reference cell type", x = NULL, y = "Minimum centroid distance")
-  distance_state_plot <- distance_to_each_cell_type %>%
-    mutate(reference_cell_type = factor(reference_cell_type, levels = distance_order)) %>%
-    ggplot(aes(EosState_balance, distance, colour = reference_cell_type)) +
-    geom_point(alpha = 0.25, size = 0.6) + geom_smooth(method = "loess", se = FALSE, linewidth = 0.5) +
-    facet_wrap(~reference_cell_type, scales = "free_y") +
-    scale_colour_manual(values = cell_macaron_palette(distance_order), guide = "none") +
-    labs(title = "Step 10.3: continuous Eosinophil state versus proximity", x = "EosState balance", y = "Minimum centroid distance")
+    ggplot(aes(distance, reference_cell_type, fill = EosState_extreme)) +
+    geom_boxplot(outlier.shape = NA, linewidth = 0.25) +
+    scale_fill_manual(values = c("Short-lived-like" = "#3979A8", "Long-lived-like" = "#B84E4B")) +
+    labs(title = "Step 10.3: tail-specific distance to each reference cell type", x = "Minimum centroid distance", y = NULL, fill = NULL)
+  distance_state_plot <- distance_tail_summary %>%
+    mutate(reference_cell_type = factor(reference_cell_type, levels = distance_order),
+           direction = ifelse(proximity_difference >= 0, "Long-like closer", "Short-like closer")) %>%
+    ggplot(aes(proximity_difference, reference_cell_type, colour = direction)) +
+    geom_vline(xintercept = 0, colour = "grey70") +
+    geom_segment(aes(x = 0, xend = proximity_difference, yend = reference_cell_type), linewidth = 0.75) +
+    geom_point(size = 3) +
+    scale_colour_manual(values = c("Short-like closer" = "#3979A8", "Long-like closer" = "#B84E4B")) +
+    labs(title = "Step 10.3: relative proximity of Eosinophil-state tails",
+         x = "Median distance difference (short - long)", y = NULL, colour = NULL)
   print(style_cell_plot(distance_boxplot))
   print(style_cell_plot(distance_state_plot))
   save_cell_plot(style_cell_plot(distance_boxplot), "step10_3_distance_by_cell_type", FIGURE_ROOT, PROJECT_ROOT, width = 10, height = 8)
@@ -977,11 +1066,11 @@ print(distance_state_correlations %>% arrange(median_distance))'''),
 }'''),
         md("""## 10.4 Rank neighbour cell types along the continuous Eosinophil-state axis
 
-Neighbour fractions are correlated with the continuous state score. Negative rho denotes short-like association and positive rho long-like association. The three strongest informative types per direction define the prespecified recipient/sender types for the next CellChat diagnostic."""),
+Neighbour fractions are correlated with the continuous state score. Negative rho denotes short-like association and positive rho long-like association. The five strongest informative types per direction define the prespecified recipient/sender types for the next CellChat diagnostic."""),
         code('''eos_knn_state_association <- if (RUN_EOS_SPATIAL) {
   rank_eos_state_knn_associations(
     spatial_knn_edges$k15, biological_order = scwat_cell_type_order(),
-    min_eos = 20L, top_n = 3L
+    min_eos = 20L, top_n = 5L
   )
 } else {
   list(status = "SKIPPED_NO_SPATIAL_EDGES", full = data.frame(), per_eos = data.frame(),
@@ -993,30 +1082,32 @@ cat("Long-like top neighbours:", paste(eos_knn_state_association$long_top, colla
         code('''if (identical(eos_knn_state_association$status, "PASS")) {
   association_plot_data <- eos_knn_state_association$full %>%
     filter(is.finite(spearman_rho)) %>%
-    mutate(reference_cell_type = factor(reference_cell_type, levels = scwat_cell_type_order(reference_cell_type)))
+    arrange(desc(spearman_rho)) %>%
+    mutate(reference_cell_type = factor(reference_cell_type, levels = rev(unique(reference_cell_type))))
   association_plot <- ggplot(association_plot_data, aes(spearman_rho, reference_cell_type, colour = direction)) +
     geom_vline(xintercept = 0, colour = "grey75") + geom_segment(aes(x = 0, xend = spearman_rho, yend = reference_cell_type), linewidth = 0.7) +
     geom_point(size = 3) +
-    scale_colour_manual(values = c("SHORT_ASSOCIATED" = "#8FBBD9", "LONG_ASSOCIATED" = "#E58C8A", "NEUTRAL" = "#C8C8C8")) +
+    scale_colour_manual(values = c("SHORT_ASSOCIATED" = "#3979A8", "LONG_ASSOCIATED" = "#B84E4B", "NEUTRAL" = "#C8C8C8")) +
     labs(title = "Step 10.4: KNN composition association with continuous Eosinophil state",
          x = "Spearman rho", y = NULL, colour = NULL)
   top_types <- unique(c(eos_knn_state_association$short_top, eos_knn_state_association$long_top))
   per_eos_plot <- eos_knn_state_association$per_eos %>%
-    filter(reference_cell_type %in% top_types) %>%
+    filter(reference_cell_type %in% top_types,
+           EosState_extreme %in% c("Short-lived-like", "Long-lived-like")) %>%
     mutate(reference_cell_type = factor(reference_cell_type, levels = scwat_cell_type_order(top_types))) %>%
-    ggplot(aes(EosState_balance, neighbour_fraction, colour = reference_cell_type)) +
-    geom_point(alpha = 0.35, size = 0.7) + geom_smooth(method = "lm", se = FALSE, linewidth = 0.6) +
+    ggplot(aes(EosState_balance, neighbour_fraction, colour = EosState_extreme)) +
+    geom_point(alpha = 0.70, size = 1.15) + geom_smooth(method = "lm", se = FALSE, linewidth = 0.7) +
     facet_wrap(~reference_cell_type) +
-    scale_colour_manual(values = cell_macaron_palette(scwat_cell_type_order(top_types)), guide = "none") +
+    scale_colour_manual(values = c("Short-lived-like" = "#3979A8", "Long-lived-like" = "#B84E4B")) +
     labs(title = "Step 10.4: per-Eosinophil neighbour fraction", x = "EosState balance", y = "Fraction among k = 15")
   print(style_cell_plot(association_plot))
   print(style_cell_plot(per_eos_plot))
   save_cell_plot(style_cell_plot(association_plot), "step10_4_knn_state_association", FIGURE_ROOT, PROJECT_ROOT, width = 10, height = 8)
   save_cell_plot(style_cell_plot(per_eos_plot), "step10_4_per_eos_neighbour_fraction", FIGURE_ROOT, PROJECT_ROOT, width = 13, height = 8)
 }'''),
-        md("""## 11. Spatial CellChat for the top three short-like and long-like neighbour types
+        md("""## 11. Spatial CellChat for the top five short-like and long-like neighbour types
 
-CellChat is run on normalized Xenium expression, aligned centroid coordinates and a physical scale derived from median cell area. Because CellChat requires categorical groups, the lower and upper 30% of the continuous Eosinophil-state score define `Eos_short_enriched` and `Eos_long_enriched`; the continuous KNN ranking remains the selection analysis. Results are exploratory within-section communication probabilities, not mouse-level inference or proof of signalling."""),
+CellChat is run on normalized Xenium expression, aligned centroid coordinates and a physical scale derived from median cell area. Because CellChat requires categorical groups, the lower and upper 30% of the continuous Eosinophil-state score define `Eos_short_enriched` and `Eos_long_enriched`; the continuous KNN ranking remains the selection analysis. The significant report is restricted to outgoing Eosinophil-state signals toward that state's top-five neighbours; the unfiltered table is retained for audit. Results are exploratory within-section communication probabilities, not mouse-level inference or proof of signalling."""),
         code('''cellchat_inputs <- prepare_eos_cellchat_inputs(
   region_spatial,
   coordinates %>% transmute(cell_id = cell, x, y),
@@ -1043,7 +1134,9 @@ cellchat_status <- data.frame(
 cellchat_filtered <- if (all(c("source", "target", "interaction_name", "prob", "pval") %in%
                              colnames(cellchat_result$communication))) {
   filter_eos_cellchat_interactions(
-    cellchat_result$communication, raw_p_max = 0.05, adjusted_p_max = 0.10
+    cellchat_result$communication, raw_p_max = 0.05, adjusted_p_max = 0.10,
+    top_short = eos_knn_state_association$short_top,
+    top_long = eos_knn_state_association$long_top
   )
 } else {
   list(all = data.frame(), significant = data.frame())
@@ -1179,6 +1272,7 @@ write_tsv(knn_composition_k15$overall, file.path(BRANCH_ROOT, "eos_k15_neighbour
 write_tsv(knn_composition_k15$by_state, file.path(BRANCH_ROOT, "eos_k15_neighbour_composition_by_state.tsv"), PROJECT_ROOT)
 write_gz_tsv(distance_to_each_cell_type, file.path(BRANCH_ROOT, "eos_distance_to_each_cell_type.tsv.gz"), PROJECT_ROOT)
 write_tsv(distance_state_correlations, file.path(BRANCH_ROOT, "eos_distance_state_correlations_descriptive.tsv"), PROJECT_ROOT)
+write_tsv(distance_tail_summary, file.path(BRANCH_ROOT, "eos_distance_tail_comparison.tsv"), PROJECT_ROOT)
 write_tsv(eos_knn_state_association$full, file.path(BRANCH_ROOT, "eos_knn_state_association.tsv"), PROJECT_ROOT)
 write_gz_tsv(eos_knn_state_association$per_eos, file.path(BRANCH_ROOT, "eos_knn_state_per_cell.tsv.gz"), PROJECT_ROOT)
 write_tsv(cellchat_status, file.path(BRANCH_ROOT, "eos_spatial_cellchat_status.tsv"), PROJECT_ROOT)
