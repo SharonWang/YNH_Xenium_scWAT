@@ -140,4 +140,64 @@ stopifnot(
   identical(ranking$long_top[[1L]], "Macrophage")
 )
 
+# Break caught: continuous Eosinophil scores are passed directly to CellChat,
+# underpowered tails are forced, or the reported significant table ignores
+# multiplicity and sender/receiver direction.
+cellchat_groups <- derive_eos_cellchat_groups(1:100, min_cells = 10L)
+stopifnot(
+  cellchat_groups$status == "PASS",
+  sum(cellchat_groups$group == "Eos_short_enriched", na.rm = TRUE) == 30L,
+  sum(cellchat_groups$group == "Eos_long_enriched", na.rm = TRUE) == 30L
+)
+too_small_groups <- derive_eos_cellchat_groups(1:20, min_cells = 10L)
+stopifnot(too_small_groups$status == "SKIPPED_INSUFFICIENT_STATE_GROUP_CELLS")
+
+cellchat_counts <- Matrix::Matrix(
+  matrix(rep(c(1, 2, 0, 3), 60L), nrow = 4L), sparse = TRUE
+)
+rownames(cellchat_counts) <- c("A", "B", "C", "D")
+colnames(cellchat_counts) <- paste0("cc", seq_len(60L))
+cellchat_object <- Seurat::CreateSeuratObject(cellchat_counts, assay = "Xenium")
+cellchat_object <- Seurat::NormalizeData(cellchat_object, assay = "Xenium", verbose = FALSE)
+cellchat_object$Eos_inclusive <- c(rep(TRUE, 40L), rep(FALSE, 20L))
+cellchat_object$Final_CellType_subtype <- c(rep("Eosinophil", 40L), rep("ASC", 10L), rep("Macrophage", 10L))
+cellchat_object$EosState_balance <- c(seq(-2, 2, length.out = 40L), rep(NA_real_, 20L))
+cellchat_object$cell_area <- rep(100, 60L)
+cellchat_coordinates <- data.frame(
+  cell_id = rev(colnames(cellchat_object)), x = rev(seq_len(60L)), y = 0,
+  stringsAsFactors = FALSE
+)
+cellchat_inputs <- prepare_eos_cellchat_inputs(
+  cellchat_object, cellchat_coordinates,
+  top_short = c("ASC"), top_long = c("Macrophage"), min_cells = 5L
+)
+stopifnot(
+  cellchat_inputs$status == "PASS",
+  ncol(cellchat_inputs$data) == 44L,
+  identical(rownames(cellchat_inputs$meta), colnames(cellchat_inputs$data)),
+  cellchat_inputs$scale_factors$spot == 1,
+  isTRUE(all.equal(cellchat_inputs$scale_factors$spot.diameter, 2 * sqrt(100 / pi)))
+)
+
+lr_fixture <- data.frame(
+  source = c("Eos_short_enriched", "Eos_long_enriched", "ASC"),
+  target = c("ASC", "Macrophage", "Eos_short_enriched"),
+  interaction_name = c("A_B", "C_D", "E_F"),
+  pathway_name = c("P1", "P2", "P3"),
+  ligand = c("A", "C", "E"),
+  receptor = c("B", "D", "F"),
+  prob = c(0.4, 0.2, 0.3),
+  pval = c(0.001, 0.20, 0.01),
+  stringsAsFactors = FALSE
+)
+filtered_lr <- filter_eos_cellchat_interactions(lr_fixture)
+stopifnot(
+  nrow(filtered_lr$significant) == 2L,
+  setequal(filtered_lr$significant$direction, c("EOS_TO_NEIGHBOUR", "NEIGHBOUR_TO_EOS")),
+  all(filtered_lr$significant$p_adjust_bh < 0.10)
+)
+
+cellchat_skip <- run_eos_spatial_cellchat(list(status = "SKIPPED_TEST_INPUT"))
+stopifnot(cellchat_skip$status == "SKIPPED_TEST_INPUT")
+
 cat("Extended Eosinophil helper tests passed.\n")

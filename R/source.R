@@ -8249,6 +8249,308 @@ rank_eos_state_knn_associations <- function(
   )
 }
 
+#' Derive adequately sized Eosinophil groups for group-based CellChat
+#'
+#' @param state Numeric continuous Eosinophil-state values.
+#' @param lower_probability Lower quantile defining the short-enriched group.
+#' @param upper_probability Upper quantile defining the long-enriched group.
+#' @param min_cells Minimum cells required in each retained state group.
+#'
+#' @return A list with typed status, per-input group vector, quantile thresholds
+#'   and group counts. The middle observations remain unassigned.
+derive_eos_cellchat_groups <- function(
+    state,
+    lower_probability = 0.30,
+    upper_probability = 0.70,
+    min_cells = 10L
+) {
+  state <- as.numeric(state)
+  if (!is.finite(lower_probability) || !is.finite(upper_probability) ||
+      lower_probability <= 0 || upper_probability >= 1 ||
+      lower_probability >= upper_probability) {
+    stop("CellChat state probabilities must satisfy 0 < lower < upper < 1.", call. = FALSE)
+  }
+  group <- rep(NA_character_, length(state))
+  finite <- is.finite(state)
+  if (!any(finite)) {
+    return(list(
+      status = "SKIPPED_INSUFFICIENT_STATE_GROUP_CELLS",
+      message = "No finite Eosinophil-state values are available.",
+      group = group, lower_threshold = NA_real_, upper_threshold = NA_real_,
+      counts = integer()
+    ))
+  }
+  lower <- unname(stats::quantile(state[finite], lower_probability, type = 7))
+  upper <- unname(stats::quantile(state[finite], upper_probability, type = 7))
+  group[finite & state <= lower] <- "Eos_short_enriched"
+  group[finite & state >= upper] <- "Eos_long_enriched"
+  counts <- table(factor(
+    group,
+    levels = c("Eos_short_enriched", "Eos_long_enriched")
+  ), useNA = "no")
+  status <- if (all(counts >= as.integer(min_cells))) {
+    "PASS"
+  } else {
+    "SKIPPED_INSUFFICIENT_STATE_GROUP_CELLS"
+  }
+  list(
+    status = status,
+    message = if (status == "PASS") {
+      "Prespecified continuous-state tails meet the CellChat group-size gate."
+    } else {
+      sprintf(
+        "CellChat requires at least %d cells in each Eosinophil state group.",
+        as.integer(min_cells)
+      )
+    },
+    group = group,
+    lower_threshold = lower,
+    upper_threshold = upper,
+    counts = counts
+  )
+}
+
+#' Prepare spatial CellChat inputs for Eosinophils and selected neighbours
+#'
+#' @param object Seurat object containing normalized Xenium expression and
+#'   required metadata.
+#' @param coordinates Data frame with unique `cell_id`, `x`, and `y`.
+#' @param top_short,top_long Cell types selected from continuous-state KNN
+#'   association in the short and long directions.
+#' @param eos_col Complete logical Eosinophil-selection field.
+#' @param cell_type_col Downstream non-Eosinophil grouping field.
+#' @param state_col Continuous Eosinophil-state field.
+#' @param cell_area_col Cell-area field in square microns.
+#' @param assay Seurat assay holding non-negative normalized expression.
+#' @param min_cells Minimum cells required per CellChat group.
+#'
+#' @return A typed list containing sparse normalized expression, aligned group
+#'   metadata, aligned coordinates, spatial scale factors and group counts.
+prepare_eos_cellchat_inputs <- function(
+    object,
+    coordinates,
+    top_short,
+    top_long,
+    eos_col = "Eos_inclusive",
+    cell_type_col = "Final_CellType_subtype",
+    state_col = "EosState_balance",
+    cell_area_col = "cell_area",
+    assay = "Xenium",
+    min_cells = 10L
+) {
+  if (!inherits(object, "Seurat")) stop("object must be a Seurat object.", call. = FALSE)
+  required_metadata <- c(eos_col, cell_type_col, state_col, cell_area_col)
+  missing <- setdiff(required_metadata, colnames(object@meta.data))
+  if (length(missing)) stop("Seurat metadata missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  top_types <- scwat_cell_type_order(unique(c(as.character(top_short), as.character(top_long))))
+  top_types <- top_types[!is.na(top_types) & nzchar(top_types)]
+  if (!length(top_types)) {
+    return(list(status = "SKIPPED_NO_TOP_NEIGHBOUR_TYPES", message = "No KNN-selected neighbour types."))
+  }
+  metadata <- object@meta.data
+  eos <- as.logical(metadata[[eos_col]])
+  if (anyNA(eos)) stop(eos_col, " must be complete.", call. = FALSE)
+  state_groups <- derive_eos_cellchat_groups(metadata[[state_col]][eos], min_cells = min_cells)
+  if (state_groups$status != "PASS") {
+    return(c(state_groups[c("status", "message")], list(state_groups = state_groups)))
+  }
+  eos_ids <- rownames(metadata)[eos]
+  eos_group <- stats::setNames(state_groups$group, eos_ids)
+  eos_selected <- eos_ids[!is.na(eos_group)]
+  non_eos_selected <- rownames(metadata)[
+    !eos & as.character(metadata[[cell_type_col]]) %in% top_types
+  ]
+  selected <- c(eos_selected, non_eos_selected)
+  group <- c(
+    unname(eos_group[eos_selected]),
+    as.character(metadata[non_eos_selected, cell_type_col])
+  )
+  names(group) <- selected
+  group_counts <- table(group)
+  if (!length(non_eos_selected) || any(group_counts < as.integer(min_cells))) {
+    return(list(
+      status = "SKIPPED_INSUFFICIENT_CELLCHAT_GROUP_CELLS",
+      message = sprintf("Every selected group requires at least %d cells.", as.integer(min_cells)),
+      group_counts = group_counts,
+      state_groups = state_groups
+    ))
+  }
+  coords <- as.data.frame(coordinates, stringsAsFactors = FALSE)
+  if (!all(c("cell_id", "x", "y") %in% names(coords)) || anyDuplicated(coords$cell_id)) {
+    stop("coordinates require unique cell_id, x and y columns.", call. = FALSE)
+  }
+  coordinate_index <- match(selected, as.character(coords$cell_id))
+  if (anyNA(coordinate_index)) stop("CellChat coordinates do not cover every selected cell.", call. = FALSE)
+  aligned_coordinates <- data.frame(
+    x = as.numeric(coords$x[coordinate_index]),
+    y = as.numeric(coords$y[coordinate_index]),
+    row.names = selected,
+    stringsAsFactors = FALSE
+  )
+  if (any(!is.finite(as.matrix(aligned_coordinates)))) {
+    stop("CellChat coordinates must be finite.", call. = FALSE)
+  }
+  expression <- SeuratObject::GetAssayData(object, assay = assay, layer = "data")
+  expression <- expression[, selected, drop = FALSE]
+  if (!identical(colnames(expression), selected) || any(expression@x < 0)) {
+    stop("CellChat requires aligned non-negative normalized expression.", call. = FALSE)
+  }
+  cell_area <- as.numeric(metadata[selected, cell_area_col])
+  valid_area <- is.finite(cell_area) & cell_area > 0
+  if (!any(valid_area)) stop("A positive cell area is required for the spatial scale.", call. = FALSE)
+  equivalent_diameter <- 2 * sqrt(cell_area[valid_area] / pi)
+  meta <- data.frame(
+    cellchat_group = factor(group, levels = c("Eos_short_enriched", "Eos_long_enriched", top_types)),
+    original_cell_type = as.character(metadata[selected, cell_type_col]),
+    EosState_balance = as.numeric(metadata[selected, state_col]),
+    row.names = selected,
+    stringsAsFactors = FALSE
+  )
+  list(
+    status = "PASS",
+    message = "Spatial CellChat inputs passed alignment and group-size gates.",
+    data = expression,
+    meta = meta,
+    coordinates = as.matrix(aligned_coordinates),
+    scale_factors = list(
+      spot = 1,
+      spot.diameter = stats::median(equivalent_diameter)
+    ),
+    group_counts = as.data.frame(group_counts, stringsAsFactors = FALSE),
+    state_groups = state_groups,
+    top_short = intersect(top_types, as.character(top_short)),
+    top_long = intersect(top_types, as.character(top_long))
+  )
+}
+
+#' Run the optional spatial CellChat pipeline with typed failure status
+#'
+#' @param inputs Output from `prepare_eos_cellchat_inputs()`.
+#' @param database Optional CellChat mouse database override.
+#' @param seed Random seed for CellChat probability calculations.
+#' @param min_cells Minimum cells used by `filterCommunication()`.
+#'
+#' @return A list with status, message, package version, failed/completed stage,
+#'   optional CellChat object and extracted communication table.
+run_eos_spatial_cellchat <- function(
+    inputs,
+    database = NULL,
+    seed = 1234L,
+    min_cells = 10L
+) {
+  input_status <- as.character(inputs$status %||% "INVALID_INPUT")
+  if (!identical(input_status, "PASS")) {
+    return(list(
+      status = input_status,
+      message = as.character(inputs$message %||% "CellChat input preparation did not pass."),
+      package_version = NA_character_, stage = "INPUT_GATE",
+      object = NULL, communication = data.frame()
+    ))
+  }
+  if (!requireNamespace("CellChat", quietly = TRUE)) {
+    return(list(
+      status = "SKIPPED_PACKAGE_UNAVAILABLE",
+      message = "Optional package 'CellChat' is unavailable.",
+      package_version = NA_character_, stage = "PACKAGE_GATE",
+      object = NULL, communication = data.frame()
+    ))
+  }
+  package_version <- as.character(utils::packageVersion("CellChat"))
+  stage <- "CREATE_OBJECT"
+  result <- tryCatch({
+    set.seed(as.integer(seed))
+    cellchat <- CellChat::createCellChat(
+      object = inputs$data,
+      meta = inputs$meta,
+      group.by = "cellchat_group",
+      datatype = "spatial",
+      coordinates = inputs$coordinates,
+      scale.factors = inputs$scale_factors
+    )
+    stage <- "SET_DATABASE"
+    cellchat@DB <- database %||% getExportedValue("CellChat", "CellChatDB.mouse")
+    stage <- "SUBSET_DATA"
+    cellchat <- CellChat::subsetData(cellchat)
+    stage <- "OVEREXPRESSED_GENES"
+    cellchat <- CellChat::identifyOverExpressedGenes(cellchat)
+    stage <- "OVEREXPRESSED_INTERACTIONS"
+    cellchat <- CellChat::identifyOverExpressedInteractions(cellchat)
+    stage <- "COMMUNICATION_PROBABILITY"
+    cellchat <- CellChat::computeCommunProb(
+      cellchat,
+      type = "triMean",
+      distance.use = TRUE,
+      raw.use = TRUE
+    )
+    stage <- "FILTER_COMMUNICATION"
+    cellchat <- CellChat::filterCommunication(cellchat, min.cells = as.integer(min_cells))
+    stage <- "PATHWAY_PROBABILITY"
+    cellchat <- CellChat::computeCommunProbPathway(cellchat)
+    stage <- "AGGREGATE_NETWORK"
+    cellchat <- CellChat::aggregateNet(cellchat)
+    stage <- "EXTRACT_COMMUNICATION"
+    communication <- CellChat::subsetCommunication(cellchat)
+    list(object = cellchat, communication = as.data.frame(communication, stringsAsFactors = FALSE))
+  }, error = identity)
+  if (inherits(result, "error")) {
+    return(list(
+      status = "FAILED_CELLCHAT_RUNTIME",
+      message = conditionMessage(result), package_version = package_version,
+      stage = stage, object = NULL, communication = data.frame()
+    ))
+  }
+  list(
+    status = "PASS",
+    message = "Spatial CellChat completed; interpret within this section only.",
+    package_version = package_version,
+    stage = "COMPLETE",
+    object = result$object,
+    communication = result$communication
+  )
+}
+
+#' Filter and annotate Eosinophil-focused CellChat interactions
+#'
+#' @param table Communication table returned by CellChat.
+#' @param raw_p_max Maximum raw CellChat permutation p-value.
+#' @param adjusted_p_max Maximum BH-adjusted p-value across reported rows.
+#'
+#' @return A list containing the complete annotated table and the significant
+#'   Eosinophil-to-neighbour or neighbour-to-Eosinophil subset.
+filter_eos_cellchat_interactions <- function(
+    table,
+    raw_p_max = 0.05,
+    adjusted_p_max = 0.10
+) {
+  communication <- as.data.frame(table, stringsAsFactors = FALSE)
+  required <- c("source", "target", "interaction_name", "prob", "pval")
+  missing <- setdiff(required, names(communication))
+  if (length(missing)) stop("CellChat table missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  if (!nrow(communication)) {
+    communication$p_adjust_bh <- numeric()
+    communication$direction <- character()
+    communication$analysis_scope <- character()
+    return(list(all = communication, significant = communication))
+  }
+  communication$p_adjust_bh <- stats::p.adjust(communication$pval, method = "BH")
+  source_eos <- startsWith(as.character(communication$source), "Eos_")
+  target_eos <- startsWith(as.character(communication$target), "Eos_")
+  communication$direction <- ifelse(
+    source_eos & !target_eos, "EOS_TO_NEIGHBOUR",
+    ifelse(!source_eos & target_eos, "NEIGHBOUR_TO_EOS", "OUTSIDE_REQUESTED_DIRECTION")
+  )
+  communication$analysis_scope <- "EXPLORATORY_WITHIN_SECTION_CELLCHAT"
+  significant <- communication[
+    is.finite(communication$pval) & communication$pval < raw_p_max &
+      is.finite(communication$p_adjust_bh) & communication$p_adjust_bh < adjusted_p_max &
+      communication$direction != "OUTSIDE_REQUESTED_DIRECTION",
+    , drop = FALSE
+  ]
+  significant <- significant[order(significant$p_adjust_bh, -significant$prob), , drop = FALSE]
+  rownames(significant) <- NULL
+  list(all = communication, significant = significant)
+}
+
 #' Calculate the adjusted Rand index for two cluster assignments
 #'
 #' @param labels_a,labels_b Equal-length complete cluster-label vectors.
