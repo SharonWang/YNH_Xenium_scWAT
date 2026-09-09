@@ -247,3 +247,9 @@
 - Added `docs/superpowers/specs/2026-09-09-eos-spatial-wang-integration-design.md` with explicit inputs, thresholds, statistical interpretation, outputs, skip/failure gates and local-versus-HPC verification boundaries.
 - The design keeps CellChat group-based: continuous `EosState_balance` drives KNN association and prespecified state-enriched tails, while CellChat evaluates those groups. Section-level permutation results are not labelled mouse-level inference.
 - Existing Wang label transfer remains primary annotation evidence; the new joint embedding is a supporting cross-modality concordance diagnostic and cannot overwrite Xenium labels or allow Region 4 to define the primary reference.
+
+### 2026-09-09 — Test-first implementation plan
+
+- Converted the approved design into seven independently testable tasks in `docs/superpowers/plans/2026-09-09-eos-spatial-wang-integration.md`.
+- The plan sequences the namespace-safe mclust wrapper, cell/macaron ordering and plot contracts, four-stage Eosinophil KNN analysis, gated spatial CellChat adapter, Wang–Xenium integration diagnostics, deterministic regeneration of all 12 B2 notebooks, and bounded local/HPC verification.
+- Each behavior change begins with a failing test and ends with a focused commit. Full-data CellChat and Wang integration remain HPC checkpoints rather than unverified local claims.
