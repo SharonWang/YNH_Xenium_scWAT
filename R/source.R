@@ -213,8 +213,13 @@ validate_section_integrity <- function(region_dir, region_id) {
 #' Some R packages return nominal data frames containing matrix or list-valued
 #' columns. Base `write.table()` cannot reliably construct column names for
 #' these objects and can fail with a dimnames/array-extent error. Matrix/data
-#' frame columns are expanded with their parent column name; list cells are
-#' serialized to a deterministic ` | `-separated character value.
+#' frame columns with one nested row per outer row are expanded with their
+#' parent column name; list cells are serialized to a deterministic ` | `-
+#' separated character value. A nested table with a different row count cannot
+#' be aligned safely to the outer rows. In that case its complete `dput()`
+#' representation is stored once (in the first outer row), together with its
+#' nested dimensions. This preserves the optional diagnostic without inventing
+#' a row-wise correspondence or aborting the final-save checkpoint.
 #'
 #' @param x Object coercible to a data frame.
 #'
@@ -231,7 +236,24 @@ flatten_tsv_table <- function(x) {
       nested_value <- if (is.matrix(column)) unclass(column) else column
       expanded <- as.data.frame(nested_value, stringsAsFactors = FALSE, check.names = FALSE)
       if (nrow(expanded) != n_rows) {
-        stop("Nested TSV column has incompatible row count: ", parent, call. = FALSE)
+        serialized <- rep(NA_character_, n_rows)
+        nested_rows <- rep(NA_integer_, n_rows)
+        nested_cols <- rep(NA_integer_, n_rows)
+        if (n_rows > 0L) {
+          serialized[[1L]] <- paste(capture.output(dput(nested_value)), collapse = " ")
+          nested_rows[[1L]] <- nrow(nested_value)
+          nested_cols[[1L]] <- ncol(nested_value)
+        }
+        mismatch <- data.frame(
+          serialized, nested_rows, nested_cols,
+          stringsAsFactors = FALSE,
+          check.names = FALSE
+        )
+        names(mismatch) <- paste0(
+          parent,
+          c(".__nested_serialized__", ".__nested_rows__", ".__nested_cols__")
+        )
+        return(mismatch)
       }
       child_names <- names(expanded)
       if (is.null(child_names) || any(!nzchar(child_names))) {
@@ -267,9 +289,11 @@ flatten_tsv_table <- function(x) {
 write_tsv <- function(x, path, project_root) {
   assert_path_within(project_root, path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  table <- flatten_tsv_table(x)
   tryCatch(
-    utils::write.table(table, path, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA"),
+    {
+      table <- flatten_tsv_table(x)
+      utils::write.table(table, path, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
+    },
     error = function(error) {
       stop("Failed to write TSV '", path, "': ", conditionMessage(error), call. = FALSE)
     }
@@ -1039,9 +1063,11 @@ write_gz_tsv <- function(x, path, project_root) {
   assert_path_within(project_root, path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   con <- gzfile(path, "wt"); on.exit(close(con), add = TRUE)
-  table <- flatten_tsv_table(x)
   tryCatch(
-    utils::write.table(table, con, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA"),
+    {
+      table <- flatten_tsv_table(x)
+      utils::write.table(table, con, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
+    },
     error = function(error) {
       stop("Failed to write gzipped TSV '", path, "': ", conditionMessage(error), call. = FALSE)
     }

@@ -285,3 +285,11 @@
 - Traced the three `EosState_extreme not found` failures to metadata being dropped at table-construction boundaries. `calculate_eos_distance_by_cell_type()` now propagates the tail label into its cell-level result, `rank_eos_state_knn_associations()` propagates it into `per_eos`, and Step 10.1 uses the enriched `spatial_pools$all` table rather than the earlier coordinate table.
 - Replaced lymph-node radius expansion with the requested largest-cluster rule. After local lymphoid-enrichment selection, DBSCAN runs on preliminary core coordinates with `eps=80` and `minPts=10`; cluster 0 is noise, only the largest non-zero cluster is eligible, deterministic ties use the smallest cluster ID, and the retained cluster must still contain at least 100 cells.
 - Added `lymph_node_dbscan_cluster_sizes.tsv` and cell-level preliminary-core/DBSCAN-cluster fields so the selection can be reviewed directly.
+
+### 2026-09-10 — Nested `x` final-save regression fix
+
+- Reproduced the HPC error `Nested TSV column has incompatible row count: x` with the same structural condition: a two-row outer result containing a three-row nested `AsIs` data-frame column named `x`.
+- Root cause: the shared TSV rectangularizer assumed every nested matrix/data-frame column had one nested row per outer row. Optional-package result objects can legally violate that assumption, so the final output checkpoint stopped before writing the remaining audit files.
+- Preserved the existing behavior for aligned nested columns. A non-aligned nested object is now retained once as a deterministic serialized payload, with explicit `__nested_rows__` and `__nested_cols__` audit fields; no row-wise relationship is invented and no result column is silently discarded.
+- Moved rectangularization inside the path-aware error handlers for both plain and gzipped TSV writers. Any future export failure will identify the exact destination file.
+- Added an exact regression fixture to `tests/test_eos_extended_helpers.R`; the pre-fix test reproduced the reported error and the post-fix round trip retained two outer rows plus the complete nested payload and its 3-by-2 dimensions.

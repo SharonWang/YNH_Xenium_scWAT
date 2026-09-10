@@ -124,6 +124,34 @@ stopifnot(
   nested_roundtrip$list_metric[[1L]] == "u | v"
 )
 
+# Break caught on HPC: some optional-package outputs contain a nested data-frame
+# column whose internal row count differs from the enclosing table. The writer
+# must retain the outer rows and preserve that nested payload once, rather than
+# aborting the complete final-save checkpoint.
+mismatched_nested_table <- structure(
+  list(
+    id = c("a", "b"),
+    x = I(data.frame(component = 1:3, score = c(0.1, 0.2, 0.3)))
+  ),
+  class = "data.frame",
+  row.names = .set_row_names(2L)
+)
+mismatched_nested_path <- file.path(Sys.getenv("TMPDIR"), "mismatched_nested_table.tsv")
+write_tsv(mismatched_nested_table, mismatched_nested_path, Sys.getenv("TMPDIR"))
+mismatched_nested_roundtrip <- read.delim(
+  mismatched_nested_path, check.names = FALSE, stringsAsFactors = FALSE
+)
+stopifnot(
+  nrow(mismatched_nested_roundtrip) == 2L,
+  all(c(
+    "x.__nested_serialized__", "x.__nested_rows__", "x.__nested_cols__"
+  ) %in% colnames(mismatched_nested_roundtrip)),
+  grepl("component", mismatched_nested_roundtrip$x.__nested_serialized__[[1L]], fixed = TRUE),
+  is.na(mismatched_nested_roundtrip$x.__nested_serialized__[[2L]]),
+  mismatched_nested_roundtrip$x.__nested_rows__[[1L]] == 3L,
+  mismatched_nested_roundtrip$x.__nested_cols__[[1L]] == 2L
+)
+
 # Break caught: spatial pools are joined by row position, Eosinophils leak into
 # the reference pool, or k-neighbour edge counts/distances are incorrect.
 spatial_fixture <- data.frame(
