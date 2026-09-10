@@ -293,3 +293,10 @@
 - Preserved the existing behavior for aligned nested columns. A non-aligned nested object is now retained once as a deterministic serialized payload, with explicit `__nested_rows__` and `__nested_cols__` audit fields; no row-wise relationship is invented and no result column is silently discarded.
 - Moved rectangularization inside the path-aware error handlers for both plain and gzipped TSV writers. Any future export failure will identify the exact destination file.
 - Added an exact regression fixture to `tests/test_eos_extended_helpers.R`; the pre-fix test reproduced the reported error and the post-fix round trip retained two outer rows plus the complete nested payload and its 3-by-2 dimensions.
+
+### 2026-09-10 — Worktree promotion and retirement
+
+- Promoted branch `codex/split-region-domain-notebooks` to the project-root checkout at `YNH_Xenium_scWAT`.
+- Recreated the former root branch `codex/notebook-qc-pipeline` as the clean backup worktree `.worktrees/notebook-qc-pipeline-backup`.
+- Removed the registered worktrees `region3-complete479-review` and `region3-anchor-reference`; their local Git branches were retained so their committed histories remain recoverable.
+- Before removing `region3-anchor-reference`, preserved its unique untracked 7.7 MB notebook at `.worktrees/retired-untracked-backup/region3-anchor-reference/notebooks/03_run_region3_new.ipynb`. Its SHA-256 remains `2EFB6D930EDF1A456FFE6D1A0CF8A1A831EF462F2B930B7CB45D022FC7612F42`.
