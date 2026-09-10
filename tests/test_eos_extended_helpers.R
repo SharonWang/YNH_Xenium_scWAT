@@ -170,13 +170,16 @@ stopifnot(sum(composition$overall$n_edges) == 6L)
 distance_by_type <- calculate_eos_distance_by_cell_type(pools, min_reference_cells = 2L)
 stopifnot(
   nrow(distance_by_type$cell_level) == 6L,
-  setequal(distance_by_type$summary$reference_cell_type, c("ASC", "Macrophage", "T"))
+  setequal(distance_by_type$summary$reference_cell_type, c("ASC", "Macrophage", "T")),
+  "EosState_extreme" %in% colnames(distance_by_type$cell_level),
+  setequal(unique(distance_by_type$cell_level$EosState_extreme), c("Short-lived-like", "Long-lived-like"))
 )
 
 association_edges <- data.frame(
   eos_cell_id = rep(c("e1", "e2", "e3"), each = 3L),
   reference_cell_type = c("ASC", "ASC", "T", "ASC", "Macrophage", "T", "Macrophage", "Macrophage", "T"),
   EosState_balance = rep(c(-1, 0, 1), each = 3L),
+  EosState_extreme = rep(c("Short-lived-like", "Intermediate", "Long-lived-like"), each = 3L),
   stringsAsFactors = FALSE
 )
 ranking <- rank_eos_state_knn_associations(
@@ -189,7 +192,9 @@ stopifnot(
   ranking$full$spearman_rho[ranking$full$reference_cell_type == "ASC"] == -1,
   ranking$full$spearman_rho[ranking$full$reference_cell_type == "Macrophage"] == 1,
   identical(ranking$short_top[[1L]], "ASC"),
-  identical(ranking$long_top[[1L]], "Macrophage")
+  identical(ranking$long_top[[1L]], "Macrophage"),
+  "EosState_extreme" %in% colnames(ranking$per_eos),
+  all(ranking$per_eos$EosState_extreme[ranking$per_eos$eos_cell_id == "e1"] == "Short-lived-like")
 )
 
 # Break caught: continuous Eosinophil scores are passed directly to CellChat,

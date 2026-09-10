@@ -113,19 +113,25 @@ ln_domain <- derive_lymph_node_domain(
   lymphoid_labels = c("B", "T"),
   k = 3L,
   lymphoid_fraction_threshold = 2 / 3,
-  expansion_radius = 2,
-  min_core_cells = 3L
+  min_core_cells = 3L,
+  dbscan_eps = 80,
+  dbscan_min_pts = 2L,
+  dbscan_fun = function(x, eps, minPts) list(cluster = c(rep(1L, 6L), rep(2L, 3L), 0L))
 )
 stopifnot(
   identical(ln_domain$status, "LN_CANDIDATE"),
-  all(ln_domain$cell_table$lymph_node_include[1:10]),
-  !any(ln_domain$cell_table$lymph_node_include[11:20])
+  identical(ln_domain$largest_cluster_id, 1L),
+  all(ln_domain$cell_table$lymph_node_include[1:6]),
+  !any(ln_domain$cell_table$lymph_node_include[7:20]),
+  identical(ln_domain$counts$n_domain, 6L),
+  identical(ln_domain$counts$n_dbscan_noise, 1L),
+  0L %in% ln_domain$dbscan_cluster_sizes$cluster
 )
 ln_sensitivity <- summarise_ln_boundary_sensitivity(list(
   primary = ln_domain$cell_table$lymph_node_include,
   identical = ln_domain$cell_table$lymph_node_include,
   narrower = c(rep(TRUE, 8), rep(FALSE, 12))
 ))
-stopifnot(nrow(ln_sensitivity$pairwise) == 3L, ln_sensitivity$summary$minimum_jaccard == 0.8)
+stopifnot(nrow(ln_sensitivity$pairwise) == 3L, ln_sensitivity$summary$minimum_jaccard == 0.75)
 
 cat("Tissue-branch and spatial-safety helper tests passed.\n")

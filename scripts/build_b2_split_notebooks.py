@@ -131,6 +131,7 @@ required_packages <- c(
   "Seurat", "SeuratObject", "Matrix", "dplyr", "tidyr", "tibble",
   "ggplot2", "FNN", "patchwork"
 )
+if (ANALYSIS_BRANCH == "all_QCpass") required_packages <- c(required_packages, "dbscan")
 missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing_packages)) {
   stop("Missing HPC packages: ", paste(missing_packages, collapse = ", "),
@@ -482,7 +483,7 @@ region_spatial@meta.data <- metadata_joined
 subtype_result$annotation'''),
         md("""## 8. Wang-reference transfer and conservative reconciliation
 
-The 2.5-month reference is primary because the study mice are eight weeks old. The all-age transfer is retained as a sensitivity comparison. Both use all shared genes from the 479-gene panel. Fine labels with review-level evidence receive an explicit `Uncertain` analysis label rather than a forced assignment."""),
+The complete all-age Wang reference is primary to maximize reference Eosinophil representation for transfer and joint-embedding diagnostics. The 2.5-month transfer is retained as an age-matched sensitivity comparison. Both use all shared genes from the 479-gene panel. Fine labels with review-level evidence receive an explicit `Uncertain` analysis label rather than a forced assignment."""),
         code('''WANG_REFERENCE_PATH <- Sys.getenv(
   "SCWAT_WANG_REFERENCE",
   "/dssg/home/acct-svetoslav_chakarov/svetoslav_chakarov/Data/External_Data/Wang_Science2025_mouse_human/analysis_mouse/Wang_Science2025_cleaned_seurat.rds"
@@ -521,7 +522,10 @@ scwat_ref$Wang_main <- case_when(
 stopifnot(!anyNA(scwat_ref$Wang_main))
 ref_2p5 <- subset(scwat_ref, subset = Condition == "2.5 months")
 ref_all <- scwat_ref
-table(ref_2p5$Wang_subtype_harmonized)'''),
+list(
+  all_age_primary = table(ref_all$Wang_subtype_harmonized),
+  age_matched_sensitivity = table(ref_2p5$Wang_subtype_harmonized)
+)'''),
         code('''annotation_genes <- Reduce(intersect, list(FIX_GENESET, rownames(ref_all), rownames(region_spatial)))
 stopifnot(length(annotation_genes) >= 100L)
 transfer_2p5 <- run_wang_transfer(ref_2p5, region_spatial, annotation_genes, prefix = "Ref2p5")
@@ -532,7 +536,7 @@ region_spatial <- AddMetaData(region_spatial, transfer_all$main)
 region_spatial <- AddMetaData(region_spatial, transfer_all$subtype)
 annotation_result <- refine_xenium_celltypes(
   region_spatial, reduction = "pca", dims = dims_use, k = 15,
-  self_weight = 0.70, wang_prefix = "Ref2p5"
+  self_weight = 0.70, wang_prefix = "RefAll"
 )
 region_spatial <- annotation_result$object
 region_spatial$Final_CellType_subtype_with_uncertain <- ifelse(
@@ -606,10 +610,10 @@ print(style_cell_plot(DotPlot(
 
 The inclusive set is the union of existing Eosinophil annotation and Tier 1/2 evidence, matching the prior analysis. Crucially, rescued cells do not overwrite the principal cell-type label. Origin, evidence tier and confidence remain separate fields."""),
         code('''eos_result <- score_eosinophil_likeness(
-  reference = ref_2p5, query = region_spatial,
+  reference = ref_all, query = region_spatial,
   reference_group_col = "Wang_subtype_harmonized",
-  wang_predicted_col = "Ref2p5_subtype_predicted.id",
-  wang_eos_score_col = "Ref2p5_subtype_prediction.score.Eosinophil"
+  wang_predicted_col = "RefAll_subtype_predicted.id",
+  wang_eos_score_col = "RefAll_subtype_prediction.score.Eosinophil"
 )
 region_spatial <- eos_result$object
 existing_eos <- as.character(region_spatial$Final_CellType_subtype) == "Eosinophil"
@@ -646,9 +650,9 @@ plot_target_overlay(
 )'''),
         md("""### 9.1 Wang–Xenium joint integration diagnostic
 
-This is deliberately separate from label transfer. A deterministic, subtype-balanced 2.5-month Wang sample is jointly integrated with the Xenium section by Seurat CCA using only genes shared with the complete 479-gene panel. The integrated UMAP and cross-dataset Eosinophil-neighbour summaries assess alignment; they do not replace the Xenium PCA, clusters or final labels."""),
+This is deliberately separate from label transfer. A deterministic, subtype-balanced sample from the complete all-age Wang reference is jointly integrated with the Xenium section by Seurat CCA using only genes shared with the complete 479-gene panel. The larger reference Eosinophil pool improves the diagnostic's ability to reveal an Eosinophil-enriched joint cluster. The integrated UMAP and cross-dataset Eosinophil-neighbour summaries assess alignment; they do not replace the Xenium PCA, clusters or final labels."""),
         code('''wang_reference_balanced <- sample_wang_reference(
-  ref_2p5, subtype_col = "Wang_subtype_harmonized",
+  ref_all, subtype_col = "Wang_subtype_harmonized",
   max_per_subtype = as.integer(Sys.getenv("SCWAT_WANG_MAX_PER_SUBTYPE", "1000")),
   seed = RANDOM_SEED
 )
@@ -856,21 +860,36 @@ mclust_status <- data.frame(
 mclust_status'''),
         code('''if (RUN_EOS_STATE) {
   options(repr.plot.width = 13, repr.plot.height = 5)
-  print(
-    style_cell_plot(ggplot(eos_obj@meta.data, aes(EosState_balance, fill = EosState_extreme)) +
-      geom_histogram(bins = 30, colour = "white", linewidth = 0.2) + geom_vline(xintercept = 0, linetype = 2) +
-      scale_fill_manual(values = c("Short-lived-like" = "#3979A8", "Intermediate" = "#CFCFCF", "Long-lived-like" = "#B84E4B")) +
-      labs(title = "Continuous Eosinophil-state balance", x = "Long-lived-like − short-lived-like", y = "Cells", fill = NULL))
-  )
   eos_state_scatter_data <- eos_obj@meta.data %>% rownames_to_column("cell_id")
-  eos_state_scatter <- plot_target_overlay(
-    eos_state_scatter_data, x_col = "EosShort_z", y_col = "EosLong_z", group_col = "EosState_extreme",
-    target_labels = c("Short-lived-like", "Long-lived-like"),
-    palette = c("Short-lived-like" = "#3979A8", "Intermediate" = "#CFCFCF", "Long-lived-like" = "#B84E4B"),
-    background_size = 0.75, target_size = 1.65,
-    title = "Eosinophil state is displayed as a continuum"
-  ) + geom_abline(slope = 1, intercept = 0, linetype = 2, colour = "grey55")
-  print(eos_state_scatter)
+  eos_state_intermediate <- eos_state_scatter_data %>% filter(EosState_extreme == "Intermediate")
+  eos_state_tails <- eos_state_scatter_data %>%
+    filter(EosState_extreme %in% c("Short-lived-like", "Long-lived-like"))
+  state_range <- range(eos_state_scatter_data$EosState_balance, na.rm = TRUE)
+  state_binwidth <- diff(state_range) / 30
+  if (!is.finite(state_binwidth) || state_binwidth <= 0) state_binwidth <- 1
+  eos_state_histogram <- ggplot() +
+    geom_histogram(
+      data = eos_state_intermediate, aes(EosState_balance, fill = EosState_extreme),
+      binwidth = state_binwidth, boundary = state_range[[1L]], colour = "white", linewidth = 0.2
+    ) +
+    geom_histogram(
+      data = eos_state_tails, aes(EosState_balance, fill = EosState_extreme),
+      binwidth = state_binwidth, boundary = state_range[[1L]], colour = "white", linewidth = 0.2
+    ) +
+    geom_vline(xintercept = 0, linetype = 2) +
+    scale_fill_manual(values = c("Short-lived-like" = "#3979A8", "Intermediate" = "#CFCFCF", "Long-lived-like" = "#B84E4B")) +
+    labs(title = "Continuous Eosinophil-state balance", x = "Long-lived-like − short-lived-like", y = "Cells", fill = NULL)
+  eos_state_scatter <- ggplot() +
+    geom_point(data = eos_state_intermediate, aes(EosShort_z, EosLong_z),
+               colour = "#CFCFCF", size = 0.75, alpha = 0.55) +
+    geom_point(data = eos_state_tails, aes(EosShort_z, EosLong_z, colour = EosState_extreme),
+               size = 1.65, alpha = 0.95) +
+    geom_abline(slope = 1, intercept = 0, linetype = 2, colour = "grey55") +
+    scale_colour_manual(values = c("Short-lived-like" = "#3979A8", "Long-lived-like" = "#B84E4B")) +
+    labs(title = "Eosinophil state is displayed as a continuum", x = "Short-lived signature z-score",
+         y = "Long-lived signature z-score", colour = NULL)
+  print(style_cell_plot(eos_state_histogram))
+  print(style_cell_plot(eos_state_scatter))
   plot_eos_state_heatmap(eos_obj, eos_gene_sets)
 }'''),
         md("""### 10.A Exploratory within-section state-associated markers
@@ -962,7 +981,7 @@ RUN_EOS_SPATIAL <- identical(spatial_pools$status, "PASS")
 spatial_pool_gate <- spatial_pools$gate
 print(spatial_pool_gate)
 if (RUN_EOS_SPATIAL) {
-  spatial_pool_plot_data <- coordinates %>% mutate(
+  spatial_pool_plot_data <- spatial_pools$all %>% mutate(
     display_group = case_when(
       EosState_extreme == "Short-lived-like" ~ "Short-lived-like",
       EosState_extreme == "Long-lived-like" ~ "Long-lived-like",
@@ -1173,7 +1192,7 @@ if (nrow(cellchat_significant_interactions)) {
         cells.extend([
             md("""## 12. Derive, visualize and freeze the lymph-node domain
 
-The candidate domain is based on local enrichment of confidently annotated lymphoid/DC cells and a limited spatial expansion that includes nearby stromal and vascular cells. It does not use a convex hull. Multiple parameter settings are compared; poor boundary agreement is a review gate. If insufficient core cells are found, the status is `LN_NOT_DETECTED` and no LN-only analysis should be forced."""),
+The preliminary core is based on local enrichment of confidently annotated lymphoid/DC cells. DBSCAN is then run only on those core coordinates with `eps = 80` and `minPts = 10`; cluster 0 is noise, and only the largest non-noise cluster is retained as the lymph-node domain. There is no spatial expansion beyond that cluster. Multiple local-enrichment settings are compared; poor boundary agreement is a review gate. If the retained largest cluster is too small, the status is `LN_NOT_DETECTED` and no LN-only analysis is forced."""),
             code('''ln_cell_types <- c("B", "T", "γδ T", "NK", "Plasma", "cDC1", "cDC2", "CCR7_migratory_DC")
 ln_input <- coordinates %>% transmute(
   cell_id = cell, x = x, y = y,
@@ -1184,26 +1203,29 @@ ln_input <- coordinates %>% transmute(
   )
 )
 ln_parameter_grid <- tribble(
-  ~setting, ~k, ~fraction, ~radius,
-  "primary", 30L, 0.50, 80,
-  "lower_fraction", 30L, 0.40, 80,
-  "higher_fraction", 30L, 0.60, 80,
-  "smaller_neighbourhood", 20L, 0.50, 60,
-  "larger_neighbourhood", 40L, 0.50, 100
+  ~setting, ~k, ~fraction,
+  "primary", 30L, 0.50,
+  "lower_fraction", 30L, 0.40,
+  "higher_fraction", 30L, 0.60,
+  "smaller_neighbourhood", 20L, 0.50,
+  "larger_neighbourhood", 40L, 0.50
 )
 ln_results <- setNames(lapply(seq_len(nrow(ln_parameter_grid)), function(i) {
   derive_lymph_node_domain(
     ln_input, lymphoid_labels = ln_cell_types,
     k = ln_parameter_grid$k[[i]],
     lymphoid_fraction_threshold = ln_parameter_grid$fraction[[i]],
-    expansion_radius = ln_parameter_grid$radius[[i]], min_core_cells = 100L
+    min_core_cells = 100L, dbscan_eps = 80, dbscan_min_pts = 10L
   )
 }), ln_parameter_grid$setting)
 ln_counts <- bind_rows(lapply(names(ln_results), function(setting) cbind(
   setting = setting, ln_results[[setting]]$parameters, ln_results[[setting]]$counts,
+  largest_cluster_id = ln_results[[setting]]$largest_cluster_id,
   status = ln_results[[setting]]$status
 )))
-ln_counts'''),
+ln_counts
+primary_dbscan_cluster_sizes <- ln_results$primary$dbscan_cluster_sizes
+primary_dbscan_cluster_sizes'''),
             code('''ln_masks <- lapply(ln_results, function(result) result$cell_table$lymph_node_include)
 ln_boundary_sensitivity <- summarise_ln_boundary_sensitivity(ln_masks)
 ln_boundary_sensitivity$pairwise
@@ -1211,13 +1233,19 @@ ln_boundary_sensitivity$summary
 primary_ln <- ln_results$primary
 ln_plot_data <- cbind(
   ln_input,
-  primary_ln$cell_table[, c("direct_lymphoid_evidence", "local_lymphoid_fraction", "lymph_node_core", "lymph_node_include")]
+  primary_ln$cell_table[, c("direct_lymphoid_evidence", "local_lymphoid_fraction",
+                            "lymph_node_preliminary_core", "lymph_node_dbscan_cluster",
+                            "lymph_node_core", "lymph_node_include")]
 )
 options(repr.plot.width = 15, repr.plot.height = 6)
-ggplot(ln_plot_data, aes(x, y, colour = lymph_node_include)) +
-  geom_point(size = 0.15, alpha = 0.7) + coord_fixed() +
-  scale_colour_manual(values = c("FALSE" = "#D9D9D9", "TRUE" = "#C9B6DF")) +
-  labs(title = paste(REGION_ID, primary_ln$status, "primary lymph-node domain"), colour = "LN domain") + theme_void()
+ln_plot_data$lymph_node_include_display <- as.character(ln_plot_data$lymph_node_include)
+print(plot_target_overlay(
+  ln_plot_data, x_col = "x", y_col = "y", group_col = "lymph_node_include_display",
+  target_labels = "TRUE", palette = c("FALSE" = "#D9D9D9", "TRUE" = "#694F85"),
+  background_size = 0.10, target_size = 0.85,
+  title = paste(REGION_ID, primary_ln$status, "largest DBSCAN lymph-node cluster"),
+  legend_title = "LN domain", fixed_coordinates = TRUE
+))
 ggplot(ln_plot_data, aes(x, y, colour = local_lymphoid_fraction)) +
   geom_point(size = 0.15) + coord_fixed() + scale_colour_gradient(low = "#F8EEF2", high = "#9FC8D8") +
   labs(title = "Local confident lymphoid/DC fraction", colour = "Local fraction") + theme_void()'''),
@@ -1226,7 +1254,8 @@ masks$primary_include_revised <- derive_primary_include_revised(masks)
 domain_manifest <- build_tissue_branch_manifest(
   masks, lymph_node_cell_ids = ln_cell_ids,
   provenance = paste(
-    RUN_LABEL, REGION_ID, "k=30", "lymphoid_fraction>=0.50", "expansion_radius=80",
+    RUN_LABEL, REGION_ID, "k=30", "lymphoid_fraction>=0.50", "dbscan_eps=80",
+    "dbscan_minPts=10", paste0("largest_cluster=", primary_ln$largest_cluster_id),
     primary_ln$status, sep = "::"
   )
 )
@@ -1237,6 +1266,7 @@ stopifnot(
 write_gz_tsv(domain_manifest, file.path(REGION_SHARED_ROOT, "lymph_node_domain_manifest.tsv.gz"), PROJECT_ROOT)
 write_tsv(ln_boundary_sensitivity$pairwise, file.path(REGION_SHARED_ROOT, "lymph_node_boundary_sensitivity.tsv"), PROJECT_ROOT)
 write_tsv(ln_counts, file.path(REGION_SHARED_ROOT, "lymph_node_boundary_counts.tsv"), PROJECT_ROOT)
+write_tsv(primary_dbscan_cluster_sizes, file.path(REGION_SHARED_ROOT, "lymph_node_dbscan_cluster_sizes.tsv"), PROJECT_ROOT)
 write_gz_tsv(primary_ln$cell_table, file.path(REGION_SHARED_ROOT, "lymph_node_domain_diagnostics.tsv.gz"), PROJECT_ROOT)
 table(domain_manifest$tissue_domain)'''),
         ])

@@ -85,6 +85,13 @@ class SplitB2NotebookContracts(unittest.TestCase):
                 self.assertIn('filter(EosState_extreme %in% c("Short-lived-like", "Long-lived-like"))', text)
                 self.assertIn("top_short = eos_knn_state_association$short_top", text)
                 self.assertIn("top_long = eos_knn_state_association$long_top", text)
+                self.assertIn("reference = ref_all", text)
+                self.assertIn("wang_prefix = \"RefAll\"", text)
+                self.assertIn("spatial_pool_plot_data <- spatial_pools$all", text)
+                self.assertIn("eos_state_intermediate", text)
+                self.assertIn("eos_state_tails", text)
+                self.assertIn("print(style_cell_plot(eos_state_histogram))", text)
+                self.assertIn("print(style_cell_plot(eos_state_scatter))", text)
                 self.assertNotIn("subtitle =", text)
                 self.assertNotIn("EXPLORATORY_SPATIAL_COEXPRESSION_NOT_CELLCHAT_INFERENCE", text)
                 spatial_text = text.split("## 10.1", 1)[1].split("Save branch-specific audit outputs", 1)[0]
@@ -110,6 +117,10 @@ class SplitB2NotebookContracts(unittest.TestCase):
             self.assertIn("build_tissue_branch_manifest", text)
             self.assertIn("lymph_node_domain_manifest.tsv.gz", text)
             self.assertIn("lymph_node_boundary_sensitivity.tsv", text)
+            self.assertIn("dbscan_eps = 80", text)
+            self.assertIn("dbscan_min_pts = 10L", text)
+            self.assertIn("largest_cluster_id", text)
+            self.assertIn("lymph_node_dbscan_cluster_sizes.tsv", text)
 
     def test_child_notebooks_consume_but_do_not_rederive_the_frozen_partition(self):
         for region in range(1, 5):

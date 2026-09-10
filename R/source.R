@@ -8315,6 +8315,7 @@ calculate_eos_distance_by_cell_type <- function(pools, min_reference_cells = 20L
       reference_cell_type = cell_type_name,
       distance = distance,
       EosState_balance = query$EosState_balance,
+      EosState_extreme = query$EosState_extreme,
       stringsAsFactors = FALSE
     )
   }))
@@ -8360,11 +8361,14 @@ rank_eos_state_knn_associations <- function(
     min_eos = 20L,
     top_n = 3L
 ) {
-  required <- c("eos_cell_id", "reference_cell_type", "EosState_balance")
+  required <- c("eos_cell_id", "reference_cell_type", "EosState_balance", "EosState_extreme")
   missing <- setdiff(required, names(edges_k15))
   if (length(missing)) stop("KNN edges missing: ", paste(missing, collapse = ", "), call. = FALSE)
   edges <- as.data.frame(edges_k15, stringsAsFactors = FALSE)
   state_by_eos <- tapply(edges$EosState_balance, edges$eos_cell_id, function(x) unique(x[is.finite(x)]))
+  extreme_by_eos <- tapply(as.character(edges$EosState_extreme), edges$eos_cell_id, function(x) {
+    unique(x[!is.na(x) & nzchar(x)])
+  })
   valid_state <- vapply(state_by_eos, length, integer(1)) == 1L
   eos_ids <- names(state_by_eos)[valid_state]
   if (length(eos_ids) < as.integer(min_eos)) {
@@ -8397,6 +8401,11 @@ rank_eos_state_knn_associations <- function(
   per_eos$EosState_balance <- as.numeric(vapply(
     state_by_eos[per_eos$eos_cell_id], `[[`, numeric(1), 1L
   ))
+  per_eos$EosState_extreme <- vapply(
+    extreme_by_eos[per_eos$eos_cell_id],
+    function(x) if (length(x) == 1L) x[[1L]] else NA_character_,
+    character(1)
+  )
   split_type <- split(per_eos, per_eos$reference_cell_type)
   full <- do.call(rbind, lapply(names(split_type), function(cell_type_name) {
     x <- split_type[[cell_type_name]]
@@ -9204,12 +9213,17 @@ summarise_pca_qc_correlations <- function(
 #' @param cell_id_col,x_col,y_col,label_col Input column names.
 #' @param k Number of neighbouring cells used for local enrichment.
 #' @param lymphoid_fraction_threshold Minimum local fraction defining core cells.
-#' @param expansion_radius Maximum coordinate-space distance used to include
-#'   stromal/vascular cells surrounding an LN core.
 #' @param min_core_cells Minimum enriched core size required to call a candidate.
+#' @param dbscan_eps DBSCAN radius applied to preliminary LN-core coordinates.
+#' @param dbscan_min_pts Minimum DBSCAN points. Cluster zero is treated as noise.
+#' @param dbscan_fun Optional function with the `dbscan(x, eps, minPts)`
+#'   contract. Defaults to `dbscan::dbscan`; injection supports deterministic
+#'   local tests when the optional HPC package is unavailable.
 #'
 #' @return A list with status, parameters, a cell-level diagnostic table, and
-#'   counts. `LN_NOT_DETECTED` returns an all-FALSE domain instead of forcing LN.
+#'   counts. Only the largest non-noise DBSCAN cluster is included. Ties are
+#'   resolved by the smallest integer cluster ID. `LN_NOT_DETECTED` returns an
+#'   all-FALSE domain instead of forcing an underpowered LN domain.
 derive_lymph_node_domain <- function(
     cell_metadata,
     lymphoid_labels,
@@ -9219,8 +9233,10 @@ derive_lymph_node_domain <- function(
     label_col = "cell_type",
     k = 30L,
     lymphoid_fraction_threshold = 0.5,
-    expansion_radius = 80,
-    min_core_cells = 100L
+    min_core_cells = 100L,
+    dbscan_eps = 80,
+    dbscan_min_pts = 10L,
+    dbscan_fun = NULL
 ) {
   require_package("FNN")
   required <- c(cell_id_col, x_col, y_col, label_col)
@@ -9235,34 +9251,84 @@ derive_lymph_node_domain <- function(
   k <- as.integer(k)
   if (n < 3L || k < 1L || k >= n) stop("k must be between 1 and the number of cells minus one.", call. = FALSE)
   if (!is.finite(lymphoid_fraction_threshold) || lymphoid_fraction_threshold < 0 || lymphoid_fraction_threshold > 1) stop("lymphoid_fraction_threshold must be between zero and one.", call. = FALSE)
-  if (!is.finite(expansion_radius) || expansion_radius < 0) stop("expansion_radius must be non-negative.", call. = FALSE)
+  if (!is.finite(dbscan_eps) || dbscan_eps <= 0) stop("dbscan_eps must be positive.", call. = FALSE)
+  dbscan_min_pts <- as.integer(dbscan_min_pts)
+  if (!is.finite(dbscan_min_pts) || dbscan_min_pts < 1L) stop("dbscan_min_pts must be a positive integer.", call. = FALSE)
   neighbour_index <- FNN::get.knn(coordinates, k = k)$nn.index
   lymphoid <- as.character(cell_metadata[[label_col]]) %in% lymphoid_labels
   local_fraction <- rowMeans(matrix(lymphoid[neighbour_index], nrow = n, ncol = k))
-  core <- local_fraction >= lymphoid_fraction_threshold
+  preliminary_core <- local_fraction >= lymphoid_fraction_threshold
   minimum <- as.integer(min_core_cells)
+  dbscan_cluster <- rep(NA_integer_, n)
+  largest_cluster_id <- NA_integer_
+  cluster_sizes <- data.frame(cluster = integer(), n_cells = integer())
+  core <- rep(FALSE, n)
+  if (sum(preliminary_core) >= dbscan_min_pts) {
+    if (is.null(dbscan_fun)) {
+      require_package("dbscan")
+      dbscan_fun <- getExportedValue("dbscan", "dbscan")
+    }
+    fit <- dbscan_fun(
+      coordinates[preliminary_core, , drop = FALSE],
+      eps = dbscan_eps,
+      minPts = dbscan_min_pts
+    )
+    clusters <- as.integer(fit$cluster)
+    if (length(clusters) != sum(preliminary_core) || anyNA(clusters) || any(clusters < 0L)) {
+      stop("DBSCAN must return one non-negative cluster ID per preliminary core cell.", call. = FALSE)
+    }
+    dbscan_cluster[preliminary_core] <- clusters
+    size_table <- table(clusters)
+    cluster_sizes <- data.frame(
+      cluster = as.integer(names(size_table)),
+      n_cells = as.integer(size_table),
+      stringsAsFactors = FALSE
+    )
+    non_noise_sizes <- cluster_sizes[cluster_sizes$cluster > 0L, , drop = FALSE]
+    if (nrow(non_noise_sizes)) {
+      largest_candidates <- non_noise_sizes$cluster[
+        non_noise_sizes$n_cells == max(non_noise_sizes$n_cells)
+      ]
+      largest_cluster_id <- min(largest_candidates)
+      core[preliminary_core] <- clusters == largest_cluster_id
+    }
+  }
   status <- if (sum(core) >= minimum) "LN_CANDIDATE" else "LN_NOT_DETECTED"
-  distance_to_core <- rep(Inf, n)
   include <- rep(FALSE, n)
   if (status == "LN_CANDIDATE") {
-    nearest <- FNN::get.knnx(coordinates[core, , drop = FALSE], coordinates, k = 1L)
-    distance_to_core <- as.numeric(nearest$nn.dist[, 1L])
-    include <- distance_to_core <= expansion_radius
+    include <- core
   }
   cell_table <- data.frame(
     cell_id = ids,
     direct_lymphoid_evidence = lymphoid,
     local_lymphoid_fraction = local_fraction,
+    lymph_node_preliminary_core = preliminary_core,
+    lymph_node_dbscan_cluster = dbscan_cluster,
     lymph_node_core = core,
-    distance_to_lymph_node_core = distance_to_core,
     lymph_node_include = include,
     stringsAsFactors = FALSE
   )
   list(
     status = status,
-    parameters = data.frame(k = k, lymphoid_fraction_threshold = lymphoid_fraction_threshold, expansion_radius = expansion_radius, min_core_cells = minimum),
+    parameters = data.frame(
+      k = k,
+      lymphoid_fraction_threshold = lymphoid_fraction_threshold,
+      min_core_cells = minimum,
+      dbscan_eps = dbscan_eps,
+      dbscan_min_pts = dbscan_min_pts
+    ),
     cell_table = cell_table,
-    counts = data.frame(n_cells = n, n_direct_lymphoid = sum(lymphoid), n_core = sum(core), n_domain = sum(include), stringsAsFactors = FALSE)
+    counts = data.frame(
+      n_cells = n,
+      n_direct_lymphoid = sum(lymphoid),
+      n_preliminary_core = sum(preliminary_core),
+      n_dbscan_noise = sum(dbscan_cluster == 0L, na.rm = TRUE),
+      n_core = sum(core),
+      n_domain = sum(include),
+      stringsAsFactors = FALSE
+    ),
+    dbscan_cluster_sizes = cluster_sizes,
+    largest_cluster_id = largest_cluster_id
   )
 }
 
