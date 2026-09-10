@@ -20,7 +20,12 @@ required_active_functions <- c(
   "write_scwat_slide_qc_bundle", "validate_scwat_slide_qc_bundle",
   "region_bundle_to_spatial_seurat", "refine_eosinophil_identity",
   "score_eosinophil_likeness", "plot_eos_with_celltypes",
-  "validate_runtime_paths"
+  "validate_runtime_paths", "derive_primary_include_revised",
+  "build_tissue_branch_manifest", "select_tissue_branch_ids",
+  "validate_disjoint_spatial_pools", "validate_neighbour_distances",
+  "adjusted_rand_index", "summarise_cluster_stability",
+  "summarise_pca_qc_correlations", "derive_lymph_node_domain",
+  "summarise_ln_boundary_sensitivity", "write_validated_seurat_checkpoint"
 )
 stopifnot(all(vapply(
   required_active_functions,

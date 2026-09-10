@@ -215,3 +215,88 @@
 - Added `docs/validation/2026-09-01-b1-region3-method-audit.md`, mapping every unique B1 analysis to `RETAIN`, `RETAIN_WITH_CAVEAT`, or `CORRECT` and specifying its B2 treatment.
 - JSON parsing passed for all four HPC-returned QC notebooks, the slide summary and B1; none contains a stored Jupyter error object. `git diff --check` also passed.
 - Local R 4.6.1 did not finish even a source-parse startup within 60 seconds when user/site startup files were disabled and all temporary paths were redirected to D:. The process was terminated and this is recorded as a local-environment validation gap; no alternative R installation was used.
+
+### 2026-09-09 — Approved four-region tissue-branch implementation
+
+- Reviewed the executed `B2_Region1_primary_479.ipynb` and classified the current full-panel workflow as useful exploratory analysis requiring reproducibility, confidence, spatial-null and tissue-boundary corrections before four-region reuse.
+- Created the isolated D:-local worktree `.worktrees/split-region-domain-notebooks` on branch `codex/split-region-domain-notebooks`; the user checkout was not modified.
+- The inherited baseline initially failed because five active helpers lacked an adjacent roxygen `@return` contract. Added accurate parameter/return documentation and restored all pre-existing R tests to PASS before feature implementation.
+- Added tested reusable helpers for the revised primary mask, cell-ID-safe tissue partitions, branch selection, disjoint spatial pools, mandatory positive-distance checks, adjusted Rand index, cluster-stability summaries, PC-QC correlations, lymph-node candidate domains, and boundary-sensitivity Jaccard summaries.
+- Added a deterministic builder and 12 output-free notebooks: all QC-passed, adipose-only, and lymph-node-only branches for each Region 1-4. Child notebooks consume a frozen domain manifest and never redefine the lymph-node boundary.
+- Retained all 479 genes, `LogNormalize`, PC1-30 analysis, resolution plots, canonical-marker and Wang transfer, explicit `Uncertain` labels, Eosinophil annotation plus Tier1/2 evidence, continuous Eosinophil state, exploratory state-associated markers, corrected disjoint spatial-neighbour analysis, per-cell-type distances, and panel-limited ligand-receptor spatial co-expression.
+- Corrected interpretation: 2.5-month Wang is primary and all-age is sensitivity; Eosinophil rescue does not overwrite principal cell type; mixture/tail results are descriptive; cell-level marker tests are not mouse-level DE; spatial summaries omit naive cell-level inferential p-values; Region 4 is visibly sensitivity-only.
+- Replaced the convex-hull LN boundary with local confident lymphoid/DC enrichment plus bounded spatial expansion and five-setting sensitivity diagnostics. `LN_NOT_DETECTED` and minimum-cell gates prevent forced LN analysis.
+- Structural tests for all 12 notebooks pass; every generated R code cell parses under R 4.6.1. A bounded Region 1 subset smoke test passed import, 500/500 mask matching, revised primary selection, 475 retained cells, all 479 genes, 30 PCs and three-seed Louvain clustering (median ARI 1). Maximum absolute PC-QC correlation was 0.900, confirming the intended technical-dominance review gate.
+- Full Wang transfer, branch-specific annotation, complete spatial plots, optional dip/mixture diagnostics, exploratory LR scoring, and all full-data outputs remain HPC execution checkpoints.
+- The legacy `tests/test_notebook_contracts.py` is already inconsistent with commit `d09892c`: it expects 12/10-cell initial-QC notebooks although the tracked files have 20/21 cells, and it expects `B1_Region3_primary_479.ipynb`, which that commit renamed to B2. This inherited suite remains a documented baseline discrepancy and was not rewritten as part of the tissue-branch implementation.
+- Hardened two clean-kernel edge cases found during validation: optional diagnostic packages now yield typed skipped outputs, and path containment is validated before the first output/temp directory is created.
+- Added reload-validated Seurat checkpoints with unique stage filenames for branch input, PCA, annotation, and final objects; each manifest records dimensions, feature/cell identity validation, byte size and MD5.
+- Harmony is explicitly deferred: a single-section notebook has no defensible batch factor. It will be used only in the later admitted-region consensus, with section as technical batch and mouse retained as biological replicate.
+
+### 2026-09-09 — Eosinophil composition-plot regression fix
+
+- Reproduced the reported `could not find function "theme_cell"` failure in a fresh D:-local R 4.6.1 test using a real minimal Seurat object and the split-notebook package context.
+- Root cause: `plot_eos_call_by_subtype()` retained one dependency on the legacy notebook-local `theme_cell()` helper after the reusable plotting theme had been standardized as `cell_style_theme()` in `R/source.R`.
+- Replaced only that hidden theme dependency with `cell_style_theme(base_size = base_size)`; the plot's data preparation, ordering, labels, colours and return contract are unchanged.
+- Added a regression test requiring a valid ggplot, the complete 3-subtype by 7-call plotting grid, and Eosinophil-first ordering without defining `theme_cell()`.
+- The focused test now passes. The test also showed that this legacy helper uses the attached `%>%` operator; current split notebooks satisfy that declared setup dependency by attaching dplyr. Broader pipe refactoring was deliberately kept outside this targeted bug fix.
+
+### 2026-09-09 — Eos spatial, CellChat and Wang-integration design
+
+- User approved an architectural extension covering the mclust runtime error, consistent cell/macaron plots, downstream use of `Final_CellType_subtype`, biological cell-type/marker ordering, four explicit Eosinophil spatial-neighbour steps, spatial CellChat inference for top KNN-associated cell types, and a joint Wang–Xenium embedding.
+- Added `docs/superpowers/specs/2026-09-09-eos-spatial-wang-integration-design.md` with explicit inputs, thresholds, statistical interpretation, outputs, skip/failure gates and local-versus-HPC verification boundaries.
+- The design keeps CellChat group-based: continuous `EosState_balance` drives KNN association and prespecified state-enriched tails, while CellChat evaluates those groups. Section-level permutation results are not labelled mouse-level inference.
+- Existing Wang label transfer remains primary annotation evidence; the new joint embedding is a supporting cross-modality concordance diagnostic and cannot overwrite Xenium labels or allow Region 4 to define the primary reference.
+
+### 2026-09-09 — Test-first implementation plan
+
+- Converted the approved design into seven independently testable tasks in `docs/superpowers/plans/2026-09-09-eos-spatial-wang-integration.md`.
+- The plan sequences the namespace-safe mclust wrapper, cell/macaron ordering and plot contracts, four-stage Eosinophil KNN analysis, gated spatial CellChat adapter, Wang–Xenium integration diagnostics, deterministic regeneration of all 12 B2 notebooks, and bounded local/HPC verification.
+- Each behavior change begins with a failing test and ends with a focused commit. Full-data CellChat and Wang integration remain HPC checkpoints rather than unverified local claims.
+
+### 2026-09-09 — Extended Eosinophil/Wang notebook implementation checkpoint
+
+- Implemented and tested a namespace-safe `mclust` diagnostic wrapper. It supplies the `mclustBIC` binding expected by `Mclust()` and returns typed `PASS`, skipped or runtime-failure evidence instead of terminating a notebook.
+- Added shared scWAT biological label ordering, stable macaron palettes, cell-style ggplot formatting and marker-block ordering. `Final_CellType_subtype_with_uncertain` is retained for annotation review, while `Final_CellType_subtype` is explicitly used for downstream grouping and plots.
+- Rebuilt spatial analysis as four visible stages: disjoint Eos/reference pools; k=1 and k=15 neighbour composition; distance to every adequately represented reference cell type; and continuous-state KNN association with deterministic top-three short-like and long-like neighbour types.
+- Added a spatial CellChat adapter using normalized Xenium expression, aligned centroids and a physical scale derived from cell area. The lower and upper 30% of continuous Eos state define adequately sized CellChat groups; raw p<0.05 and BH FDR<0.10 are reported as exploratory within-section results only.
+- Added an optional subtype-balanced 2.5-month Wang–Xenium Seurat CCA integration using shared panel genes and PCs 1–30. Label transfer remains primary; the joint embedding, cluster composition and cross-dataset Eos-neighbour diagnostics are supporting concordance evidence only.
+- Regenerated all 12 Region 1–4 all-QC/adipose/LN notebooks deterministically. Structural contracts passed for every notebook and every R code cell parsed successfully.
+- The D:-local Region 1 smoke test passed with 475 revised-primary cells, all 479 genes, 30 PCs and median three-seed clustering ARI=1. The observed maximum absolute PC–QC correlation was 0.900 and therefore remains a required visual review item, not an automatically regressed covariate.
+- Local `mclust` and CellChat packages are unavailable, so package-gated skip behavior was verified locally. Full CellChat and Wang–Xenium integration, plots and output tables require HPC execution before scientific interpretation.
+- Added a regression-tested non-fatal empty-pool gate so a small adipose/LN branch with no Eosinophils can finish and report `SKIPPED_EMPTY_EOS_OR_REFERENCE_POOL`; ID overlap, duplicate cross-pool coordinates and zero/negative neighbour distances remain hard failures.
+- Final feature verification passed deterministic two-run notebook generation, 4 Python notebook contracts, R parsing of every generated code cell, seven focused/source/QC R suites, the D:-local subset smoke test and `git diff --check`.
+- Completion-check review then added explicit optional-package version tables, saved PNG/PDF artifacts for the Wang, Steps 10.1–10.4, mclust and CellChat diagnostics, persisted mclust status/BIC evidence, a subtype and cross-dataset-distance Wang integration panel, optional Wang/CellChat checkpoints, and matching README HPC/download instructions. The subset smoke test now also exercises biological ordering, disjoint pools, exact k=1/k=15 edge counts, positive distances and typed optional-module skips.
+
+### 2026-09-09 — Directional plots, CellChat API compatibility and safe exports
+
+- Reworked all focal UMAP/spatial displays in the 12 generated B2 notebooks so contextual cells are drawn first with smaller pale points and the target cells are drawn last with larger, darker points. Figure subtitles were removed.
+- Restored the canonical-marker DotPlot gradient to `#D9D9D9`–`#5A2F5E` and retained biological cell-type and marker-block ordering.
+- Rebuilt Steps 10.1–10.4 around the requested Eosinophil-state tails. Intermediate cells are grey spatial context only; tail-comparison panels exclude them. Signed composition, relative proximity and continuous-state association consistently place long-like evidence to the right and short-like evidence to the left, ordered from strongest long-like to strongest short-like tendency.
+- Increased the prespecified KNN recipient selection from three to five cell types per Eosinophil-state direction. The reported significant CellChat subset now contains only outgoing short-like/long-like Eosinophil interactions with the matching state-specific top-five neighbour set; the complete communication table remains available for audit.
+- Diagnosed the HPC CellChat 2.2.0.9001 construction error as an API mismatch. Added a tested adapter that supplies current `spatial.factors` (`ratio`, `tol`) or legacy `scale.factors` only after inspecting `createCellChat()` formals. Xenium centroids are treated as micrometre coordinates (`ratio = 1`), with tolerance derived from median equivalent cell radius.
+- Reproduced the final-save `length of 'dimnames' [2] not equal to array extent` error with an `AsIs` matrix/list column. Added TSV-safe rectangularization to both compressed and uncompressed writers; the exact regression fixture now round-trips successfully.
+- Regenerated all 12 notebooks and passed Python structural contracts, R parsing of every code cell, seven focused/source/QC R suites and the D:-local Region 1 subset smoke test (475 cells, 479 genes, 30 PCs, median clustering ARI 1). CellChat itself is unavailable locally, so both constructor signatures were validated with injected API fixtures; full CellChat execution remains an HPC checkpoint.
+
+### 2026-09-10 — All-age Wang reference, Eos-state propagation and largest-cluster LN rule
+
+- Changed the complete all-age Wang object to the primary reference for label reconciliation, Eosinophil calibration and subtype-balanced Wang–Xenium CCA integration. The 2.5-month transfer remains an explicit age-matched sensitivity comparison.
+- Rebuilt the Eosinophil-state histogram and signature scatter with separate layers: intermediate cells are drawn first in grey, and short-like/long-like cells are drawn last in dark blue/red. Both plot objects are explicitly printed.
+- Traced the three `EosState_extreme not found` failures to metadata being dropped at table-construction boundaries. `calculate_eos_distance_by_cell_type()` now propagates the tail label into its cell-level result, `rank_eos_state_knn_associations()` propagates it into `per_eos`, and Step 10.1 uses the enriched `spatial_pools$all` table rather than the earlier coordinate table.
+- Replaced lymph-node radius expansion with the requested largest-cluster rule. After local lymphoid-enrichment selection, DBSCAN runs on preliminary core coordinates with `eps=80` and `minPts=10`; cluster 0 is noise, only the largest non-zero cluster is eligible, deterministic ties use the smallest cluster ID, and the retained cluster must still contain at least 100 cells.
+- Added `lymph_node_dbscan_cluster_sizes.tsv` and cell-level preliminary-core/DBSCAN-cluster fields so the selection can be reviewed directly.
+
+### 2026-09-10 — Nested `x` final-save regression fix
+
+- Reproduced the HPC error `Nested TSV column has incompatible row count: x` with the same structural condition: a two-row outer result containing a three-row nested `AsIs` data-frame column named `x`.
+- Root cause: the shared TSV rectangularizer assumed every nested matrix/data-frame column had one nested row per outer row. Optional-package result objects can legally violate that assumption, so the final output checkpoint stopped before writing the remaining audit files.
+- Preserved the existing behavior for aligned nested columns. A non-aligned nested object is now retained once as a deterministic serialized payload, with explicit `__nested_rows__` and `__nested_cols__` audit fields; no row-wise relationship is invented and no result column is silently discarded.
+- Moved rectangularization inside the path-aware error handlers for both plain and gzipped TSV writers. Any future export failure will identify the exact destination file.
+- Added an exact regression fixture to `tests/test_eos_extended_helpers.R`; the pre-fix test reproduced the reported error and the post-fix round trip retained two outer rows plus the complete nested payload and its 3-by-2 dimensions.
+
+### 2026-09-10 — Worktree promotion and retirement
+
+- Promoted branch `codex/split-region-domain-notebooks` to the project-root checkout at `YNH_Xenium_scWAT`.
+- Recreated the former root branch `codex/notebook-qc-pipeline` as the clean backup worktree `.worktrees/notebook-qc-pipeline-backup`.
+- Removed the registered worktrees `region3-complete479-review` and `region3-anchor-reference`; their local Git branches were retained so their committed histories remain recoverable.
+- Before removing `region3-anchor-reference`, preserved its unique untracked 7.7 MB notebook at `.worktrees/retired-untracked-backup/region3-anchor-reference/notebooks/03_run_region3_new.ipynb`. Its SHA-256 remains `2EFB6D930EDF1A456FFE6D1A0CF8A1A831EF462F2B930B7CB45D022FC7612F42`.

@@ -208,6 +208,78 @@ validate_section_integrity <- function(region_dir, region_id) {
   out
 }
 
+#' Flatten optional-package tables to a rectangular TSV-safe data frame
+#'
+#' Some R packages return nominal data frames containing matrix or list-valued
+#' columns. Base `write.table()` cannot reliably construct column names for
+#' these objects and can fail with a dimnames/array-extent error. Matrix/data
+#' frame columns with one nested row per outer row are expanded with their
+#' parent column name; list cells are serialized to a deterministic ` | `-
+#' separated character value. A nested table with a different row count cannot
+#' be aligned safely to the outer rows. In that case its complete `dput()`
+#' representation is stored once (in the first outer row), together with its
+#' nested dimensions. This preserves the optional diagnostic without inventing
+#' a row-wise correspondence or aborting the final-save checkpoint.
+#'
+#' @param x Object coercible to a data frame.
+#'
+#' @return A rectangular data frame containing only atomic columns and the same
+#'   number and order of rows as `x`.
+flatten_tsv_table <- function(x) {
+  table <- if (is.data.frame(x)) x else as.data.frame(x, stringsAsFactors = FALSE)
+  if (!ncol(table)) return(table)
+  n_rows <- nrow(table)
+  pieces <- lapply(seq_along(table), function(index) {
+    column <- table[[index]]
+    parent <- names(table)[[index]]
+    if (is.matrix(column) || is.data.frame(column)) {
+      nested_value <- if (is.matrix(column)) unclass(column) else column
+      expanded <- as.data.frame(nested_value, stringsAsFactors = FALSE, check.names = FALSE)
+      if (nrow(expanded) != n_rows) {
+        serialized <- rep(NA_character_, n_rows)
+        nested_rows <- rep(NA_integer_, n_rows)
+        nested_cols <- rep(NA_integer_, n_rows)
+        if (n_rows > 0L) {
+          serialized[[1L]] <- paste(capture.output(dput(nested_value)), collapse = " ")
+          nested_rows[[1L]] <- nrow(nested_value)
+          nested_cols[[1L]] <- ncol(nested_value)
+        }
+        mismatch <- data.frame(
+          serialized, nested_rows, nested_cols,
+          stringsAsFactors = FALSE,
+          check.names = FALSE
+        )
+        names(mismatch) <- paste0(
+          parent,
+          c(".__nested_serialized__", ".__nested_rows__", ".__nested_cols__")
+        )
+        return(mismatch)
+      }
+      child_names <- names(expanded)
+      if (is.null(child_names) || any(!nzchar(child_names))) {
+        child_names <- paste0("V", seq_len(ncol(expanded)))
+      }
+      names(expanded) <- paste(parent, child_names, sep = ".")
+      return(expanded)
+    }
+    if (is.list(column)) {
+      serialize_cell <- function(value) {
+        if (is.null(value) || !length(value)) return(NA_character_)
+        if (is.atomic(value)) return(paste(as.character(value), collapse = " | "))
+        paste(capture.output(dput(value)), collapse = " ")
+      }
+      column <- vapply(column, serialize_cell, character(1))
+    }
+    output <- data.frame(column, stringsAsFactors = FALSE, check.names = FALSE)
+    names(output) <- parent
+    output
+  })
+  output <- do.call(cbind, pieces)
+  names(output) <- make.unique(names(output), sep = ".")
+  rownames(output) <- rownames(table)
+  output
+}
+
 #' Write tsv.
 #'
 #' @param x Required `x` input; validated before computation.
@@ -217,7 +289,15 @@ validate_section_integrity <- function(region_dir, region_id) {
 write_tsv <- function(x, path, project_root) {
   assert_path_within(project_root, path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  utils::write.table(x, path, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
+  tryCatch(
+    {
+      table <- flatten_tsv_table(x)
+      utils::write.table(table, path, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
+    },
+    error = function(error) {
+      stop("Failed to write TSV '", path, "': ", conditionMessage(error), call. = FALSE)
+    }
+  )
   invisible(path)
 }
 
@@ -660,6 +740,241 @@ cell_style_theme <- function(base_size = 14) {
     )
 }
 
+#' Return the biological display order used for scWAT cell types
+#'
+#' @param labels Optional observed labels. When supplied, only observed known
+#'   labels are returned and previously unseen labels are appended in their
+#'   first-observed order.
+#'
+#' @return A character vector of cell-type labels in biological display order.
+scwat_cell_type_order <- function(labels = NULL) {
+  canonical <- c(
+    "Adipocyte", "MatureAdip",
+    "ASC", "APC", "Fibroblast", "Stromal_Fibroblast",
+    "VSMC", "Pericyte", "Mural",
+    "Capillary_EC", "Venous_EC", "Lymphatic_EC", "Endothelial",
+    "Schwann", "Neural", "Mesothelial", "Epithelial",
+    "LYVE1_resident_Mac", "Scavenging_macrophage", "Inflammatory_Mac",
+    "TREM2_LAM", "Macrophage", "Monocyte", "Myeloid",
+    "DC", "cDC", "cDC1", "cDC2", "CCR7_migratory_DC", "Neutrophil",
+    "Eosinophil", "Mast cell",
+    "ILC", "ILC2", "NK", "T", "γδ T", "T cell", "B", "B cell",
+    "Plasma", "Uncertain"
+  )
+  if (is.null(labels)) {
+    return(canonical)
+  }
+  observed <- unique(as.character(labels[!is.na(labels) & nzchar(as.character(labels))]))
+  c(intersect(canonical, observed), setdiff(observed, canonical))
+}
+
+#' Apply the scWAT biological order without changing label values
+#'
+#' @param labels Character or factor cell-type labels.
+#'
+#' @return A factor containing the original values and biologically ordered
+#'   levels. Missing values remain missing.
+apply_scwat_cell_type_order <- function(labels) {
+  factor(as.character(labels), levels = scwat_cell_type_order(labels))
+}
+
+#' Return stable macaron colours for scWAT categories
+#'
+#' @param labels Optional observed labels. If omitted, colours for the complete
+#'   canonical scWAT order are returned. Unknown labels receive deterministic
+#'   fallback colours after the canonical palette.
+#'
+#' @return A named character vector of six-digit hexadecimal colours.
+cell_macaron_palette <- function(labels = NULL) {
+  canonical <- scwat_cell_type_order()
+  roots <- c(
+    "#F2B8A2", "#F6D7A7", "#E7C6A5", "#D7BDE2", "#C9B4D9",
+    "#B9CDE5", "#AFC6E9", "#A9D6C8", "#BFD8A8", "#D7E8B2",
+    "#B7DDD2", "#9FD3C7", "#A8DADC", "#B8D8E8", "#C7C5E8",
+    "#D8C4E6", "#E6C7D5", "#E8B4B8", "#D99C9C", "#E7AAA2",
+    "#D6A59A", "#E3B7A0", "#D8B58A", "#DCC98F", "#C6D59B",
+    "#B3D1A4", "#A6CDB4", "#A4CEC6", "#B7D9D0", "#F2C48D",
+    "#E89A8F", "#E5B2C5", "#C9B6DF", "#B7BEE0", "#A9C5E6",
+    "#9FC8D8", "#B5D6C6", "#C7DDAF", "#D9DEA8", "#E7D2A8",
+    "#E6C2A5", "#D8D8D8"
+  )
+  names(roots) <- canonical
+  if (is.null(labels)) {
+    return(roots)
+  }
+  observed <- unique(as.character(labels[!is.na(labels) & nzchar(as.character(labels))]))
+  output <- roots[intersect(canonical, observed)]
+  unknown <- setdiff(observed, canonical)
+  if (length(unknown)) {
+    fallback <- grDevices::hcl.colors(length(unknown), palette = "Pastel 1")
+    names(fallback) <- unknown
+    output <- c(output, fallback)
+  }
+  output[observed]
+}
+
+#' Apply the shared cell-style theme to a ggplot-compatible object
+#'
+#' @param plot A ggplot or patchwork-compatible plot object.
+#' @param base_size Base font size.
+#' @param legend_position ggplot legend-position setting.
+#'
+#' @return The styled plot object; the input data are not modified.
+style_cell_plot <- function(plot, base_size = 12, legend_position = "right") {
+  require_package("ggplot2")
+  plot +
+    cell_style_theme(base_size = base_size) +
+    ggplot2::theme(
+      legend.position = legend_position,
+      plot.margin = ggplot2::margin(8, 12, 8, 8)
+    )
+}
+
+#' Plot focal categories above smaller contextual points
+#'
+#' @param data Data frame containing coordinates and a grouping field.
+#' @param x_col,y_col Numeric coordinate column names.
+#' @param group_col Categorical grouping column name.
+#' @param target_labels Groups to draw in the final, larger point layer.
+#' @param palette Named colours covering all observed groups.
+#' @param background_size,target_size Point sizes for context and focal layers.
+#' @param background_alpha,target_alpha Point opacity for context and focal layers.
+#' @param fixed_coordinates Whether to use an equal-aspect coordinate system.
+#' @param title Optional title. Subtitles are deliberately unsupported.
+#' @param legend_title Optional legend title.
+#'
+#' @return A cell-style ggplot with contextual points in layer one and target
+#'   points in layer two, guaranteeing that focal cells are drawn on top.
+plot_target_overlay <- function(
+    data,
+    x_col,
+    y_col,
+    group_col,
+    target_labels,
+    palette = NULL,
+    background_size = 0.35,
+    target_size = 1.1,
+    background_alpha = 0.45,
+    target_alpha = 0.95,
+    fixed_coordinates = FALSE,
+    title = NULL,
+    legend_title = NULL
+) {
+  require_package("ggplot2")
+  plot_data <- as.data.frame(data, stringsAsFactors = FALSE)
+  required <- c(x_col, y_col, group_col)
+  missing <- setdiff(required, names(plot_data))
+  if (length(missing)) stop("Overlay plot data missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  if (any(!is.finite(as.numeric(plot_data[[x_col]]))) || any(!is.finite(as.numeric(plot_data[[y_col]])))) {
+    stop("Overlay plot coordinates must be finite.", call. = FALSE)
+  }
+  groups <- unique(as.character(plot_data[[group_col]]))
+  groups <- groups[!is.na(groups) & nzchar(groups)]
+  targets <- intersect(as.character(target_labels), groups)
+  if (is.null(palette)) palette <- cell_macaron_palette(groups)
+  if (is.null(names(palette)) || !all(groups %in% names(palette))) {
+    stop("palette must be named and cover every observed group.", call. = FALSE)
+  }
+  plot_data[[group_col]] <- factor(as.character(plot_data[[group_col]]), levels = groups)
+  is_target <- as.character(plot_data[[group_col]]) %in% targets
+  background <- plot_data[!is_target, , drop = FALSE]
+  focal <- plot_data[is_target, , drop = FALSE]
+  plot <- ggplot2::ggplot() +
+    ggplot2::geom_point(
+      data = background,
+      ggplot2::aes(x = .data[[x_col]], y = .data[[y_col]], colour = .data[[group_col]]),
+      size = background_size, alpha = background_alpha
+    ) +
+    ggplot2::geom_point(
+      data = focal,
+      ggplot2::aes(x = .data[[x_col]], y = .data[[y_col]], colour = .data[[group_col]]),
+      size = target_size, alpha = target_alpha
+    ) +
+    ggplot2::scale_colour_manual(values = palette[groups], drop = FALSE) +
+    ggplot2::labs(title = title, x = NULL, y = NULL, colour = legend_title)
+  if (isTRUE(fixed_coordinates)) plot <- plot + ggplot2::coord_fixed()
+  style_cell_plot(plot)
+}
+
+#' Save a cell-style plot as matched PNG and PDF artifacts
+#'
+#' @param plot A ggplot or patchwork-compatible plot object.
+#' @param stem Filename stem without an extension.
+#' @param output_dir Existing or creatable output directory below
+#'   `project_root`.
+#' @param project_root Absolute project root used for path-safety validation.
+#' @param width,height Plot dimensions in inches.
+#' @param dpi PNG resolution in dots per inch.
+#'
+#' @return A named character vector containing the validated PNG and PDF paths.
+#'   The supplied plot and analysis objects are not modified.
+save_cell_plot <- function(
+    plot,
+    stem,
+    output_dir,
+    project_root,
+    width = 12,
+    height = 7,
+    dpi = 300
+) {
+  require_package("ggplot2")
+  stem <- as.character(stem)[[1L]]
+  if (is.na(stem) || !grepl("^[A-Za-z0-9_.-]+$", stem)) {
+    stop("stem must contain only letters, numbers, dot, underscore or hyphen.", call. = FALSE)
+  }
+  paths <- c(
+    png = file.path(output_dir, paste0(stem, ".png")),
+    pdf = file.path(output_dir, paste0(stem, ".pdf"))
+  )
+  invisible(lapply(paths, function(path) assert_path_within(project_root, path)))
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  ggplot2::ggsave(paths[["png"]], plot = plot, width = width, height = height, dpi = dpi, bg = "white")
+  ggplot2::ggsave(paths[["pdf"]], plot = plot, width = width, height = height, device = grDevices::cairo_pdf, bg = "white")
+  paths
+}
+
+#' Order canonical-marker rows and build matching DotPlot feature groups
+#'
+#' @param marker_df Data frame containing `Gene_Symbol` and
+#'   `CellType_subtype`.
+#' @param available_genes Character vector of genes present in the assay.
+#'
+#' @return A list containing the ordered marker table, a named feature list and
+#'   the observed biological cell-type order.
+order_marker_features <- function(marker_df, available_genes) {
+  required <- c("Gene_Symbol", "CellType_subtype")
+  missing <- setdiff(required, names(marker_df))
+  if (length(missing)) {
+    stop("marker_df missing columns: ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+  marker_table <- as.data.frame(marker_df, stringsAsFactors = FALSE)
+  marker_table <- marker_table[
+    marker_table$Gene_Symbol %in% as.character(available_genes),
+    , drop = FALSE
+  ]
+  marker_table <- marker_table[!duplicated(marker_table$Gene_Symbol), , drop = FALSE]
+  subtype_order <- scwat_cell_type_order(marker_table$CellType_subtype)
+  marker_table$CellType_subtype <- factor(
+    as.character(marker_table$CellType_subtype),
+    levels = subtype_order
+  )
+  marker_table <- marker_table[
+    order(marker_table$CellType_subtype, seq_len(nrow(marker_table))),
+    , drop = FALSE
+  ]
+  rownames(marker_table) <- NULL
+  feature_groups <- split(
+    as.character(marker_table$Gene_Symbol),
+    factor(as.character(marker_table$CellType_subtype), levels = subtype_order),
+    drop = TRUE
+  )
+  list(
+    marker_table = marker_table,
+    feature_groups = feature_groups,
+    cell_type_order = subtype_order
+  )
+}
+
 #' Plot section qc.
 #'
 #' @param cell_metadata Required `cell_metadata` input; validated before computation.
@@ -748,7 +1063,15 @@ write_gz_tsv <- function(x, path, project_root) {
   assert_path_within(project_root, path)
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   con <- gzfile(path, "wt"); on.exit(close(con), add = TRUE)
-  utils::write.table(x, con, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
+  tryCatch(
+    {
+      table <- flatten_tsv_table(x)
+      utils::write.table(table, con, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA")
+    },
+    error = function(error) {
+      stop("Failed to write gzipped TSV '", path, "': ", conditionMessage(error), call. = FALSE)
+    }
+  )
   invisible(path)
 }
 
@@ -7630,6 +7953,1505 @@ plot_eos_with_celltypes <- function(
   p
 }
 
+# -----------------------------------------------------------------------------
+# Downstream tissue-branch, stability, and spatial-safety helpers
+# -----------------------------------------------------------------------------
+
+#' Recreate the approved primary downstream cell mask from aligned metadata
+#'
+#' @param cell_metadata Data frame already aligned to the Seurat object by cell
+#'   ID and containing core-QC, high-control, and segmentation-multiplet flags.
+#' @param core_col,high_control_col,multiplet_col Metadata column names.
+#'
+#' @return A logical vector in `cell_metadata` row order. A cell passes only
+#'   when core QC is TRUE and both exclusion flags are FALSE.
+derive_primary_include_revised <- function(
+    cell_metadata,
+    core_col = "qc_core_pass",
+    high_control_col = "high_control_flag",
+    multiplet_col = "segmentation_multiplet_flag"
+) {
+  required <- c(core_col, high_control_col, multiplet_col)
+  missing <- setdiff(required, colnames(cell_metadata))
+  if (length(missing)) {
+    stop("Missing primary-mask fields: ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+  values <- lapply(cell_metadata[required], function(x) {
+    if (!is.logical(x) || anyNA(x)) stop("Primary-mask fields must be complete logical vectors.", call. = FALSE)
+    x
+  })
+  values[[1L]] & !values[[2L]] & !values[[3L]]
+}
+
+#' Build mutually exclusive all-cell, adipose, and lymph-node branch masks
+#'
+#' @param cell_metadata Data frame with unique cell IDs and an approved primary
+#'   inclusion field.
+#' @param lymph_node_cell_ids Character vector of QC-passed cells belonging to
+#'   the frozen lymph-node tissue domain. An empty vector records no LN domain.
+#' @param cell_id_col Name of the explicit cell-ID column.
+#' @param primary_col Name of the approved QC-passed inclusion column.
+#' @param provenance Character description of the domain source and parameters.
+#'
+#' @return A data frame in input row order containing the original cell ID,
+#'   primary mask, frozen lymph-node mask, three branch masks, tissue-domain
+#'   label, and provenance. Adipose and LN masks exactly partition QC-passed
+#'   cells; failed-QC cells belong to neither child branch.
+build_tissue_branch_manifest <- function(
+    cell_metadata,
+    lymph_node_cell_ids = character(),
+    cell_id_col = "cell_id",
+    primary_col = "primary_include_revised",
+    provenance = NA_character_
+) {
+  if (!is.data.frame(cell_metadata)) stop("cell_metadata must be a data frame.", call. = FALSE)
+  required <- c(cell_id_col, primary_col)
+  missing <- setdiff(required, colnames(cell_metadata))
+  if (length(missing)) stop("Missing branch-manifest fields: ", paste(missing, collapse = ", "), call. = FALSE)
+  ids <- as.character(cell_metadata[[cell_id_col]])
+  if (anyNA(ids) || any(!nzchar(ids))) stop("Cell IDs must be complete and non-empty.", call. = FALSE)
+  if (anyDuplicated(ids)) stop("Duplicate cell IDs are not allowed.", call. = FALSE)
+  primary <- cell_metadata[[primary_col]]
+  if (!is.logical(primary) || anyNA(primary)) stop("The primary inclusion field must be complete and logical.", call. = FALSE)
+  lymph_node_cell_ids <- unique(as.character(lymph_node_cell_ids))
+  unknown <- setdiff(lymph_node_cell_ids, ids)
+  if (length(unknown)) stop("Lymph-node IDs are not present in cell metadata: ", paste(head(unknown, 10L), collapse = ", "), call. = FALSE)
+  failed_qc_ln <- lymph_node_cell_ids[!primary[match(lymph_node_cell_ids, ids)]]
+  if (length(failed_qc_ln)) stop("Lymph-node IDs must be restricted to primary QC-passed cells.", call. = FALSE)
+  lymph_node <- primary & ids %in% lymph_node_cell_ids
+  adipose <- primary & !lymph_node
+  if (!all((adipose | lymph_node) == primary) || any(adipose & lymph_node)) {
+    stop("Adipose and lymph-node masks do not partition the primary cohort.", call. = FALSE)
+  }
+  data.frame(
+    cell_id = ids,
+    primary_include_revised = primary,
+    lymph_node_include = lymph_node,
+    all_qcpass_include = primary,
+    adipose_only_include = adipose,
+    lymph_node_only_include = lymph_node,
+    tissue_domain = ifelse(!primary, "QC_EXCLUDED", ifelse(lymph_node, "LYMPH_NODE", "ADIPOSE")),
+    branch_manifest_provenance = rep(as.character(provenance)[1L], length(ids)),
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Select the ordered cell IDs for one frozen tissue branch
+#'
+#' @param branch_manifest Output from `build_tissue_branch_manifest()`.
+#' @param branch One of `all_qcpass`, `adipose_only`, or `lymph_node_only`.
+#' @param min_cells Minimum required number of cells; the function stops below
+#'   this gate instead of forcing an underpowered analysis.
+#'
+#' @return Character vector of selected cell IDs in manifest order.
+select_tissue_branch_ids <- function(branch_manifest, branch, min_cells = 100L) {
+  branch <- match.arg(branch, c("all_qcpass", "adipose_only", "lymph_node_only"))
+  column <- paste0(branch, "_include")
+  required <- c("cell_id", column)
+  missing <- setdiff(required, colnames(branch_manifest))
+  if (length(missing)) stop("Branch manifest is missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  include <- branch_manifest[[column]]
+  if (!is.logical(include) || anyNA(include)) stop("Branch inclusion field must be complete and logical.", call. = FALSE)
+  ids <- as.character(branch_manifest$cell_id[include])
+  min_cells <- as.integer(min_cells)
+  if (!is.finite(min_cells) || min_cells < 1L) stop("min_cells must be a positive integer.", call. = FALSE)
+  if (length(ids) < min_cells) {
+    stop("INSUFFICIENT_", toupper(branch), "_CELLS: ", length(ids), " < ", min_cells, call. = FALSE)
+  }
+  ids
+}
+
+#' Validate that spatial query and reference pools are truly disjoint
+#'
+#' @param query_ids,reference_ids Character cell-ID vectors.
+#' @param query_coordinates,reference_coordinates Optional data frames with
+#'   `cell_id`, `x`, and `y`; when supplied, duplicate cross-pool coordinates
+#'   are prohibited because they generate zero-distance matches.
+#'
+#' @return A one-row list with query/reference counts, ID-overlap count, and
+#'   duplicate-coordinate-pair count. The function stops on any unsafe overlap.
+validate_disjoint_spatial_pools <- function(
+    query_ids,
+    reference_ids,
+    query_coordinates = NULL,
+    reference_coordinates = NULL
+) {
+  query_ids <- as.character(query_ids)
+  reference_ids <- as.character(reference_ids)
+  if (!length(query_ids) || !length(reference_ids)) stop("Spatial pools must both be non-empty.", call. = FALSE)
+  if (anyNA(query_ids) || anyNA(reference_ids) || any(!nzchar(query_ids)) || any(!nzchar(reference_ids))) {
+    stop("Spatial pool IDs must be complete and non-empty.", call. = FALSE)
+  }
+  if (anyDuplicated(query_ids) || anyDuplicated(reference_ids)) stop("Duplicate IDs within a spatial pool are not allowed.", call. = FALSE)
+  overlap <- intersect(query_ids, reference_ids)
+  if (length(overlap)) stop("Spatial query/reference cell-ID overlap detected: ", paste(head(overlap, 10L), collapse = ", "), call. = FALSE)
+  duplicate_coordinates <- 0L
+  if (xor(is.null(query_coordinates), is.null(reference_coordinates))) {
+    stop("Supply both coordinate tables or neither.", call. = FALSE)
+  }
+  if (!is.null(query_coordinates)) {
+    validate_coordinates <- function(x, ids, label) {
+      required <- c("cell_id", "x", "y")
+      missing <- setdiff(required, colnames(x))
+      if (length(missing)) stop(label, " coordinates are missing: ", paste(missing, collapse = ", "), call. = FALSE)
+      if (anyDuplicated(x$cell_id)) stop(label, " coordinates contain duplicate cell IDs.", call. = FALSE)
+      index <- match(ids, as.character(x$cell_id))
+      if (anyNA(index)) stop(label, " coordinates do not cover every pool cell.", call. = FALSE)
+      out <- x[index, required, drop = FALSE]
+      if (any(!is.finite(out$x)) || any(!is.finite(out$y))) stop(label, " coordinates must be finite.", call. = FALSE)
+      out
+    }
+    q <- validate_coordinates(query_coordinates, query_ids, "Query")
+    r <- validate_coordinates(reference_coordinates, reference_ids, "Reference")
+    q_key <- paste(format(q$x, digits = 17), format(q$y, digits = 17), sep = "\r")
+    r_key <- paste(format(r$x, digits = 17), format(r$y, digits = 17), sep = "\r")
+    duplicate_coordinates <- sum(q_key %in% r_key)
+    if (duplicate_coordinates) stop("Cross-pool duplicate coordinate pairs would create zero-distance matches.", call. = FALSE)
+  }
+  list(
+    n_query = length(query_ids),
+    n_reference = length(reference_ids),
+    n_overlap_ids = length(overlap),
+    n_duplicate_coordinate_pairs = as.integer(duplicate_coordinates)
+  )
+}
+
+#' Enforce the positive-distance gate after nearest-neighbour matching
+#'
+#' @param distances Numeric vector or matrix of spatial distances.
+#' @param zero_tolerance Values less than or equal to this tolerance are unsafe.
+#'
+#' @return A one-row list containing count, minimum, median, maximum, and the
+#'   number of zero/negative distances. Stops if an unsafe distance is present.
+validate_neighbour_distances <- function(distances, zero_tolerance = 0) {
+  distances <- as.numeric(distances)
+  if (!length(distances) || any(!is.finite(distances))) stop("Neighbour distances must be non-empty and finite.", call. = FALSE)
+  unsafe <- distances <= zero_tolerance
+  if (any(unsafe)) stop("Zero or negative nearest-neighbour distance detected; spatial result is invalid.", call. = FALSE)
+  list(
+    n_distances = length(distances),
+    minimum_distance = min(distances),
+    median_distance = stats::median(distances),
+    maximum_distance = max(distances),
+    n_zero_or_negative = sum(unsafe)
+  )
+}
+
+#' Build cell-ID-aligned Eosinophil and non-Eosinophil spatial pools
+#'
+#' @param cell_metadata Data frame with one row per cell and a unique `cell_id`.
+#' @param coordinates Data frame with unique `cell_id`, `x`, and `y` columns.
+#' @param eos_col Complete logical field defining the Eosinophil query pool.
+#' @param cell_type_col Downstream cell-type field for reference labels.
+#' @param state_col Continuous Eosinophil-state field.
+#' @param extreme_col Optional descriptive Eosinophil-tail field.
+#'
+#' @return A typed list with aligned `all`, `query`, and `reference` tables plus
+#'   the disjoint-pool validation result. An empty query or reference pool is a
+#'   non-fatal `SKIPPED_EMPTY_EOS_OR_REFERENCE_POOL` result so small tissue
+#'   branches can complete their audit outputs.
+build_eos_spatial_pools <- function(
+    cell_metadata,
+    coordinates,
+    eos_col = "Eos_inclusive",
+    cell_type_col = "Final_CellType_subtype",
+    state_col = "EosState_balance",
+    extreme_col = "EosState_extreme"
+) {
+  metadata <- as.data.frame(cell_metadata, stringsAsFactors = FALSE)
+  coords <- as.data.frame(coordinates, stringsAsFactors = FALSE)
+  metadata_required <- c("cell_id", eos_col, cell_type_col)
+  coordinate_required <- c("cell_id", "x", "y")
+  missing_metadata <- setdiff(metadata_required, names(metadata))
+  missing_coordinates <- setdiff(coordinate_required, names(coords))
+  if (length(missing_metadata)) {
+    stop("Cell metadata missing: ", paste(missing_metadata, collapse = ", "), call. = FALSE)
+  }
+  if (length(missing_coordinates)) {
+    stop("Coordinates missing: ", paste(missing_coordinates, collapse = ", "), call. = FALSE)
+  }
+  metadata$cell_id <- as.character(metadata$cell_id)
+  coords$cell_id <- as.character(coords$cell_id)
+  if (anyDuplicated(metadata$cell_id) || anyDuplicated(coords$cell_id)) {
+    stop("Cell metadata and coordinates require unique cell IDs.", call. = FALSE)
+  }
+  index <- match(metadata$cell_id, coords$cell_id)
+  if (anyNA(index)) {
+    stop("Coordinates do not cover every metadata cell ID.", call. = FALSE)
+  }
+  eos <- metadata[[eos_col]]
+  if (!is.logical(eos) || anyNA(eos)) {
+    stop(eos_col, " must be a complete logical field.", call. = FALSE)
+  }
+  cell_type <- as.character(metadata[[cell_type_col]])
+  if (anyNA(cell_type) || any(!nzchar(cell_type))) {
+    stop(cell_type_col, " must contain complete downstream labels.", call. = FALSE)
+  }
+  state <- if (state_col %in% names(metadata)) as.numeric(metadata[[state_col]]) else rep(NA_real_, nrow(metadata))
+  extreme <- if (extreme_col %in% names(metadata)) as.character(metadata[[extreme_col]]) else rep(NA_character_, nrow(metadata))
+  all_cells <- data.frame(
+    cell_id = metadata$cell_id,
+    x = as.numeric(coords$x[index]),
+    y = as.numeric(coords$y[index]),
+    Eos_inclusive = eos,
+    cell_type = cell_type,
+    EosState_balance = state,
+    EosState_extreme = extreme,
+    stringsAsFactors = FALSE
+  )
+  if (any(!is.finite(all_cells$x)) || any(!is.finite(all_cells$y))) {
+    stop("All spatial coordinates must be finite.", call. = FALSE)
+  }
+  query <- all_cells[all_cells$Eos_inclusive, , drop = FALSE]
+  reference <- all_cells[!all_cells$Eos_inclusive, , drop = FALSE]
+  if (!nrow(query) || !nrow(reference)) {
+    return(list(
+      status = "SKIPPED_EMPTY_EOS_OR_REFERENCE_POOL",
+      message = "Spatial query and reference pools must both be non-empty.",
+      all = all_cells, query = query, reference = reference,
+      gate = list(
+        status = "SKIPPED_EMPTY_EOS_OR_REFERENCE_POOL",
+        n_query = nrow(query), n_reference = nrow(reference),
+        n_overlap_ids = 0L, n_duplicate_coordinate_pairs = 0L
+      )
+    ))
+  }
+  gate <- validate_disjoint_spatial_pools(
+    query$cell_id, reference$cell_id,
+    query[, c("cell_id", "x", "y"), drop = FALSE],
+    reference[, c("cell_id", "x", "y"), drop = FALSE]
+  )
+  list(
+    status = "PASS",
+    message = "Spatial Eosinophil and reference pools are non-empty and disjoint.",
+    all = all_cells, query = query, reference = reference, gate = gate
+  )
+}
+
+#' Calculate Eosinophil-to-reference K-nearest-neighbour edge tables
+#'
+#' @param pools Output from `build_eos_spatial_pools()`.
+#' @param k_values Positive requested neighbour counts.
+#'
+#' @return A named list (`k1`, `k15`, and so on) of edge data frames. Requested
+#'   k is capped at the available reference-cell count and recorded as
+#'   `k_actual`.
+calculate_eos_knn_edges <- function(pools, k_values = c(1L, 15L)) {
+  require_package("FNN")
+  if (!is.list(pools) || !all(c("query", "reference", "gate") %in% names(pools))) {
+    stop("pools must be returned by build_eos_spatial_pools().", call. = FALSE)
+  }
+  query <- pools$query
+  reference <- pools$reference
+  if (!nrow(query) || !nrow(reference)) {
+    stop("Spatial query and reference pools must both be non-empty.", call. = FALSE)
+  }
+  k_values <- sort(unique(as.integer(k_values)))
+  if (!length(k_values) || any(!is.finite(k_values)) || any(k_values < 1L)) {
+    stop("k_values must contain positive integers.", call. = FALSE)
+  }
+  result <- lapply(k_values, function(k_requested) {
+    k_actual <- min(k_requested, nrow(reference))
+    fit <- FNN::get.knnx(
+      data = as.matrix(reference[, c("x", "y"), drop = FALSE]),
+      query = as.matrix(query[, c("x", "y"), drop = FALSE]),
+      k = k_actual
+    )
+    distance <- as.vector(t(fit$nn.dist))
+    validate_neighbour_distances(distance)
+    reference_index <- as.vector(t(fit$nn.index))
+    data.frame(
+      eos_cell_id = rep(query$cell_id, each = k_actual),
+      reference_cell_id = reference$cell_id[reference_index],
+      neighbour_rank = rep(seq_len(k_actual), times = nrow(query)),
+      k_requested = k_requested,
+      k_actual = k_actual,
+      distance = distance,
+      reference_cell_type = reference$cell_type[reference_index],
+      EosState_balance = rep(query$EosState_balance, each = k_actual),
+      EosState_extreme = rep(query$EosState_extreme, each = k_actual),
+      stringsAsFactors = FALSE
+    )
+  })
+  names(result) <- paste0("k", k_values)
+  result
+}
+
+#' Summarize Eosinophil KNN composition overall and by descriptive state
+#'
+#' @param edges One edge table returned by `calculate_eos_knn_edges()`.
+#'
+#' @return A list with `overall` and `by_state` count/fraction tables.
+summarise_eos_knn_composition <- function(edges) {
+  required <- c("reference_cell_type", "EosState_extreme")
+  missing <- setdiff(required, names(edges))
+  if (length(missing)) stop("KNN edges missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  overall <- as.data.frame(table(reference_cell_type = as.character(edges$reference_cell_type)), stringsAsFactors = FALSE)
+  names(overall)[names(overall) == "Freq"] <- "n_edges"
+  overall <- overall[overall$n_edges > 0L, , drop = FALSE]
+  overall$fraction <- overall$n_edges / sum(overall$n_edges)
+  state_keep <- !is.na(edges$EosState_extreme) & nzchar(as.character(edges$EosState_extreme))
+  if (any(state_keep)) {
+    by_state <- as.data.frame(table(
+      EosState_extreme = as.character(edges$EosState_extreme[state_keep]),
+      reference_cell_type = as.character(edges$reference_cell_type[state_keep])
+    ), stringsAsFactors = FALSE)
+    names(by_state)[names(by_state) == "Freq"] <- "n_edges"
+    by_state <- by_state[by_state$n_edges > 0L, , drop = FALSE]
+    totals <- ave(by_state$n_edges, by_state$EosState_extreme, FUN = sum)
+    by_state$fraction <- by_state$n_edges / totals
+  } else {
+    by_state <- data.frame(
+      EosState_extreme = character(), reference_cell_type = character(),
+      n_edges = integer(), fraction = numeric(), stringsAsFactors = FALSE
+    )
+  }
+  list(overall = overall, by_state = by_state)
+}
+
+#' Calculate each Eosinophil cell's distance to every eligible cell type
+#'
+#' @param pools Output from `build_eos_spatial_pools()`.
+#' @param min_reference_cells Minimum reference cells required for a type.
+#'
+#' @return A list with cell-level distances and cell-type summaries containing
+#'   median, quartiles and descriptive continuous-state Spearman correlation.
+calculate_eos_distance_by_cell_type <- function(pools, min_reference_cells = 20L) {
+  require_package("FNN")
+  query <- pools$query
+  reference <- pools$reference
+  min_reference_cells <- as.integer(min_reference_cells)
+  type_counts <- table(reference$cell_type)
+  eligible <- names(type_counts[type_counts >= min_reference_cells])
+  eligible <- scwat_cell_type_order(eligible)
+  if (!length(eligible)) {
+    return(list(cell_level = data.frame(), summary = data.frame()))
+  }
+  cell_level <- do.call(rbind, lapply(eligible, function(cell_type_name) {
+    type_reference <- reference[reference$cell_type == cell_type_name, , drop = FALSE]
+    fit <- FNN::get.knnx(
+      as.matrix(type_reference[, c("x", "y"), drop = FALSE]),
+      as.matrix(query[, c("x", "y"), drop = FALSE]),
+      k = 1L
+    )
+    distance <- as.numeric(fit$nn.dist[, 1L])
+    validate_neighbour_distances(distance)
+    data.frame(
+      eos_cell_id = query$cell_id,
+      reference_cell_type = cell_type_name,
+      distance = distance,
+      EosState_balance = query$EosState_balance,
+      EosState_extreme = query$EosState_extreme,
+      stringsAsFactors = FALSE
+    )
+  }))
+  rownames(cell_level) <- NULL
+  split_distance <- split(cell_level, cell_level$reference_cell_type)
+  summary <- do.call(rbind, lapply(names(split_distance), function(cell_type_name) {
+    x <- split_distance[[cell_type_name]]
+    complete <- is.finite(x$distance) & is.finite(x$EosState_balance)
+    rho <- if (sum(complete) >= 3L && stats::sd(x$distance[complete]) > 0 && stats::sd(x$EosState_balance[complete]) > 0) {
+      stats::cor(x$distance[complete], x$EosState_balance[complete], method = "spearman")
+    } else {
+      NA_real_
+    }
+    data.frame(
+      reference_cell_type = cell_type_name,
+      n_eos = nrow(x),
+      n_reference = unname(type_counts[[cell_type_name]]),
+      median_distance = stats::median(x$distance),
+      q25_distance = unname(stats::quantile(x$distance, 0.25)),
+      q75_distance = unname(stats::quantile(x$distance, 0.75)),
+      spearman_rho_state = rho,
+      interpretation = "DESCRIPTIVE_SPATIALLY_AUTOCORRELATED_NO_CELL_LEVEL_P_VALUE",
+      stringsAsFactors = FALSE
+    )
+  }))
+  rownames(summary) <- NULL
+  list(cell_level = cell_level, summary = summary)
+}
+
+#' Rank cell types associated with the continuous Eosinophil KNN state
+#'
+#' @param edges_k15 KNN edge table containing Eosinophil ID, reference type and
+#'   continuous state.
+#' @param biological_order Preferred cell-type tie-breaking order.
+#' @param min_eos Minimum Eosinophils with finite state.
+#' @param top_n Maximum selected types in each state direction.
+#'
+#' @return A list with the full association table, per-Eosinophil composition,
+#'   and deterministic short- and long-associated top-type vectors.
+rank_eos_state_knn_associations <- function(
+    edges_k15,
+    biological_order = scwat_cell_type_order(),
+    min_eos = 20L,
+    top_n = 3L
+) {
+  required <- c("eos_cell_id", "reference_cell_type", "EosState_balance", "EosState_extreme")
+  missing <- setdiff(required, names(edges_k15))
+  if (length(missing)) stop("KNN edges missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  edges <- as.data.frame(edges_k15, stringsAsFactors = FALSE)
+  state_by_eos <- tapply(edges$EosState_balance, edges$eos_cell_id, function(x) unique(x[is.finite(x)]))
+  extreme_by_eos <- tapply(as.character(edges$EosState_extreme), edges$eos_cell_id, function(x) {
+    unique(x[!is.na(x) & nzchar(x)])
+  })
+  valid_state <- vapply(state_by_eos, length, integer(1)) == 1L
+  eos_ids <- names(state_by_eos)[valid_state]
+  if (length(eos_ids) < as.integer(min_eos)) {
+    return(list(
+      status = "SKIPPED_INSUFFICIENT_EOS",
+      full = data.frame(), per_eos = data.frame(),
+      short_top = character(), long_top = character()
+    ))
+  }
+  types <- unique(as.character(edges$reference_cell_type))
+  grid <- expand.grid(
+    eos_cell_id = eos_ids,
+    reference_cell_type = types,
+    stringsAsFactors = FALSE
+  )
+  counts <- aggregate(
+    rep(1L, nrow(edges[edges$eos_cell_id %in% eos_ids, , drop = FALSE])),
+    by = list(
+      eos_cell_id = edges$eos_cell_id[edges$eos_cell_id %in% eos_ids],
+      reference_cell_type = edges$reference_cell_type[edges$eos_cell_id %in% eos_ids]
+    ),
+    FUN = sum
+  )
+  names(counts)[[3L]] <- "n_edges"
+  per_eos <- merge(grid, counts, by = c("eos_cell_id", "reference_cell_type"), all.x = TRUE, sort = FALSE)
+  per_eos$n_edges[is.na(per_eos$n_edges)] <- 0L
+  total_by_eos <- table(edges$eos_cell_id[edges$eos_cell_id %in% eos_ids])
+  per_eos$k_actual <- as.integer(total_by_eos[per_eos$eos_cell_id])
+  per_eos$neighbour_fraction <- per_eos$n_edges / per_eos$k_actual
+  per_eos$EosState_balance <- as.numeric(vapply(
+    state_by_eos[per_eos$eos_cell_id], `[[`, numeric(1), 1L
+  ))
+  per_eos$EosState_extreme <- vapply(
+    extreme_by_eos[per_eos$eos_cell_id],
+    function(x) if (length(x) == 1L) x[[1L]] else NA_character_,
+    character(1)
+  )
+  split_type <- split(per_eos, per_eos$reference_cell_type)
+  full <- do.call(rbind, lapply(names(split_type), function(cell_type_name) {
+    x <- split_type[[cell_type_name]]
+    rho <- if (stats::sd(x$neighbour_fraction) > 0 && stats::sd(x$EosState_balance) > 0) {
+      stats::cor(x$neighbour_fraction, x$EosState_balance, method = "spearman")
+    } else {
+      NA_real_
+    }
+    data.frame(
+      reference_cell_type = cell_type_name,
+      n_eos = nrow(x),
+      n_edges = sum(x$n_edges),
+      mean_neighbour_fraction = mean(x$neighbour_fraction),
+      spearman_rho = rho,
+      direction = if (is.na(rho)) "UNINFORMATIVE" else if (rho > 0) "LONG_ASSOCIATED" else if (rho < 0) "SHORT_ASSOCIATED" else "NEUTRAL",
+      interpretation = "DESCRIPTIVE_SPATIALLY_AUTOCORRELATED_NO_CELL_LEVEL_P_VALUE",
+      stringsAsFactors = FALSE
+    )
+  }))
+  rownames(full) <- NULL
+  order_index <- match(full$reference_cell_type, biological_order)
+  order_index[is.na(order_index)] <- length(biological_order) + seq_len(sum(is.na(order_index)))
+  short_rows <- which(is.finite(full$spearman_rho) & full$spearman_rho < 0)
+  long_rows <- which(is.finite(full$spearman_rho) & full$spearman_rho > 0)
+  short_rows <- short_rows[order(full$spearman_rho[short_rows], -full$n_edges[short_rows], order_index[short_rows])]
+  long_rows <- long_rows[order(-full$spearman_rho[long_rows], -full$n_edges[long_rows], order_index[long_rows])]
+  list(
+    status = "PASS",
+    full = full,
+    per_eos = per_eos,
+    short_top = head(full$reference_cell_type[short_rows], as.integer(top_n)),
+    long_top = head(full$reference_cell_type[long_rows], as.integer(top_n))
+  )
+}
+
+#' Derive adequately sized Eosinophil groups for group-based CellChat
+#'
+#' @param state Numeric continuous Eosinophil-state values.
+#' @param lower_probability Lower quantile defining the short-enriched group.
+#' @param upper_probability Upper quantile defining the long-enriched group.
+#' @param min_cells Minimum cells required in each retained state group.
+#'
+#' @return A list with typed status, per-input group vector, quantile thresholds
+#'   and group counts. The middle observations remain unassigned.
+derive_eos_cellchat_groups <- function(
+    state,
+    lower_probability = 0.30,
+    upper_probability = 0.70,
+    min_cells = 10L
+) {
+  state <- as.numeric(state)
+  if (!is.finite(lower_probability) || !is.finite(upper_probability) ||
+      lower_probability <= 0 || upper_probability >= 1 ||
+      lower_probability >= upper_probability) {
+    stop("CellChat state probabilities must satisfy 0 < lower < upper < 1.", call. = FALSE)
+  }
+  group <- rep(NA_character_, length(state))
+  finite <- is.finite(state)
+  if (!any(finite)) {
+    return(list(
+      status = "SKIPPED_INSUFFICIENT_STATE_GROUP_CELLS",
+      message = "No finite Eosinophil-state values are available.",
+      group = group, lower_threshold = NA_real_, upper_threshold = NA_real_,
+      counts = integer()
+    ))
+  }
+  lower <- unname(stats::quantile(state[finite], lower_probability, type = 7))
+  upper <- unname(stats::quantile(state[finite], upper_probability, type = 7))
+  group[finite & state <= lower] <- "Eos_short_enriched"
+  group[finite & state >= upper] <- "Eos_long_enriched"
+  counts <- table(factor(
+    group,
+    levels = c("Eos_short_enriched", "Eos_long_enriched")
+  ), useNA = "no")
+  status <- if (all(counts >= as.integer(min_cells))) {
+    "PASS"
+  } else {
+    "SKIPPED_INSUFFICIENT_STATE_GROUP_CELLS"
+  }
+  list(
+    status = status,
+    message = if (status == "PASS") {
+      "Prespecified continuous-state tails meet the CellChat group-size gate."
+    } else {
+      sprintf(
+        "CellChat requires at least %d cells in each Eosinophil state group.",
+        as.integer(min_cells)
+      )
+    },
+    group = group,
+    lower_threshold = lower,
+    upper_threshold = upper,
+    counts = counts
+  )
+}
+
+#' Prepare spatial CellChat inputs for Eosinophils and selected neighbours
+#'
+#' @param object Seurat object containing normalized Xenium expression and
+#'   required metadata.
+#' @param coordinates Data frame with unique `cell_id`, `x`, and `y`.
+#' @param top_short,top_long Cell types selected from continuous-state KNN
+#'   association in the short and long directions.
+#' @param eos_col Complete logical Eosinophil-selection field.
+#' @param cell_type_col Downstream non-Eosinophil grouping field.
+#' @param state_col Continuous Eosinophil-state field.
+#' @param cell_area_col Cell-area field in square microns.
+#' @param assay Seurat assay holding non-negative normalized expression.
+#' @param min_cells Minimum cells required per CellChat group.
+#'
+#' @return A typed list containing sparse normalized expression, aligned group
+#'   metadata, aligned coordinates, spatial scale factors and group counts.
+prepare_eos_cellchat_inputs <- function(
+    object,
+    coordinates,
+    top_short,
+    top_long,
+    eos_col = "Eos_inclusive",
+    cell_type_col = "Final_CellType_subtype",
+    state_col = "EosState_balance",
+    cell_area_col = "cell_area",
+    assay = "Xenium",
+    min_cells = 10L
+) {
+  if (!inherits(object, "Seurat")) stop("object must be a Seurat object.", call. = FALSE)
+  required_metadata <- c(eos_col, cell_type_col, state_col, cell_area_col)
+  missing <- setdiff(required_metadata, colnames(object@meta.data))
+  if (length(missing)) stop("Seurat metadata missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  top_types <- scwat_cell_type_order(unique(c(as.character(top_short), as.character(top_long))))
+  top_types <- top_types[!is.na(top_types) & nzchar(top_types)]
+  if (!length(top_types)) {
+    return(list(status = "SKIPPED_NO_TOP_NEIGHBOUR_TYPES", message = "No KNN-selected neighbour types."))
+  }
+  metadata <- object@meta.data
+  eos <- as.logical(metadata[[eos_col]])
+  if (anyNA(eos)) stop(eos_col, " must be complete.", call. = FALSE)
+  state_groups <- derive_eos_cellchat_groups(metadata[[state_col]][eos], min_cells = min_cells)
+  if (state_groups$status != "PASS") {
+    return(c(state_groups[c("status", "message")], list(state_groups = state_groups)))
+  }
+  eos_ids <- rownames(metadata)[eos]
+  eos_group <- stats::setNames(state_groups$group, eos_ids)
+  eos_selected <- eos_ids[!is.na(eos_group)]
+  non_eos_selected <- rownames(metadata)[
+    !eos & as.character(metadata[[cell_type_col]]) %in% top_types
+  ]
+  selected <- c(eos_selected, non_eos_selected)
+  group <- c(
+    unname(eos_group[eos_selected]),
+    as.character(metadata[non_eos_selected, cell_type_col])
+  )
+  names(group) <- selected
+  group_counts <- table(group)
+  if (!length(non_eos_selected) || any(group_counts < as.integer(min_cells))) {
+    return(list(
+      status = "SKIPPED_INSUFFICIENT_CELLCHAT_GROUP_CELLS",
+      message = sprintf("Every selected group requires at least %d cells.", as.integer(min_cells)),
+      group_counts = group_counts,
+      state_groups = state_groups
+    ))
+  }
+  coords <- as.data.frame(coordinates, stringsAsFactors = FALSE)
+  if (!all(c("cell_id", "x", "y") %in% names(coords)) || anyDuplicated(coords$cell_id)) {
+    stop("coordinates require unique cell_id, x and y columns.", call. = FALSE)
+  }
+  coordinate_index <- match(selected, as.character(coords$cell_id))
+  if (anyNA(coordinate_index)) stop("CellChat coordinates do not cover every selected cell.", call. = FALSE)
+  aligned_coordinates <- data.frame(
+    x = as.numeric(coords$x[coordinate_index]),
+    y = as.numeric(coords$y[coordinate_index]),
+    row.names = selected,
+    stringsAsFactors = FALSE
+  )
+  if (any(!is.finite(as.matrix(aligned_coordinates)))) {
+    stop("CellChat coordinates must be finite.", call. = FALSE)
+  }
+  expression <- SeuratObject::GetAssayData(object, assay = assay, layer = "data")
+  expression <- expression[, selected, drop = FALSE]
+  if (!identical(colnames(expression), selected) || any(expression@x < 0)) {
+    stop("CellChat requires aligned non-negative normalized expression.", call. = FALSE)
+  }
+  cell_area <- as.numeric(metadata[selected, cell_area_col])
+  valid_area <- is.finite(cell_area) & cell_area > 0
+  if (!any(valid_area)) stop("A positive cell area is required for the spatial scale.", call. = FALSE)
+  equivalent_diameter <- 2 * sqrt(cell_area[valid_area] / pi)
+  meta <- data.frame(
+    cellchat_group = factor(group, levels = c("Eos_short_enriched", "Eos_long_enriched", top_types)),
+    samples = factor(rep("sample1", length(selected))),
+    original_cell_type = as.character(metadata[selected, cell_type_col]),
+    EosState_balance = as.numeric(metadata[selected, state_col]),
+    row.names = selected,
+    stringsAsFactors = FALSE
+  )
+  list(
+    status = "PASS",
+    message = "Spatial CellChat inputs passed alignment and group-size gates.",
+    data = expression,
+    meta = meta,
+    coordinates = as.matrix(aligned_coordinates),
+    scale_factors = list(
+      # Xenium centroid coordinates are already in micrometres. In the legacy
+      # CellChat API, spot.diameter / spot is the coordinate-to-micron ratio,
+      # so equal values encode ratio = 1.
+      spot = stats::median(equivalent_diameter),
+      spot.diameter = stats::median(equivalent_diameter)
+    ),
+    spatial_factors = data.frame(
+      ratio = 1,
+      tol = stats::median(equivalent_diameter) / 2,
+      row.names = "sample1",
+      stringsAsFactors = FALSE
+    ),
+    group_counts = as.data.frame(group_counts, stringsAsFactors = FALSE),
+    state_groups = state_groups,
+    top_short = intersect(top_types, as.character(top_short)),
+    top_long = intersect(top_types, as.character(top_long))
+  )
+}
+
+#' Create a spatial CellChat object across legacy and current APIs
+#'
+#' CellChat up to the archived API accepts `scale.factors`; current jinworks
+#' CellChat accepts `spatial.factors`. This adapter inspects the callable's
+#' formal arguments and supplies exactly one representation.
+#'
+#' @param inputs Passed result from `prepare_eos_cellchat_inputs()`.
+#' @param create_fun CellChat object-construction function. Defaults to the
+#'   installed package export and can be injected for compatibility tests.
+#'
+#' @return The object returned by `create_fun`.
+create_cellchat_object_compatible <- function(inputs, create_fun = NULL) {
+  if (!identical(inputs$status, "PASS")) {
+    stop("CellChat inputs must pass before object creation.", call. = FALSE)
+  }
+  if (is.null(create_fun)) {
+    require_package("CellChat")
+    create_fun <- getExportedValue("CellChat", "createCellChat")
+  }
+  formal_names <- names(formals(create_fun))
+  arguments <- list(
+    object = inputs$data,
+    meta = inputs$meta,
+    group.by = "cellchat_group",
+    datatype = "spatial",
+    coordinates = inputs$coordinates
+  )
+  if ("spatial.factors" %in% formal_names) {
+    arguments$spatial.factors <- inputs$spatial_factors
+  } else if ("scale.factors" %in% formal_names) {
+    arguments$scale.factors <- inputs$scale_factors
+  } else {
+    stop(
+      "Unsupported CellChat createCellChat() API: neither spatial.factors nor scale.factors is available.",
+      call. = FALSE
+    )
+  }
+  do.call(create_fun, arguments)
+}
+
+#' Run the optional spatial CellChat pipeline with typed failure status
+#'
+#' @param inputs Output from `prepare_eos_cellchat_inputs()`.
+#' @param database Optional CellChat mouse database override.
+#' @param seed Random seed for CellChat probability calculations.
+#' @param min_cells Minimum cells used by `filterCommunication()`.
+#'
+#' @return A list with status, message, package version, failed/completed stage,
+#'   optional CellChat object and extracted communication table.
+run_eos_spatial_cellchat <- function(
+    inputs,
+    database = NULL,
+    seed = 1234L,
+    min_cells = 10L
+) {
+  input_status <- as.character(inputs$status %||% "INVALID_INPUT")
+  if (!identical(input_status, "PASS")) {
+    return(list(
+      status = input_status,
+      message = as.character(inputs$message %||% "CellChat input preparation did not pass."),
+      package_version = NA_character_, stage = "INPUT_GATE",
+      object = NULL, communication = data.frame()
+    ))
+  }
+  if (!requireNamespace("CellChat", quietly = TRUE)) {
+    return(list(
+      status = "SKIPPED_PACKAGE_UNAVAILABLE",
+      message = "Optional package 'CellChat' is unavailable.",
+      package_version = NA_character_, stage = "PACKAGE_GATE",
+      object = NULL, communication = data.frame()
+    ))
+  }
+  package_version <- as.character(utils::packageVersion("CellChat"))
+  stage <- "CREATE_OBJECT"
+  result <- tryCatch({
+    set.seed(as.integer(seed))
+    cellchat <- create_cellchat_object_compatible(inputs)
+    stage <- "SET_DATABASE"
+    cellchat@DB <- database %||% getExportedValue("CellChat", "CellChatDB.mouse")
+    stage <- "SUBSET_DATA"
+    cellchat <- CellChat::subsetData(cellchat)
+    stage <- "OVEREXPRESSED_GENES"
+    cellchat <- CellChat::identifyOverExpressedGenes(cellchat)
+    stage <- "OVEREXPRESSED_INTERACTIONS"
+    cellchat <- CellChat::identifyOverExpressedInteractions(cellchat)
+    stage <- "COMMUNICATION_PROBABILITY"
+    cellchat <- CellChat::computeCommunProb(
+      cellchat,
+      type = "triMean",
+      distance.use = TRUE,
+      raw.use = TRUE
+    )
+    stage <- "FILTER_COMMUNICATION"
+    cellchat <- CellChat::filterCommunication(cellchat, min.cells = as.integer(min_cells))
+    stage <- "PATHWAY_PROBABILITY"
+    cellchat <- CellChat::computeCommunProbPathway(cellchat)
+    stage <- "AGGREGATE_NETWORK"
+    cellchat <- CellChat::aggregateNet(cellchat)
+    stage <- "EXTRACT_COMMUNICATION"
+    communication <- CellChat::subsetCommunication(cellchat)
+    list(object = cellchat, communication = as.data.frame(communication, stringsAsFactors = FALSE))
+  }, error = identity)
+  if (inherits(result, "error")) {
+    return(list(
+      status = "FAILED_CELLCHAT_RUNTIME",
+      message = conditionMessage(result), package_version = package_version,
+      stage = stage, object = NULL, communication = data.frame()
+    ))
+  }
+  list(
+    status = "PASS",
+    message = "Spatial CellChat completed; interpret within this section only.",
+    package_version = package_version,
+    stage = "COMPLETE",
+    object = result$object,
+    communication = result$communication
+  )
+}
+
+#' Filter and annotate Eosinophil-focused CellChat interactions
+#'
+#' @param table Communication table returned by CellChat.
+#' @param raw_p_max Maximum raw CellChat permutation p-value.
+#' @param adjusted_p_max Maximum BH-adjusted p-value across reported rows.
+#' @param top_short,top_long Prespecified KNN-selected neighbour types for the
+#'   short-enriched and long-enriched Eosinophil groups. When supplied, each
+#'   state is restricted to its matching neighbour set.
+#'
+#' @return A list containing the complete annotated table and the significant
+#'   outgoing Eosinophil-to-neighbour subset.
+filter_eos_cellchat_interactions <- function(
+    table,
+    raw_p_max = 0.05,
+    adjusted_p_max = 0.10,
+    top_short = NULL,
+    top_long = NULL
+) {
+  communication <- as.data.frame(table, stringsAsFactors = FALSE)
+  required <- c("source", "target", "interaction_name", "prob", "pval")
+  missing <- setdiff(required, names(communication))
+  if (length(missing)) stop("CellChat table missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  if (!nrow(communication)) {
+    communication$p_adjust_bh <- numeric()
+    communication$direction <- character()
+    communication$eos_state_group <- character()
+    communication$neighbour_cell_type <- character()
+    communication$matches_state_top_neighbour <- logical()
+    communication$analysis_scope <- character()
+    return(list(all = communication, significant = communication))
+  }
+  communication$p_adjust_bh <- stats::p.adjust(communication$pval, method = "BH")
+  source_eos <- startsWith(as.character(communication$source), "Eos_")
+  target_eos <- startsWith(as.character(communication$target), "Eos_")
+  communication$direction <- ifelse(
+    source_eos & !target_eos, "EOS_TO_NEIGHBOUR",
+    ifelse(!source_eos & target_eos, "NEIGHBOUR_TO_EOS", "OUTSIDE_REQUESTED_DIRECTION")
+  )
+  communication$eos_state_group <- ifelse(
+    source_eos, as.character(communication$source),
+    ifelse(target_eos, as.character(communication$target), NA_character_)
+  )
+  communication$neighbour_cell_type <- ifelse(
+    source_eos & !target_eos, as.character(communication$target),
+    ifelse(!source_eos & target_eos, as.character(communication$source), NA_character_)
+  )
+  short_allowed <- if (is.null(top_short)) rep(TRUE, nrow(communication)) else
+    communication$neighbour_cell_type %in% as.character(top_short)
+  long_allowed <- if (is.null(top_long)) rep(TRUE, nrow(communication)) else
+    communication$neighbour_cell_type %in% as.character(top_long)
+  communication$matches_state_top_neighbour <- ifelse(
+    communication$eos_state_group == "Eos_short_enriched", short_allowed,
+    ifelse(communication$eos_state_group == "Eos_long_enriched", long_allowed, FALSE)
+  )
+  communication$analysis_scope <- "EXPLORATORY_WITHIN_SECTION_CELLCHAT"
+  significant <- communication[
+    is.finite(communication$pval) & communication$pval < raw_p_max &
+      is.finite(communication$p_adjust_bh) & communication$p_adjust_bh < adjusted_p_max &
+      communication$direction == "EOS_TO_NEIGHBOUR" &
+      communication$matches_state_top_neighbour,
+    , drop = FALSE
+  ]
+  significant <- significant[order(significant$p_adjust_bh, -significant$prob), , drop = FALSE]
+  rownames(significant) <- NULL
+  list(all = communication, significant = significant)
+}
+
+#' Deterministically sample cell IDs within annotation groups
+#'
+#' @param ids Unique cell identifiers.
+#' @param groups Group label for every identifier.
+#' @param max_per_group Maximum retained cells per group.
+#' @param seed Random seed.
+#'
+#' @return Character vector of sampled IDs in original input order.
+sample_ids_by_group <- function(ids, groups, max_per_group = 1000L, seed = 1234L) {
+  ids <- as.character(ids)
+  groups <- as.character(groups)
+  if (length(ids) != length(groups) || !length(ids)) {
+    stop("ids and groups must have equal positive length.", call. = FALSE)
+  }
+  if (anyNA(ids) || anyNA(groups) || anyDuplicated(ids)) {
+    stop("Sampling requires unique IDs and complete group labels.", call. = FALSE)
+  }
+  max_per_group <- as.integer(max_per_group)
+  if (!is.finite(max_per_group) || max_per_group < 1L) {
+    stop("max_per_group must be a positive integer.", call. = FALSE)
+  }
+  set.seed(as.integer(seed))
+  selected <- unlist(lapply(unique(groups), function(group_name) {
+    candidates <- ids[groups == group_name]
+    if (length(candidates) <= max_per_group) candidates else sample(candidates, max_per_group)
+  }), use.names = FALSE)
+  ids[ids %in% selected]
+}
+
+#' Balance a Wang Seurat reference by harmonized subtype
+#'
+#' @param reference Wang Seurat reference object.
+#' @param subtype_col Metadata column defining reference subtypes.
+#' @param max_per_subtype Maximum cells retained per subtype.
+#' @param seed Random seed.
+#'
+#' @return A cell-subset Seurat object with deterministic subtype balancing.
+sample_wang_reference <- function(
+    reference,
+    subtype_col = "Wang_subtype_harmonized",
+    max_per_subtype = 1000L,
+    seed = 1234L
+) {
+  if (!inherits(reference, "Seurat")) stop("reference must be a Seurat object.", call. = FALSE)
+  if (!subtype_col %in% colnames(reference@meta.data)) {
+    stop("Wang reference metadata missing: ", subtype_col, call. = FALSE)
+  }
+  selected <- sample_ids_by_group(
+    colnames(reference), reference@meta.data[[subtype_col]],
+    max_per_group = max_per_subtype, seed = seed
+  )
+  subset(reference, cells = selected)
+}
+
+#' Prefix all Seurat cell IDs before cross-dataset integration
+#'
+#' @param object Seurat object.
+#' @param prefix Non-empty dataset prefix without a trailing separator.
+#'
+#' @return A renamed Seurat object whose cell IDs are `<prefix>_<old_id>`.
+prefix_seurat_cell_ids <- function(object, prefix) {
+  if (!inherits(object, "Seurat")) stop("object must be a Seurat object.", call. = FALSE)
+  prefix <- as.character(prefix)[[1L]]
+  if (is.na(prefix) || !nzchar(prefix)) stop("prefix must be non-empty.", call. = FALSE)
+  new_ids <- paste0(prefix, "_", colnames(object))
+  if (anyDuplicated(new_ids)) stop("Prefixed Seurat IDs are not unique.", call. = FALSE)
+  SeuratObject::RenameCells(object, new.names = new_ids)
+}
+
+#' Validate the Wang–Xenium shared feature set against the fixed panel
+#'
+#' @param reference_genes Genes present in the Wang reference assay.
+#' @param query_genes Genes present in the Xenium query assay.
+#' @param panel_genes Ordered complete Xenium panel genes.
+#' @param min_shared Minimum shared genes required for integration.
+#'
+#' @return A list with typed status, ordered shared features and a per-panel-gene
+#'   presence manifest.
+validate_shared_feature_set <- function(
+    reference_genes,
+    query_genes,
+    panel_genes,
+    min_shared = 100L
+) {
+  panel <- unique(as.character(panel_genes))
+  reference <- unique(as.character(reference_genes))
+  query <- unique(as.character(query_genes))
+  manifest <- data.frame(
+    gene = panel,
+    reference_present = panel %in% reference,
+    query_present = panel %in% query,
+    stringsAsFactors = FALSE
+  )
+  manifest$shared <- manifest$reference_present & manifest$query_present
+  features <- manifest$gene[manifest$shared]
+  status <- if (length(features) >= as.integer(min_shared)) {
+    "PASS"
+  } else {
+    "SKIPPED_INSUFFICIENT_SHARED_GENES"
+  }
+  list(
+    status = status,
+    message = sprintf("%d of %d panel genes are shared; minimum required is %d.", length(features), length(panel), as.integer(min_shared)),
+    features = features,
+    manifest = manifest
+  )
+}
+
+#' Run an exploratory Seurat CCA integration of Wang and Xenium
+#'
+#' @param reference Wang Seurat object.
+#' @param query Xenium Seurat object.
+#' @param features Explicit ordered shared feature vector.
+#' @param dims Integration/PCA dimensions; defaults to PCs 1–30.
+#' @param seed Random seed.
+#' @param reference_assay Wang expression assay.
+#' @param query_assay Xenium expression assay.
+#' @param min_shared Minimum shared features required before fitting.
+#' @param resolution Exploratory joint-clustering resolution.
+#'
+#' @return A typed result with stage, message, optional integrated Seurat object,
+#'   anchors and parameter table. Original objects are not modified.
+run_wang_xenium_integration <- function(
+    reference,
+    query,
+    features,
+    dims = 1:30,
+    seed = 1234L,
+    reference_assay = "RNA",
+    query_assay = "Xenium",
+    min_shared = 100L,
+    resolution = 0.8
+) {
+  if (!inherits(reference, "Seurat") || !inherits(query, "Seurat")) {
+    stop("reference and query must be Seurat objects.", call. = FALSE)
+  }
+  features <- unique(as.character(features))
+  features <- features[
+    features %in% rownames(reference[[reference_assay]]) &
+      features %in% rownames(query[[query_assay]])
+  ]
+  parameters <- data.frame(
+    method = "SEURAT_CCA_LOGNORMALIZE",
+    n_shared_features = length(features),
+    dims = paste(range(as.integer(dims)), collapse = "-"),
+    seed = as.integer(seed),
+    resolution = as.numeric(resolution),
+    analysis_scope = "EXPLORATORY_WANG_XENIUM_CONCORDANCE",
+    stringsAsFactors = FALSE
+  )
+  if (length(features) < as.integer(min_shared)) {
+    return(list(
+      status = "SKIPPED_INSUFFICIENT_SHARED_GENES",
+      message = sprintf("Need at least %d shared genes; found %d.", as.integer(min_shared), length(features)),
+      stage = "SHARED_GENE_GATE", object = NULL, anchors = NULL,
+      parameters = parameters
+    ))
+  }
+  stage <- "PREFIX_IDS"
+  output <- tryCatch({
+    reference_use <- prefix_seurat_cell_ids(reference, "WANG")
+    query_use <- prefix_seurat_cell_ids(query, "XENIUM")
+    reference_use$integration_dataset <- "WANG"
+    query_use$integration_dataset <- "XENIUM"
+    SeuratObject::DefaultAssay(reference_use) <- reference_assay
+    SeuratObject::DefaultAssay(query_use) <- query_assay
+    stage <- "NORMALIZE"
+    reference_use <- Seurat::NormalizeData(reference_use, assay = reference_assay, verbose = FALSE)
+    query_use <- Seurat::NormalizeData(query_use, assay = query_assay, verbose = FALSE)
+    stage <- "FIND_ANCHORS"
+    anchors <- Seurat::FindIntegrationAnchors(
+      object.list = list(reference_use, query_use),
+      assay = c(reference_assay, query_assay),
+      anchor.features = features,
+      normalization.method = "LogNormalize",
+      reduction = "cca",
+      dims = as.integer(dims),
+      verbose = FALSE
+    )
+    stage <- "INTEGRATE_DATA"
+    integrated <- Seurat::IntegrateData(
+      anchorset = anchors,
+      normalization.method = "LogNormalize",
+      dims = as.integer(dims),
+      features.to.integrate = features,
+      verbose = FALSE
+    )
+    SeuratObject::DefaultAssay(integrated) <- "integrated"
+    stage <- "PCA_UMAP_CLUSTER"
+    integrated <- Seurat::ScaleData(integrated, features = features, verbose = FALSE)
+    integrated <- Seurat::RunPCA(
+      integrated, features = features, npcs = max(as.integer(dims)),
+      seed.use = as.integer(seed), verbose = FALSE
+    )
+    integrated <- Seurat::FindNeighbors(integrated, reduction = "pca", dims = as.integer(dims), verbose = FALSE)
+    integrated <- Seurat::FindClusters(
+      integrated, resolution = resolution, random.seed = as.integer(seed),
+      cluster.name = "wang_xenium_cluster", verbose = FALSE
+    )
+    integrated <- Seurat::RunUMAP(
+      integrated, reduction = "pca", dims = as.integer(dims),
+      reduction.name = "wang_xenium_umap", seed.use = as.integer(seed),
+      verbose = FALSE
+    )
+    list(object = integrated, anchors = anchors)
+  }, error = identity)
+  if (inherits(output, "error")) {
+    return(list(
+      status = "FAILED_WANG_XENIUM_INTEGRATION",
+      message = conditionMessage(output), stage = stage,
+      object = NULL, anchors = NULL, parameters = parameters
+    ))
+  }
+  list(
+    status = "PASS",
+    message = "Exploratory Wang–Xenium joint embedding completed.",
+    stage = "COMPLETE", object = output$object, anchors = output$anchors,
+    parameters = parameters
+  )
+}
+
+#' Summarize cross-dataset Eosinophil neighbourhood concordance
+#'
+#' @param embeddings Numeric cell-by-dimension matrix with unique row names.
+#' @param metadata Cell metadata aligned by row name.
+#' @param dataset_col Two-level dataset label.
+#' @param eos_col Complete logical Eosinophil indicator.
+#' @param cluster_col Optional integrated-cluster field.
+#' @param k Cross-dataset neighbour count.
+#'
+#' @return A list with per-cell cross-dataset distances/Eosinophil fractions,
+#'   dataset-level summaries and dataset-by-cluster composition/enrichment.
+summarise_cross_dataset_eos_neighbours <- function(
+    embeddings,
+    metadata,
+    dataset_col = "dataset",
+    eos_col = "is_eosinophil",
+    cluster_col = "integrated_cluster",
+    k = 15L
+) {
+  require_package("FNN")
+  embedding <- as.matrix(embeddings)
+  metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
+  if (is.null(rownames(embedding)) || anyDuplicated(rownames(embedding))) {
+    stop("embeddings require unique cell row names.", call. = FALSE)
+  }
+  missing <- setdiff(c(dataset_col, eos_col), names(metadata))
+  if (length(missing)) stop("Cross-dataset metadata missing: ", paste(missing, collapse = ", "), call. = FALSE)
+  index <- match(rownames(embedding), rownames(metadata))
+  if (anyNA(index)) stop("Metadata does not cover every embedding cell.", call. = FALSE)
+  metadata <- metadata[index, , drop = FALSE]
+  dataset <- as.character(metadata[[dataset_col]])
+  datasets <- unique(dataset)
+  if (length(datasets) != 2L) stop("Exactly two integration datasets are required.", call. = FALSE)
+  is_eos <- as.logical(metadata[[eos_col]])
+  if (anyNA(is_eos)) stop(eos_col, " must be complete and logical.", call. = FALSE)
+  per_dataset <- lapply(datasets, function(query_dataset) {
+    query_index <- which(dataset == query_dataset)
+    reference_index <- which(dataset != query_dataset)
+    k_actual <- min(as.integer(k), length(reference_index))
+    fit <- FNN::get.knnx(embedding[reference_index, , drop = FALSE], embedding[query_index, , drop = FALSE], k = k_actual)
+    validate_neighbour_distances(fit$nn.dist)
+    neighbour_index <- matrix(reference_index[fit$nn.index], nrow = nrow(fit$nn.index), ncol = ncol(fit$nn.index))
+    data.frame(
+      cell_id = rownames(embedding)[query_index],
+      dataset = query_dataset,
+      is_eosinophil = is_eos[query_index],
+      k_actual = k_actual,
+      minimum_cross_dataset_distance = fit$nn.dist[, 1L],
+      eos_neighbour_fraction = rowMeans(matrix(is_eos[neighbour_index], nrow = nrow(neighbour_index))),
+      stringsAsFactors = FALSE
+    )
+  })
+  per_cell <- do.call(rbind, per_dataset)
+  rownames(per_cell) <- NULL
+  dataset_summary <- do.call(rbind, lapply(split(per_cell, per_cell$dataset), function(x) {
+    data.frame(
+      dataset = x$dataset[[1L]], n_cells = nrow(x),
+      n_eosinophil = sum(x$is_eosinophil),
+      mean_eos_neighbour_fraction_all = mean(x$eos_neighbour_fraction),
+      mean_eos_neighbour_fraction_eos = if (any(x$is_eosinophil)) mean(x$eos_neighbour_fraction[x$is_eosinophil]) else NA_real_,
+      median_cross_dataset_distance = stats::median(x$minimum_cross_dataset_distance),
+      stringsAsFactors = FALSE
+    )
+  }))
+  if (cluster_col %in% names(metadata)) {
+    cluster_enrichment <- as.data.frame(table(
+      dataset = dataset,
+      integrated_cluster = as.character(metadata[[cluster_col]])
+    ), stringsAsFactors = FALSE)
+    names(cluster_enrichment)[names(cluster_enrichment) == "Freq"] <- "n_cells"
+    eos_counts <- aggregate(
+      as.integer(is_eos),
+      by = list(dataset = dataset, integrated_cluster = as.character(metadata[[cluster_col]])),
+      FUN = sum
+    )
+    names(eos_counts)[[3L]] <- "n_eosinophil"
+    cluster_enrichment <- merge(
+      cluster_enrichment, eos_counts,
+      by = c("dataset", "integrated_cluster"), all.x = TRUE, sort = FALSE
+    )
+    cluster_enrichment$n_eosinophil[is.na(cluster_enrichment$n_eosinophil)] <- 0L
+    cluster_enrichment$eosinophil_fraction <- ifelse(
+      cluster_enrichment$n_cells > 0,
+      cluster_enrichment$n_eosinophil / cluster_enrichment$n_cells,
+      NA_real_
+    )
+  } else {
+    cluster_enrichment <- data.frame()
+  }
+  list(
+    per_cell = per_cell,
+    dataset_summary = dataset_summary,
+    cluster_enrichment = cluster_enrichment
+  )
+}
+
+#' Calculate the adjusted Rand index for two cluster assignments
+#'
+#' @param labels_a,labels_b Equal-length complete cluster-label vectors.
+#'
+#' @return A numeric scalar in the adjusted-Rand scale. Identical partitions,
+#'   including label permutations, return exactly 1.
+adjusted_rand_index <- function(labels_a, labels_b) {
+  if (length(labels_a) != length(labels_b) || !length(labels_a)) stop("Cluster label vectors must have equal positive length.", call. = FALSE)
+  if (anyNA(labels_a) || anyNA(labels_b)) stop("Cluster labels cannot contain missing values.", call. = FALSE)
+  tab <- table(as.character(labels_a), as.character(labels_b))
+  choose2 <- function(x) x * (x - 1) / 2
+  sum_cells <- sum(choose2(tab))
+  sum_rows <- sum(choose2(rowSums(tab)))
+  sum_cols <- sum(choose2(colSums(tab)))
+  total <- choose2(length(labels_a))
+  expected <- if (total == 0) 0 else sum_rows * sum_cols / total
+  maximum <- (sum_rows + sum_cols) / 2
+  denominator <- maximum - expected
+  if (denominator == 0) return(if (identical(as.integer(tab > 0), as.integer(diag(nrow(tab)) > 0))) 1 else 0)
+  as.numeric((sum_cells - expected) / denominator)
+}
+
+#' Summarize pairwise stability across repeated cluster assignments
+#'
+#' @param cluster_assignments Data frame or matrix with cells in rows and one
+#'   clustering run, seed, or resolution in each column.
+#'
+#' @return A list with a pairwise adjusted-Rand table and one-row summary of
+#'   comparison count, minimum, median, mean, and maximum ARI.
+summarise_cluster_stability <- function(cluster_assignments) {
+  x <- as.data.frame(cluster_assignments, stringsAsFactors = FALSE)
+  if (ncol(x) < 2L || nrow(x) < 2L) stop("At least two cells and two clustering runs are required.", call. = FALSE)
+  if (anyNA(x)) stop("Cluster assignments cannot contain missing values.", call. = FALSE)
+  pairs <- utils::combn(colnames(x), 2L, simplify = FALSE)
+  pairwise <- do.call(rbind, lapply(pairs, function(pair) {
+    data.frame(run_a = pair[[1L]], run_b = pair[[2L]], ari = adjusted_rand_index(x[[pair[[1L]]]], x[[pair[[2L]]]]), stringsAsFactors = FALSE)
+  }))
+  rownames(pairwise) <- NULL
+  list(
+    pairwise = pairwise,
+    summary = data.frame(
+      n_comparisons = nrow(pairwise),
+      minimum_ari = min(pairwise$ari),
+      median_ari = stats::median(pairwise$ari),
+      mean_ari = mean(pairwise$ari),
+      maximum_ari = max(pairwise$ari),
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+#' Calculate tidy PC-to-QC Spearman correlations
+#'
+#' @param pca_embeddings Numeric cell-by-PC matrix.
+#' @param cell_metadata Data frame in exactly the same cell order.
+#' @param qc_metrics Candidate metadata columns to test.
+#'
+#' @return A data frame with one row per PC/available-QC-metric pair and fields
+#'   `pc`, `qc_metric`, `rho`, `abs_rho`, and `technical_review_flag`.
+summarise_pca_qc_correlations <- function(
+    pca_embeddings,
+    cell_metadata,
+    qc_metrics = c("nCount_Xenium", "nFeature_Xenium", "cell_area"),
+    review_abs_rho = 0.5
+) {
+  embeddings <- as.matrix(pca_embeddings)
+  if (!is.numeric(embeddings) || nrow(embeddings) != nrow(cell_metadata)) stop("PCA embeddings and metadata must have the same cell rows.", call. = FALSE)
+  if (is.null(colnames(embeddings))) colnames(embeddings) <- paste0("PC_", seq_len(ncol(embeddings)))
+  metrics <- intersect(qc_metrics, colnames(cell_metadata))
+  if (!length(metrics)) stop("No requested QC metrics are present.", call. = FALSE)
+  rows <- lapply(colnames(embeddings), function(pc) lapply(metrics, function(metric) {
+    rho <- suppressWarnings(stats::cor(embeddings[, pc], cell_metadata[[metric]], method = "spearman", use = "pairwise.complete.obs"))
+    data.frame(pc = pc, qc_metric = metric, rho = as.numeric(rho), abs_rho = abs(as.numeric(rho)), technical_review_flag = is.finite(rho) && abs(rho) >= review_abs_rho, stringsAsFactors = FALSE)
+  }))
+  do.call(rbind, unlist(rows, recursive = FALSE))
+}
+
+#' Derive a spatial lymph-node candidate domain from local lymphoid enrichment
+#'
+#' @param cell_metadata Data frame containing unique IDs, coordinates, and a
+#'   conservative cell-type label for QC-passed cells.
+#' @param lymphoid_labels Labels considered direct lymphoid/DC evidence.
+#' @param cell_id_col,x_col,y_col,label_col Input column names.
+#' @param k Number of neighbouring cells used for local enrichment.
+#' @param lymphoid_fraction_threshold Minimum local fraction defining core cells.
+#' @param min_core_cells Minimum enriched core size required to call a candidate.
+#' @param dbscan_eps DBSCAN radius applied to preliminary LN-core coordinates.
+#' @param dbscan_min_pts Minimum DBSCAN points. Cluster zero is treated as noise.
+#' @param dbscan_fun Optional function with the `dbscan(x, eps, minPts)`
+#'   contract. Defaults to `dbscan::dbscan`; injection supports deterministic
+#'   local tests when the optional HPC package is unavailable.
+#'
+#' @return A list with status, parameters, a cell-level diagnostic table, and
+#'   counts. Only the largest non-noise DBSCAN cluster is included. Ties are
+#'   resolved by the smallest integer cluster ID. `LN_NOT_DETECTED` returns an
+#'   all-FALSE domain instead of forcing an underpowered LN domain.
+derive_lymph_node_domain <- function(
+    cell_metadata,
+    lymphoid_labels,
+    cell_id_col = "cell_id",
+    x_col = "x",
+    y_col = "y",
+    label_col = "cell_type",
+    k = 30L,
+    lymphoid_fraction_threshold = 0.5,
+    min_core_cells = 100L,
+    dbscan_eps = 80,
+    dbscan_min_pts = 10L,
+    dbscan_fun = NULL
+) {
+  require_package("FNN")
+  required <- c(cell_id_col, x_col, y_col, label_col)
+  missing <- setdiff(required, colnames(cell_metadata))
+  if (length(missing)) stop("Missing lymph-node-domain fields: ", paste(missing, collapse = ", "), call. = FALSE)
+  ids <- as.character(cell_metadata[[cell_id_col]])
+  if (anyDuplicated(ids) || anyNA(ids)) stop("Lymph-node-domain cell IDs must be unique and complete.", call. = FALSE)
+  coordinates <- as.matrix(cell_metadata[c(x_col, y_col)])
+  storage.mode(coordinates) <- "double"
+  if (any(!is.finite(coordinates))) stop("Lymph-node-domain coordinates must be finite.", call. = FALSE)
+  n <- nrow(coordinates)
+  k <- as.integer(k)
+  if (n < 3L || k < 1L || k >= n) stop("k must be between 1 and the number of cells minus one.", call. = FALSE)
+  if (!is.finite(lymphoid_fraction_threshold) || lymphoid_fraction_threshold < 0 || lymphoid_fraction_threshold > 1) stop("lymphoid_fraction_threshold must be between zero and one.", call. = FALSE)
+  if (!is.finite(dbscan_eps) || dbscan_eps <= 0) stop("dbscan_eps must be positive.", call. = FALSE)
+  dbscan_min_pts <- as.integer(dbscan_min_pts)
+  if (!is.finite(dbscan_min_pts) || dbscan_min_pts < 1L) stop("dbscan_min_pts must be a positive integer.", call. = FALSE)
+  neighbour_index <- FNN::get.knn(coordinates, k = k)$nn.index
+  lymphoid <- as.character(cell_metadata[[label_col]]) %in% lymphoid_labels
+  local_fraction <- rowMeans(matrix(lymphoid[neighbour_index], nrow = n, ncol = k))
+  preliminary_core <- local_fraction >= lymphoid_fraction_threshold
+  minimum <- as.integer(min_core_cells)
+  dbscan_cluster <- rep(NA_integer_, n)
+  largest_cluster_id <- NA_integer_
+  cluster_sizes <- data.frame(cluster = integer(), n_cells = integer())
+  core <- rep(FALSE, n)
+  if (sum(preliminary_core) >= dbscan_min_pts) {
+    if (is.null(dbscan_fun)) {
+      require_package("dbscan")
+      dbscan_fun <- getExportedValue("dbscan", "dbscan")
+    }
+    fit <- dbscan_fun(
+      coordinates[preliminary_core, , drop = FALSE],
+      eps = dbscan_eps,
+      minPts = dbscan_min_pts
+    )
+    clusters <- as.integer(fit$cluster)
+    if (length(clusters) != sum(preliminary_core) || anyNA(clusters) || any(clusters < 0L)) {
+      stop("DBSCAN must return one non-negative cluster ID per preliminary core cell.", call. = FALSE)
+    }
+    dbscan_cluster[preliminary_core] <- clusters
+    size_table <- table(clusters)
+    cluster_sizes <- data.frame(
+      cluster = as.integer(names(size_table)),
+      n_cells = as.integer(size_table),
+      stringsAsFactors = FALSE
+    )
+    non_noise_sizes <- cluster_sizes[cluster_sizes$cluster > 0L, , drop = FALSE]
+    if (nrow(non_noise_sizes)) {
+      largest_candidates <- non_noise_sizes$cluster[
+        non_noise_sizes$n_cells == max(non_noise_sizes$n_cells)
+      ]
+      largest_cluster_id <- min(largest_candidates)
+      core[preliminary_core] <- clusters == largest_cluster_id
+    }
+  }
+  status <- if (sum(core) >= minimum) "LN_CANDIDATE" else "LN_NOT_DETECTED"
+  include <- rep(FALSE, n)
+  if (status == "LN_CANDIDATE") {
+    include <- core
+  }
+  cell_table <- data.frame(
+    cell_id = ids,
+    direct_lymphoid_evidence = lymphoid,
+    local_lymphoid_fraction = local_fraction,
+    lymph_node_preliminary_core = preliminary_core,
+    lymph_node_dbscan_cluster = dbscan_cluster,
+    lymph_node_core = core,
+    lymph_node_include = include,
+    stringsAsFactors = FALSE
+  )
+  list(
+    status = status,
+    parameters = data.frame(
+      k = k,
+      lymphoid_fraction_threshold = lymphoid_fraction_threshold,
+      min_core_cells = minimum,
+      dbscan_eps = dbscan_eps,
+      dbscan_min_pts = dbscan_min_pts
+    ),
+    cell_table = cell_table,
+    counts = data.frame(
+      n_cells = n,
+      n_direct_lymphoid = sum(lymphoid),
+      n_preliminary_core = sum(preliminary_core),
+      n_dbscan_noise = sum(dbscan_cluster == 0L, na.rm = TRUE),
+      n_core = sum(core),
+      n_domain = sum(include),
+      stringsAsFactors = FALSE
+    ),
+    dbscan_cluster_sizes = cluster_sizes,
+    largest_cluster_id = largest_cluster_id
+  )
+}
+
+#' Quantify lymph-node boundary agreement across parameter settings
+#'
+#' @param masks Named list of equal-length complete logical inclusion vectors.
+#'
+#' @return A list with pairwise Jaccard overlap and a one-row summary. Empty-set
+#'   agreement is defined as one only when both compared masks are empty.
+summarise_ln_boundary_sensitivity <- function(masks) {
+  if (!is.list(masks) || length(masks) < 2L || is.null(names(masks)) || any(!nzchar(names(masks)))) stop("Supply at least two named LN masks.", call. = FALSE)
+  lengths <- vapply(masks, length, integer(1))
+  if (length(unique(lengths)) != 1L || any(vapply(masks, function(x) !is.logical(x) || anyNA(x), logical(1)))) stop("LN masks must be complete logical vectors of equal length.", call. = FALSE)
+  pairs <- utils::combn(names(masks), 2L, simplify = FALSE)
+  pairwise <- do.call(rbind, lapply(pairs, function(pair) {
+    a <- masks[[pair[[1L]]]]
+    b <- masks[[pair[[2L]]]]
+    union_n <- sum(a | b)
+    jaccard <- if (union_n == 0L) 1 else sum(a & b) / union_n
+    data.frame(mask_a = pair[[1L]], mask_b = pair[[2L]], jaccard = jaccard, n_a = sum(a), n_b = sum(b), stringsAsFactors = FALSE)
+  }))
+  rownames(pairwise) <- NULL
+  list(
+    pairwise = pairwise,
+    summary = data.frame(n_comparisons = nrow(pairwise), minimum_jaccard = min(pairwise$jaccard), median_jaccard = stats::median(pairwise$jaccard), mean_jaccard = mean(pairwise$jaccard), stringsAsFactors = FALSE)
+  )
+}
+
+#' Save and reload-validate a Seurat checkpoint
+#'
+#' @param object Seurat object to checkpoint without modifying it.
+#' @param path Destination `.rds` path.
+#' @param project_root Approved project root that must contain `path`.
+#' @param stage Stable stage label written to the checkpoint manifest.
+#' @param compress Compression argument passed to `saveRDS`; `FALSE` is faster
+#'   for large HPC checkpoints and is the default.
+#'
+#' @return A one-row data frame containing stage, absolute path, byte size, MD5,
+#'   cell/feature counts, timestamp, and `PASS` validation status. Validation
+#'   reloads the object and requires identical class, dimensions, feature IDs,
+#'   cell IDs, assay names, and reduction names.
+write_validated_seurat_checkpoint <- function(
+    object,
+    path,
+    project_root,
+    stage,
+    compress = FALSE
+) {
+  if (!inherits(object, "Seurat")) stop("object must be a Seurat object.", call. = FALSE)
+  if (length(path) != 1L || is.na(path) || !nzchar(path)) stop("path must be one non-empty value.", call. = FALSE)
+  if (length(stage) != 1L || is.na(stage) || !nzchar(stage)) stop("stage must be one non-empty value.", call. = FALSE)
+  assert_path_within(project_root, path)
+  parent <- dirname(path)
+  assert_path_within(project_root, parent)
+  dir.create(parent, recursive = TRUE, showWarnings = FALSE)
+  saveRDS(object, path, compress = compress)
+  if (!file.exists(path)) stop("Checkpoint was not created: ", path, call. = FALSE)
+  restored <- readRDS(path)
+  checks <- c(
+    inherits(restored, "Seurat"),
+    identical(class(restored), class(object)),
+    identical(dim(restored), dim(object)),
+    identical(rownames(restored), rownames(object)),
+    identical(colnames(restored), colnames(object)),
+    identical(names(restored@assays), names(object@assays)),
+    identical(names(restored@reductions), names(object@reductions))
+  )
+  if (!all(checks)) stop("Reloaded checkpoint failed Seurat identity validation: ", path, call. = FALSE)
+  info <- file.info(path)
+  data.frame(
+    stage = stage,
+    path = normalizePath(path, winslash = "/", mustWork = TRUE),
+    bytes = as.numeric(info$size),
+    md5 = unname(tools::md5sum(path)),
+    n_cells = ncol(object),
+    n_features = nrow(object),
+    validation_status = "PASS",
+    timestamp_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Import a Xenium region as a spatial Seurat object
+#'
+#' @param xenium_dir Existing 10x Xenium output directory containing the
+#'   cell-feature matrix, cell centroids, and requested segmentation files.
+#' @param genes Optional character vector of panel genes to retain.
+#' @param cells Optional character vector of cell IDs to retain.
+#' @param project Optional Seurat project name; defaults to the directory name.
+#' @param assay Name assigned to the count assay.
+#' @param fov Name assigned to the Xenium field of view.
+#' @param include_cell_segmentation Whether to attach cell polygons when present.
+#' @param include_nucleus_segmentation Whether to attach nucleus polygons when
+#'   present.
+#'
+#' @return A Seurat object containing sparse Xenium counts, cell metadata,
+#'   centroid coordinates, a spatial FOV, and each requested available boundary.
 create_spatial_seurat_from_xenium <- function(
     xenium_dir,
     genes = NULL,
@@ -8430,6 +10252,17 @@ create_spatial_seurat_from_xenium <- function(
 }
 
 
+#' Attach externally generated QC masks to a Seurat object by cell ID
+#'
+#' @param object Seurat object whose column names are Xenium cell IDs.
+#' @param masks Data frame containing one unique cell-ID column and mask fields.
+#' @param cell_id_col Name of the mask-table cell-ID column.
+#' @param cols Optional mask columns to attach; `NULL` uses every non-ID column.
+#' @param overwrite Whether existing metadata columns may be replaced.
+#' @param require_complete_match Whether every Seurat cell must occur in `masks`.
+#'
+#' @return The input Seurat object with requested mask fields aligned and added
+#'   to `object@meta.data` by matched cell ID, never by input row position.
 add_masks_to_seurat <- function(
     object,
     masks,
@@ -8654,6 +10487,17 @@ add_masks_to_seurat <- function(
   return(object)
 }
 
+#' Transfer Wang-reference main and subtype labels to a Xenium query
+#'
+#' @param reference Seurat reference object with an RNA assay and Wang labels.
+#' @param query Seurat Xenium query object.
+#' @param annotation_genes Character vector of candidate shared features.
+#' @param main_col Reference metadata column containing main cell types.
+#' @param subtype_col Reference metadata column containing harmonized subtypes.
+#' @param prefix Prefix used for transferred prediction-score columns.
+#'
+#' @return A list with `main` and `subtype` prediction data frames, the Seurat
+#'   anchor set, and the exact shared feature vector used for transfer.
 run_wang_transfer <- function(
   reference,
   query,
@@ -8751,6 +10595,141 @@ run_wang_transfer <- function(
   )
 }
 
+#' Invoke an mclust-style fitter with its BIC function in the caller frame
+#'
+#' `mclust::Mclust()` rewrites its call to the unqualified symbol
+#' `mclustBIC` and evaluates that call in its caller. This small adapter makes
+#' that dependency explicit without attaching the package to the search path.
+#'
+#' @param data Finite numeric observations supplied to the mixture fitter.
+#' @param G Integer candidate component counts.
+#' @param mclust_fun Function with the public `Mclust()` calling contract.
+#' @param mclust_bic_fun Function with the public `mclustBIC()` contract.
+#' @param verbose Whether the fitter may print progress.
+#'
+#' @return The fitted object returned by `mclust_fun`.
+run_mclust_with_binding <- function(
+    data,
+    G,
+    mclust_fun,
+    mclust_bic_fun,
+    verbose = FALSE
+) {
+  mclustBIC <- mclust_bic_fun
+  mclust_fun(data = data, G = G, verbose = verbose)
+}
+
+#' Run a namespace-safe Gaussian-mixture diagnostic for an Eosinophil score
+#'
+#' This optional diagnostic never creates biological state labels. Runtime and
+#' sample-size failures are returned as typed statuses so they cannot terminate
+#' an otherwise valid 479-gene notebook.
+#'
+#' @param x Numeric state-score vector. Non-finite entries are excluded and
+#'   counted.
+#' @param G Integer candidate component counts.
+#' @param seed Random seed used by mclust.
+#' @param min_n Minimum finite observations required to attempt fitting.
+#' @param min_per_component Minimum observations required per candidate
+#'   component; candidates exceeding this support are removed.
+#'
+#' @return A list containing status, message, package version, input/finite
+#'   counts, selected model information, the optional fitted object and a BIC
+#'   table.
+run_mclust_diagnostic <- function(
+    x,
+    G = 1:3,
+    seed = 1234L,
+    min_n = 20L,
+    min_per_component = 5L
+) {
+  x <- as.numeric(x)
+  x_use <- x[is.finite(x)]
+  available <- requireNamespace("mclust", quietly = TRUE)
+  result <- list(
+    status = NA_character_,
+    message = NA_character_,
+    package_version = if (available) {
+      as.character(utils::packageVersion("mclust"))
+    } else {
+      NA_character_
+    },
+    n_input = length(x),
+    n_finite = length(x_use),
+    selected_G = NA_integer_,
+    model_name = NA_character_,
+    fit = NULL,
+    bic_table = data.frame()
+  )
+
+  if (!available) {
+    result$status <- "SKIPPED_PACKAGE_UNAVAILABLE"
+    result$message <- "Optional package 'mclust' is unavailable."
+    return(result)
+  }
+
+  if (length(x_use) < as.integer(min_n)) {
+    result$status <- "SKIPPED_INSUFFICIENT_DATA"
+    result$message <- sprintf(
+      "Need at least %d finite observations; found %d.",
+      as.integer(min_n), length(x_use)
+    )
+    return(result)
+  }
+
+  G_use <- sort(unique(as.integer(G)))
+  G_use <- G_use[
+    is.finite(G_use) & G_use >= 1L &
+      G_use * as.integer(min_per_component) <= length(x_use)
+  ]
+  if (!length(G_use)) {
+    result$status <- "SKIPPED_INSUFFICIENT_DATA"
+    result$message <- "No requested component count has adequate observations."
+    return(result)
+  }
+
+  set.seed(as.integer(seed))
+  fit_or_error <- tryCatch(
+    run_mclust_with_binding(
+      data = x_use,
+      G = G_use,
+      mclust_fun = getExportedValue("mclust", "Mclust"),
+      mclust_bic_fun = getExportedValue("mclust", "mclustBIC"),
+      verbose = FALSE
+    ),
+    error = identity
+  )
+  if (inherits(fit_or_error, "error")) {
+    result$status <- "FAILED_MCLUST_RUNTIME"
+    result$message <- conditionMessage(fit_or_error)
+    return(result)
+  }
+
+  result$status <- "PASS"
+  result$message <- paste(
+    "Gaussian-mixture diagnostic completed;",
+    "the fitted components are not biological state assignments."
+  )
+  result$selected_G <- as.integer(fit_or_error$G)
+  result$model_name <- as.character(fit_or_error$modelName)
+  result$fit <- fit_or_error
+  result$bic_table <- as.data.frame(fit_or_error$BIC)
+  result
+}
+
+#' Plot Eosinophil evidence-call composition within annotated subtypes
+#'
+#' @param object Seurat object containing subtype and Eosinophil-call metadata.
+#' @param subtype_col Metadata column holding final or provisional subtypes.
+#' @param eos_call_col Metadata column holding ordered Eosinophil evidence calls.
+#' @param eos_first Subtype displayed first in the plotted ordering.
+#' @param title Plot title.
+#' @param base_size Base ggplot text size.
+#' @param show_n Whether subtype labels include cell counts.
+#' @param return_data Whether to return plotting data with the plot.
+#'
+#' @return A ggplot object, or when `return_data = TRUE`, a list containing the
+#'   plot, its summarized plotting data, subtype order, and displayed labels.
 plot_eos_call_by_subtype <- function(
     object,
     subtype_col = "Final_CellType_subtype",
@@ -9052,7 +11031,7 @@ plot_eos_call_by_subtype <- function(
       fill = "Eosinophil\nevidence"
     ) +
 
-    theme_cell(
+    cell_style_theme(
       base_size = base_size
     ) +
 
@@ -9092,6 +11071,30 @@ plot_eos_call_by_subtype <- function(
   p
 }
 
+#' Draw a continuously ordered Eosinophil-state expression heatmap
+#'
+#' @param eos_obj Seurat object restricted to the Eosinophil analysis cohort.
+#' @param eos_gene_sets Data frame with `gene` and `gene_set` columns.
+#' @param state_col Metadata column containing descriptive state categories.
+#' @param balance_col Numeric continuous state-balance metadata column.
+#' @param assay Seurat assay containing normalized expression.
+#' @param layer Assay layer used for the heatmap.
+#' @param remove_short_ribosomal Whether to remove ribosomal genes from the
+#'   short-lived signature before plotting.
+#' @param z_cap Absolute cap applied to row-wise expression z-scores.
+#' @param cluster_rows Whether genes are clustered within signature blocks.
+#' @param clustering_distance_rows ComplexHeatmap row-distance setting.
+#' @param clustering_method_rows Hierarchical clustering method for rows.
+#' @param column_title Heatmap title.
+#' @param show_row_names Whether gene names are drawn.
+#' @param row_name_size Gene-label font size.
+#' @param draw_heatmap Whether to draw immediately.
+#' @param return_data Whether to return matrices, orders, and annotations.
+#'
+#' @return If `return_data = TRUE`, a list containing the heatmap, optional
+#'   drawn object, row-z-scored matrix, cell order, gene groups, and annotation
+#'   vectors. Otherwise returns the heatmap object, invisibly returning the
+#'   drawn object when `draw_heatmap = TRUE`.
 plot_eos_state_heatmap <- function(
     eos_obj,
     eos_gene_sets,
